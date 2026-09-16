@@ -39,12 +39,12 @@ type SessionResponse = {
 
 let sessionTokenPromise: Promise<string | null> | null = null;
 
-export async function fetchCurrentConversation(conversationId = getConversationIdFromUrl()): Promise<ApiConversation | null> {
+export async function fetchCurrentConversation(conversationId = getConversationIdFromUrl(), signal?: AbortSignal): Promise<ApiConversation | null> {
   if (!conversationId) return null;
-  return fetchConversation(conversationId);
+  return fetchConversation(conversationId, signal);
 }
 
-export async function fetchConversation(conversationId: string): Promise<ApiConversation> {
+export async function fetchConversation(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {
   const headers: HeadersInit = {
     Accept: "application/json"
   };
@@ -60,6 +60,7 @@ export async function fetchConversation(conversationId: string): Promise<ApiConv
 
   const response = await fetch(`/backend-api/conversation/${encodeURIComponent(conversationId)}`, {
     credentials: "include",
+    signal,
     headers
   });
 

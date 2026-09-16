@@ -126,14 +126,17 @@ export function bindDomAnchorsToTurns(turns: readonly YadaTurn[], domTurns = col
   }
 
   const canUseIndexFallback = domTurns.length === turns.length;
+  const uniqueApiUsers = buildUniqueFingerprintMap(turns, "user");
+  const uniqueApiAssistants = buildUniqueFingerprintMap(turns, "assistant");
+  const usedAnchors = new Set<HTMLElement>();
   const bound = turns.map((turn, index) => {
     const globalIndex = index;
     const displayNumber = globalIndex + 1;
     const userFingerprint = turn.userTextFingerprint ?? createTextFingerprint(turn.userMarkdown || turn.userPreview);
     const assistantFingerprint = turn.assistantTextFingerprint ?? createTextFingerprint(turn.assistantMarkdown || turn.assistantPreview);
-    const existingAnchor = isTrustedAnchorBinding(turn) && isUsableAnchor(turn.anchorElement) ? turn : null;
-    let source = existingAnchor ? (turn.anchorMappingReason ?? "existing") : "";
-    let match: YadaTurn | null = existingAnchor;
+    // Never reuse a connected reference blindly: virtual lists also recycle connected nodes.
+    let source = "";
+    let match: YadaTurn | null = null;
 
     if (!match && turn.userMessageId && anchorsByMessageId.has(turn.userMessageId)) {
       match = anchorsByMessageId.get(turn.userMessageId) ?? null;
@@ -145,18 +148,19 @@ export function bindDomAnchorsToTurns(turns: readonly YadaTurn[], domTurns = col
       source = "message-id:assistant";
       bindByMessageIdCount += 1;
     }
-    if (!match && turn.turnDomId && anchorsByTurnDomId.has(turn.turnDomId)) {
-      match = anchorsByTurnDomId.get(turn.turnDomId) ?? null;
+    const stableTurnId = [turn.userMessageId, turn.turnDomId].find(id => id && anchorsByTurnDomId.has(id));
+    if (!match && stableTurnId) {
+      match = anchorsByTurnDomId.get(stableTurnId) ?? null;
       source = "turn-dom-id";
       bindByTurnDomIdCount += 1;
     }
 
-    if (!match && userFingerprint && userAnchorsByFingerprint.has(userFingerprint)) {
+    if (!match && userFingerprint && uniqueApiUsers.has(userFingerprint) && userAnchorsByFingerprint.has(userFingerprint)) {
       match = userAnchorsByFingerprint.get(userFingerprint) ?? null;
       source = "fingerprint:user";
       bindByFingerprintCount += 1;
     }
-    if (!match && assistantFingerprint && assistantAnchorsByFingerprint.has(assistantFingerprint)) {
+    if (!match && assistantFingerprint && uniqueApiAssistants.has(assistantFingerprint) && assistantAnchorsByFingerprint.has(assistantFingerprint)) {
       match = assistantAnchorsByFingerprint.get(assistantFingerprint) ?? null;
       source = "fingerprint:assistant";
       bindByFingerprintCount += 1;
@@ -168,6 +172,10 @@ export function bindDomAnchorsToTurns(turns: readonly YadaTurn[], domTurns = col
       bindByFullIndexCount += match ? 1 : 0;
     }
 
+    if (match && (usedAnchors.has(match.anchorElement!) || hasConflictingUserId(turn, match))) {
+      match = null;
+      source = "unmapped";
+    }
     if (match && isComposerDraftTurn(match)) {
       source = "composer";
       match = null;
@@ -191,6 +199,7 @@ export function bindDomAnchorsToTurns(turns: readonly YadaTurn[], domTurns = col
       };
     }
 
+    usedAnchors.add(match.anchorElement);
     return {
       ...turn,
       index: globalIndex,
@@ -206,7 +215,7 @@ export function bindDomAnchorsToTurns(turns: readonly YadaTurn[], domTurns = col
       assistantTextFingerprint: assistantFingerprint,
       anchorSource: match.anchorSource ?? source,
       anchorMappingReason: source,
-      anchorMappingTrusted: source !== "unmapped" && !source.startsWith("estimated")
+      anchorMappingTrusted: source !== "unmapped" && source !== "full-dom-index" && !source.startsWith("estimated")
     };
   });
 
@@ -609,10 +618,11 @@ function getTurnFingerprint(turn: YadaTurn, role: "user" | "assistant"): string 
   return turn.userTextFingerprint ?? createTextFingerprint(turn.userMarkdown || turn.userPreview);
 }
 
-function isTrustedAnchorBinding(turn: YadaTurn): boolean {
-  if (turn.anchorMappingTrusted === false) return false;
-  const reason = turn.anchorMappingReason ?? turn.anchorSource ?? "";
-  return !reason.startsWith("estimated");
+function hasConflictingUserId(api: YadaTurn, dom: YadaTurn): boolean {
+  const anchor = dom.userAnchorElement ?? dom.anchorElement;
+  const explicit = anchor?.closest("[data-message-id]") ?? anchor?.querySelector("[data-message-id]");
+  const id = explicit?.getAttribute("data-message-id");
+  return Boolean(id && api.userMessageId && id !== api.userMessageId);
 }
 
 function isUsableAnchor(anchor: HTMLElement | null | undefined): anchor is HTMLElement {

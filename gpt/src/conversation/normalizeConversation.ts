@@ -9,6 +9,7 @@ import type { YadaAttachment, YadaConversationSnapshot, YadaTurn } from "./types
 
 type MessagePayload = {
   messageId?: string;
+  createdAt?: number;
   markdown: string;
   preview: string;
   attachments: YadaAttachment[];
@@ -16,13 +17,14 @@ type MessagePayload = {
 
 type LoadSnapshotOptions = {
   conversationId?: string | null;
+  signal?: AbortSignal;
 };
 
 export async function loadCurrentConversationSnapshot(options: LoadSnapshotOptions = {}): Promise<YadaConversationSnapshot> {
   const conversationId = options.conversationId ?? getConversationIdFromUrl();
   if (!conversationId) throw new Error("No active ChatGPT conversation");
 
-  const conversation = await fetchCurrentConversation(conversationId);
+  const conversation = await fetchCurrentConversation(conversationId, options.signal);
   if (!conversation) throw new Error("ChatGPT conversation was not returned");
 
   const turns = normalizeConversation(conversation);
@@ -102,6 +104,8 @@ function makeTurn(index: number, user: MessagePayload, assistant: MessagePayload
     renderedLocalIndex: null,
     userMessageId: user.messageId,
     assistantMessageId: assistant?.messageId,
+    userCreatedAt: user.createdAt,
+    assistantCreatedAt: assistant?.createdAt,
     userMarkdown: user.markdown,
     assistantMarkdown: assistant?.markdown ?? "",
     userPreview: user.preview,
@@ -144,6 +148,7 @@ function extractMessagePayload(message: ApiConversationMessage): MessagePayload 
 
   return {
     messageId: message.id,
+    createdAt: message.create_time,
     markdown,
     preview: makePreview(markdown),
     attachments

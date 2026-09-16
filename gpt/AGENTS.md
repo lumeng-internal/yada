@@ -6,11 +6,11 @@ This file is mandatory reading before every work session in this repository.
 
 Project name: ChatGPT Yada
 
-Positioning: a single-purpose extension that copies the current ChatGPT conversation as Markdown with one click.
+Positioning: a lightweight ChatGPT extension for 复制全部 + 对话导航 + 提示词库.
 
 The final product must stay small, focused, and easy to audit. The goal is not to merge all reference projects into one large enhancement suite.
 
-Current product direction: v2 removes navigation, selective copy, preview, rail markers, and mode switching. The only user-facing action is `复制全部`.
+Current product direction: API-first complete conversation copy with real timestamps, a single navigation rail with hover previews, and a local prompt library.
 
 ## Versioning
 
@@ -23,7 +23,7 @@ Version format: `MAJOR.MINOR.PATCH`.
 3. MAJOR: an architecture change, compatibility break, or core feature rewrite increments the leftmost number and resets MINOR and PATCH.
    Example: `1.9.9 -> 2.0.0`.
 
-If package or manifest metadata still reports `0.1.0`, correct it to the current `1.0.x` release line before building or packaging.
+Keep package, manifest, documentation, build and release archive versions consistent.
 
 ## Release Automation Rules
 
@@ -42,7 +42,7 @@ Every final report must state the version bump type and the reason for that choi
 
 1. Read `AGENTS.md` before making any change.
 2. Confirm the current working directory is the project root:
-   `/Users/harsonru/Code/Codex/AI-Markdown/GPTYADA/GPTyada-v1.1.7`
+   `/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-optimization-20260916/gpt`
 3. Check the workspace state before edits.
    - If this is a Git repository, run `git status --short`.
    - If the working tree is dirty with changes unrelated to the current request, stop and explain before editing.
@@ -84,22 +84,20 @@ The accepted route is:
 The feature set is limited to:
 
 1. One-click copy of the current ChatGPT conversation as Markdown.
-2. Natural light/dark mode adaptation for the single button.
-3. Placeholder summaries for images, files, pasted content, and no-text messages.
+2. API-backed conversation navigation, active-turn tracking, precise/progressive jumps and User/User+ChatGPT hover previews.
+3. Local-only prompt CRUD, search and draft-preserving composer insertion via chrome.storage.local.
+4. Natural light/dark adaptation and existing attachment placeholders.
 
 Do not add features outside this scope unless the user explicitly changes the product scope in writing.
 
 Explicitly forbidden:
 
-- Navigation rails, marks, jumps, active-turn tracking, or hover previews.
 - Selective copy, selection menus, lasso selection, or per-turn controls.
-- Preview-mode dots or User/User+ChatGPT switching.
 - GPT quota reminders.
 - Token estimation.
 - Claude Counter features.
 - Multi-platform support.
 - Claude, Gemini, Grok, DeepSeek, or other platform support.
-- Prompt Library.
 - FolderManager.
 - FloatBall.
 - WidthPanel.
@@ -130,18 +128,13 @@ Default preference: re-implement the smallest needed behavior in this project us
 
 ## UI Standards
 
-Render one compact `复制全部` button in ChatGPT's header action area, with a small fixed fallback when that target is unavailable. It must not push, resize, or cover ChatGPT's native content. Feedback belongs in the button label; do not add panels, menus, dots, rails, or extra controls.
+Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official panels only reposition that host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical; DOM is only for anchors, scrolling and composer insertion. Never auto-send or overwrite a draft.
 
 ## Stage Discipline
 
 Every stage must include a self-check before completion.
 
-At the end of every stage, output:
-
-1. Change summary.
-2. Test or verification checklist.
-3. Known gaps or risks.
-4. Confirmation that `reference/` was not modified.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows, PR or push. Run local build and relevant verification before the local commit.
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

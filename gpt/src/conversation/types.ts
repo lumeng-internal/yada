@@ -21,6 +21,9 @@ export type YadaTurn = {
   anchorSource?: string;
   anchorMappingReason?: string;
   anchorMappingTrusted?: boolean;
+  /** Unix seconds from each message; never inferred from another message. */
+  userCreatedAt?: number;
+  assistantCreatedAt?: number;
   userMarkdown: string;
   assistantMarkdown: string;
   userPreview: string;
