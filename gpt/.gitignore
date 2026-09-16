@@ -1,0 +1,7 @@
+_archives/
+node_modules/
+dist_chrome/
+dist_chrome.zip
+reference/*.zip
+.DS_Store
+npm-debug.log*

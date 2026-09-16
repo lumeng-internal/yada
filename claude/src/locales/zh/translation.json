@@ -1,0 +1,74 @@
+{
+  "common": {
+    "save": "保存",
+    "cancel": "取消",
+    "create": "创建",
+    "delete": "删除",
+    "rename": "重命名",
+    "reset": "重置"
+  },
+  "popup": {
+    "title": "设置",
+    "language": "语言",
+    "languageZh": "简体中文",
+    "languageZhTW": "繁體中文",
+    "languageEn": "English",
+    "hint": "语言切换会应用到当前打开的 claude.ai 页面。"
+  },
+  "export": {
+    "title": "导出对话",
+    "buttonLabel": "导出",
+    "buttonAria": "打开导出菜单",
+    "closeAria": "关闭导出菜单",
+    "formatLabel": "格式",
+    "formatMarkdown": "Markdown",
+    "formatJson": "JSON",
+    "exportButton": "导出",
+    "statusExporting": "导出中…",
+    "statusSuccess": "已导出 {{count}} 条消息",
+    "statusFailed": "导出失败",
+    "statusFailedCount": "{{count}} 条失败"
+  },
+  "copyAll": {
+    "buttonLabel": "复制全部",
+    "buttonAria": "复制全部当前对话消息",
+    "statusCopying": "复制中…",
+    "statusSuccess": "已复制 {{turns}} 轮 · {{messages}} 条消息",
+    "statusEmpty": "没有可复制的消息",
+    "statusIncomplete": "未取得完整对话数据，本次未复制。",
+    "statusFailed": "复制失败"
+  },
+  "railPreview": {
+    "currentUserOnly": "白色模式：只显示 User",
+    "switchToUserAssistant": "点击切换为橙色模式：User + Claude",
+    "currentUserAssistant": "橙色模式：显示 User + Claude",
+    "switchToUserOnly": "点击切换为白色模式：只显示 User",
+    "feedbackUserAssistant": "已切换为橙色模式：User + Claude",
+    "feedbackUserOnly": "已切换为白色模式：只显示 User",
+    "userAssistantAria": "切换为预览 User 和 Claude 摘要",
+    "userAssistantTitle": "点击后预览 User + Claude",
+    "userOnlyAria": "切换为只预览 User 摘要",
+    "userOnlyTitle": "点击后只预览 User"
+  },
+  "copySelected": {
+    "buttonLabel": "选择复制",
+    "buttonAria": "进入选择复制模式",
+    "activeButtonLabel": "选择中 · 已选 {{count}} 轮",
+    "enterMode": "进入选择模式",
+    "selectedCount": "已选 {{count}} 轮",
+    "invert": "反选",
+    "invertAria": "反选当前对话轮次",
+    "selectAll": "全选",
+    "selectAllAria": "选择全部对话轮次",
+    "clearAll": "取消全选",
+    "clearAllAria": "取消选择全部对话轮次",
+    "copyButton": "复制选中",
+    "copyAria": "复制选中的对话轮次",
+    "exit": "退出选择",
+    "exitAria": "退出选择复制模式",
+    "statusCopying": "复制中…",
+    "statusSuccess": "已复制 {{count}} 轮",
+    "statusEmpty": "请先选择轮次",
+    "statusFailed": "复制失败"
+  }
+}

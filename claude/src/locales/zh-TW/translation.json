@@ -1,0 +1,74 @@
+{
+  "common": {
+    "save": "儲存",
+    "cancel": "取消",
+    "create": "建立",
+    "delete": "刪除",
+    "rename": "重新命名",
+    "reset": "重設"
+  },
+  "popup": {
+    "title": "設定",
+    "language": "語言",
+    "languageZh": "简体中文",
+    "languageZhTW": "繁體中文",
+    "languageEn": "English",
+    "hint": "語言切換會套用至目前開啟的 claude.ai 頁面。"
+  },
+  "export": {
+    "title": "匯出對話",
+    "buttonLabel": "匯出",
+    "buttonAria": "開啟匯出選單",
+    "closeAria": "關閉匯出選單",
+    "formatLabel": "格式",
+    "formatMarkdown": "Markdown",
+    "formatJson": "JSON",
+    "exportButton": "匯出",
+    "statusExporting": "匯出中…",
+    "statusSuccess": "已匯出 {{count}} 則訊息",
+    "statusFailed": "匯出失敗",
+    "statusFailedCount": "{{count}} 則失敗"
+  },
+  "copyAll": {
+    "buttonLabel": "複製全部",
+    "buttonAria": "複製全部目前對話訊息",
+    "statusCopying": "複製中…",
+    "statusSuccess": "已複製 {{turns}} 輪 · {{messages}} 則訊息",
+    "statusEmpty": "沒有可複製的訊息",
+    "statusIncomplete": "尚未取得完整對話資料，本次未複製。",
+    "statusFailed": "複製失敗"
+  },
+  "railPreview": {
+    "currentUserOnly": "白色模式：只顯示 User",
+    "switchToUserAssistant": "點擊切換為橘色模式：User + Claude",
+    "currentUserAssistant": "橘色模式：顯示 User + Claude",
+    "switchToUserOnly": "點擊切換為白色模式：只顯示 User",
+    "feedbackUserAssistant": "已切換為橘色模式：User + Claude",
+    "feedbackUserOnly": "已切換為白色模式：只顯示 User",
+    "userAssistantAria": "切換為預覽 User 和 Claude 摘要",
+    "userAssistantTitle": "點擊後預覽 User + Claude",
+    "userOnlyAria": "切換為只預覽 User 摘要",
+    "userOnlyTitle": "點擊後只預覽 User"
+  },
+  "copySelected": {
+    "buttonLabel": "選擇複製",
+    "buttonAria": "進入選擇複製模式",
+    "activeButtonLabel": "選擇中 · 已選 {{count}} 輪",
+    "enterMode": "進入選擇模式",
+    "selectedCount": "已選 {{count}} 輪",
+    "invert": "反選",
+    "invertAria": "反選目前對話輪次",
+    "selectAll": "全選",
+    "selectAllAria": "選擇全部對話輪次",
+    "clearAll": "取消全選",
+    "clearAllAria": "取消選擇全部對話輪次",
+    "copyButton": "複製選中",
+    "copyAria": "複製選中的對話輪次",
+    "exit": "退出選擇",
+    "exitAria": "退出選擇複製模式",
+    "statusCopying": "複製中…",
+    "statusSuccess": "已複製 {{count}} 輪",
+    "statusEmpty": "請先選擇輪次",
+    "statusFailed": "複製失敗"
+  }
+}

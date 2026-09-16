@@ -1,0 +1,85 @@
+{
+  "manifest_version": 3,
+  "name": "Claude Yada",
+  "version": "1.1.1",
+  "description": "Claude.ai helper for Markdown copy, selective rail copy, timeline navigation, export, and usage counters.",
+  "options_ui": {
+    "page": "src/pages/options/index.html"
+  },
+  "action": {
+    "default_popup": "src/pages/popup/index.html",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "js": [
+        "assets/constants.js-DDIEBKf6.js",
+        "assets/bridge-client.js-l1179Jpj.js",
+        "assets/o200k_base_loader.js-loader-CVjicp4w.js",
+        "assets/tokenMetrics.ts-loader-ByrnwjYN.js",
+        "assets/ui.js-C5ZkKaYh.js",
+        "assets/main.js-Bvp70_rL.js",
+        "assets/index.tsx-loader-1sCf1HF1.js"
+      ],
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "css": [
+        "contentStyle.css",
+        "src/pages/content/counter/styles.css",
+        "assets/index-BoeNyUUo.css"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "matches": [],
+      "resources": [
+        "contentStyle.css",
+        "icon-128.png",
+        "icon-48.png",
+        "icon-32.png",
+        "icon-16.png"
+      ],
+      "use_dynamic_url": false
+    },
+    {
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "resources": [
+        "counter/injected/bridge.js",
+        "assets/constants.js-DDIEBKf6.js",
+        "assets/bridge-client.js-l1179Jpj.js",
+        "assets/chunk-B3K2TuZy.js",
+        "assets/o200k_base_loader.js-DwENyzye.js",
+        "assets/buildActiveBranch-DsI1NH9K.js",
+        "assets/tokenMetrics.ts-D4SxCQVB.js",
+        "assets/ui.js-C5ZkKaYh.js",
+        "assets/main.js-Bvp70_rL.js",
+        "assets/i18n-8hU6MRz9.js",
+        "assets/jsx-runtime-DQ3a-xpF.js",
+        "assets/index.tsx-BSWggewq.js"
+      ],
+      "use_dynamic_url": false
+    }
+  ],
+  "background": {
+    "service_worker": "service-worker-loader.js",
+    "type": "module"
+  }
+}

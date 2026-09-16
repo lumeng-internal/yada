@@ -1,0 +1,20 @@
+{
+  "name": "chatgpt-yada",
+  "version": "2.0.0",
+  "private": true,
+  "description": "One-click Markdown copy for the current ChatGPT conversation.",
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit && vite build && cp manifest.json dist_chrome/manifest.json",
+    "verify:copy": "esbuild scripts/verify-copy.ts --bundle --platform=node --format=esm --outfile=/tmp/chatgpt-yada-copy-verify.mjs && node /tmp/chatgpt-yada-copy-verify.mjs",
+    "release:patch": "node scripts/release.mjs patch",
+    "release:minor": "node scripts/release.mjs minor",
+    "release:major": "node scripts/release.mjs major"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.303",
+    "@types/node": "^25.9.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

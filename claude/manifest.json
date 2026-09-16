@@ -1,0 +1,67 @@
+{
+  "manifest_version": 3,
+  "name": "Claude Yada",
+  "version": "1.1.1",
+  "description": "Claude.ai helper for Markdown copy, selective rail copy, timeline navigation, export, and usage counters.",
+  "options_ui": {
+    "page": "src/pages/options/index.html"
+  },
+  "action": {
+    "default_popup": "src/pages/popup/index.html",
+    "default_icon": {
+      "16": "icon-16.png",
+      "32": "icon-32.png",
+      "48": "icon-48.png",
+      "128": "icon-128.png"
+    }
+  },
+  "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
+    "128": "icon-128.png"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "https://claude.ai/*"
+      ],
+      "js": [
+        "src/pages/content/counter/content/constants.js",
+        "src/pages/content/counter/content/bridge-client.js",
+        "src/pages/content/counter/vendor/o200k_base_loader.js",
+        "src/pages/content/counter/tokenMetrics.ts",
+        "src/pages/content/counter/content/ui.js",
+        "src/pages/content/counter/content/main.js",
+        "src/pages/content/index.tsx"
+      ],
+      "css": [
+        "contentStyle.css",
+        "src/pages/content/counter/styles.css"
+      ]
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "contentStyle.css",
+        "icon-128.png",
+        "icon-48.png",
+        "icon-32.png",
+        "icon-16.png"
+      ],
+      "matches": []
+    },
+    {
+      "resources": [
+        "counter/injected/bridge.js"
+      ],
+      "matches": [
+        "https://claude.ai/*"
+      ]
+    }
+  ]
+}

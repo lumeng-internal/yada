@@ -1,0 +1,74 @@
+{
+  "common": {
+    "save": "Save",
+    "cancel": "Cancel",
+    "create": "Create",
+    "delete": "Delete",
+    "rename": "Rename",
+    "reset": "Reset"
+  },
+  "popup": {
+    "title": "Settings",
+    "language": "Language",
+    "languageZh": "简体中文",
+    "languageZhTW": "繁體中文",
+    "languageEn": "English",
+    "hint": "Language changes apply to the current claude.ai tab."
+  },
+  "export": {
+    "title": "Export conversation",
+    "buttonLabel": "Export",
+    "buttonAria": "Open export menu",
+    "closeAria": "Close export menu",
+    "formatLabel": "Format",
+    "formatMarkdown": "Markdown",
+    "formatJson": "JSON",
+    "exportButton": "Export",
+    "statusExporting": "Exporting...",
+    "statusSuccess": "Exported {{count}} messages",
+    "statusFailed": "Export failed",
+    "statusFailedCount": "{{count}} failed"
+  },
+  "copyAll": {
+    "buttonLabel": "Copy all",
+    "buttonAria": "Copy all conversation messages",
+    "statusCopying": "Copying...",
+    "statusSuccess": "Copied {{turns}} turns · {{messages}} messages",
+    "statusEmpty": "Nothing to copy",
+    "statusIncomplete": "Complete conversation data is unavailable. Nothing was copied.",
+    "statusFailed": "Copy failed"
+  },
+  "railPreview": {
+    "currentUserOnly": "White mode: User only",
+    "switchToUserAssistant": "Click to switch to orange: User + Claude",
+    "currentUserAssistant": "Orange mode: User + Claude",
+    "switchToUserOnly": "Click to switch to white: User only",
+    "feedbackUserAssistant": "Switched to orange: User + Claude",
+    "feedbackUserOnly": "Switched to white: User only",
+    "userAssistantAria": "Switch rail preview to User and Claude summaries",
+    "userAssistantTitle": "Preview User + Claude",
+    "userOnlyAria": "Switch rail preview to User summary only",
+    "userOnlyTitle": "Preview User only"
+  },
+  "copySelected": {
+    "buttonLabel": "Select copy",
+    "buttonAria": "Enter selective copy mode",
+    "activeButtonLabel": "Selecting · {{count}} selected",
+    "enterMode": "Enter select mode",
+    "selectedCount": "Selected {{count}} turns",
+    "invert": "Invert selection",
+    "invertAria": "Invert current conversation turn selection",
+    "selectAll": "Select all",
+    "selectAllAria": "Select all conversation turns",
+    "clearAll": "Clear all",
+    "clearAllAria": "Clear all selected conversation turns",
+    "copyButton": "Copy selected",
+    "copyAria": "Copy selected conversation turns",
+    "exit": "Exit select",
+    "exitAria": "Exit selective copy mode",
+    "statusCopying": "Copying...",
+    "statusSuccess": "Copied {{count}} turns",
+    "statusEmpty": "Select turns first",
+    "statusFailed": "Copy failed"
+  }
+}
