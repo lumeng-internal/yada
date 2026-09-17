@@ -6,11 +6,11 @@ This file is mandatory reading before every work session in this repository.
 
 Project name: ChatGPT Yada
 
-Positioning: a lightweight ChatGPT extension for 复制全部 + 对话导航 + 提示词库.
+Positioning: a lightweight ChatGPT extension for 复制全部 + 每条消息真实时间戳 + 提示词库 + ChatGPT 官方导航悬停预览.
 
 The final product must stay small, focused, and easy to audit. The goal is not to merge all reference projects into one large enhancement suite.
 
-Current product direction: API-first complete conversation copy with real timestamps, a single navigation rail with hover previews, and a local prompt library.
+Current product direction: API-first complete conversation copy with real timestamps, a local prompt library, and hover previews on ChatGPT's official conversation navigation. Yada does not own a navigation rail, does not jump, and does not load chat history.
 
 ## Versioning
 
@@ -58,7 +58,7 @@ Never modify, format, move, delete, rename, or generate files under `reference/`
 Allowed use:
 
 - Read directory structure.
-- Read selected files for product, DOM, export, rail, preview, and engineering reference.
+- Read selected files for product, DOM, export, preview, and engineering reference.
 - Summarize findings in project docs.
 
 Forbidden use:
@@ -79,26 +79,29 @@ The accepted route is:
 5. Format Markdown and write it through the Clipboard API with the existing local fallback.
 6. Never report success after copying a DOM-only partial snapshot.
 
-Navigation is API-first:
+Official navigation is owned by ChatGPT:
 
-1. Complete API turns are the only authority for rail count, order, previews, timestamps and stable user message IDs.
-2. Official `data-turn-id-container` skeletons are materialization state only: they show which turns are currently loaded and scrollable.
-3. Native ChatGPT history pagination loads missing skeletons; Yada must not crop complete API entries down to the current skeleton window.
-4. Never reintroduce React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
+1. Complete API turns are the only authority for preview text and timestamps.
+2. ChatGPT official TOC buttons own jumping, page scrolling and final positioning.
+3. GPT Navigator Helper (installed separately, never bundled) may load earlier history so the official TOC can appear. Yada must not copy, modify, or ship that helper.
+4. Never reintroduce a custom rail, marks layer, history hydration, fetch hijacking, IntersectionObserver wrapping, `?message=` refresh, React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
 
 ## Scope Control
 
 The feature set is limited to:
 
 1. One-click copy of the current ChatGPT conversation as Markdown.
-2. API-first conversation navigation with official skeleton materialization, native history hydration, container-ID jumps and Harson/Harson+ChatGPT hover previews.
+2. Real per-message timestamps in copied Markdown and official-navigation hover previews.
 3. Local-only prompt CRUD and icon-only copying via chrome.storage.local; no search or composer insertion.
-4. Natural light/dark adaptation and existing attachment placeholders.
+4. Hover previews on ChatGPT official navigation buttons (`button[data-toc-item-index]`, `button[data-toc-active]`).
+5. Natural light/dark adaptation and existing attachment placeholders.
 
 Do not add features outside this scope unless the user explicitly changes the product scope in writing.
 
 Explicitly forbidden:
 
+- A second Yada navigation rail or custom tick marks.
+- Clicking official navigation buttons, scrolling the page, or loading earlier history.
 - Selective copy, selection menus, lasso selection, or per-turn controls.
 - GPT quota reminders.
 - Token estimation.
@@ -133,15 +136,19 @@ Before migrating any reference code or close derivative implementation, first do
 
 Default preference: re-implement the smallest needed behavior in this project using the reference only as a guide.
 
+GPT Navigator Helper has no clear source license. Never copy, modify, package, or commit its source, fonts, or assets. Mention the original repository only as a separately installed companion.
+
 ## UI Standards
 
-Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official side panels reposition it, while visible official conversation navigation hides that same host until it disappears. Prompt modal has its own body-level Shadow DOM host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps, preview text, rail count and stable message IDs. Official direct-child data-turn-id-container skeletons only report which turns are currently materialized. Never crop complete API entries to the current skeleton window. Never reintroduce React private-object scanning, a virtualizer bridge, or text matching. Prompts only copy through SVG icon controls and never insert into the composer.
+Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Prompt modal has its own body-level Shadow DOM host. Official navigation hover preview uses an independent Shadow DOM host with `pointer-events: none`. Do not modify, replace, hide, or click official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps and preview text. Never reintroduce a custom rail, React private-object scanning, a virtualizer bridge, or text matching. Prompts only copy through SVG icon controls and never insert into the composer.
 
 ## Stage Discipline
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.2.2 PATCH release, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.0.0 is a major rewrite on the dedicated test branch `codex/gpt-native-navigation-v3`. Do not modify or push main unless the user explicitly asks. Never force push.
+
+3.0.0 代码开发完成，但正式进入 main 前，仍需 MacBook 使用 GPT Navigator Helper 原版完成真实长对话验收。
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

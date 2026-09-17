@@ -2,11 +2,53 @@
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdtemp, rm, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve, extname } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
 execFileSync('git', ['diff', '--exit-code', 'a4bc0c56908df1e2643e1adb76c897f119891df2', '--', '../claude', '../gemini'], { cwd: root });
 console.log('PASS claude/ and gemini/ unchanged from 2.1.1 baseline');
+
+const manifest = JSON.parse(readFileSync(resolve(root, 'manifest.json'), 'utf8'));
+if (manifest.content_scripts?.length !== 1) throw new Error('manifest must have a single content script');
+const script = manifest.content_scripts[0];
+if (JSON.stringify(script.js) !== '["content.js"]') throw new Error('manifest js must be only content.js');
+if (script.run_at !== 'document_idle') throw new Error('manifest must run at document_idle');
+if (script.world) throw new Error('manifest must not use MAIN world');
+if (manifest.permissions?.join() !== 'storage') throw new Error('manifest permissions must be only storage');
+if (existsSync(resolve(root, 'src/history')) || existsSync(resolve(root, 'src/rail'))) {
+  throw new Error('src/history or src/rail still exists');
+}
+console.log('PASS manifest is a single document_idle content.js without history-page.js');
+
+function walk(dir) {
+  return readdir(dir, { withFileTypes: true }).then(async entries => {
+    const files = [];
+    for (const entry of entries) {
+      const path = resolve(dir, entry.name);
+      if (entry.isDirectory()) files.push(...await walk(path));
+      else files.push(path);
+    }
+    return files;
+  });
+}
+const srcFiles = (await walk(resolve(root, 'src'))).filter(path => extname(path) === '.ts');
+const src = srcFiles.map(path => readFileSync(path, 'utf8')).join('\n');
+const forbidden = [
+  [/chatgpt-yada-rail-host/, 'custom rail host'],
+  [/\bIntersectionObserver\b/, 'IntersectionObserver wrapping'],
+  [/window\.fetch\s*=/, 'window.fetch hijack'],
+  [/wrapFetchForHistory|rewriteConversationHistoryRequest|rewriteFetchInput/, 'fetch rewrite'],
+  [/HistoryHydrator|history-page|chatgpt-yada-rail/, 'removed navigation/history code'],
+  [/\?message=/, 'message query refresh'],
+  [/virtualizer/i, 'virtualizer bridge'],
+  [/scrollIntoView|scrollTo\(|scrollBy\(|\.scrollTop\s*=/, 'page scrolling']
+];
+for (const [pattern, label] of forbidden) {
+  if (pattern.test(src)) throw new Error(`production source still contains ${label}`);
+}
+console.log('PASS production source has no fetch hijack, IntersectionObserver wrapping, custom rail, or page scrolling');
+
 const inlineCss = { name: 'inline-css', setup(build) { build.onLoad({ filter: /\.css$/ }, async ({ path }) => ({ contents: await readFile(path.replace(/\?inline$/, ''), 'utf8'), loader: 'text' })); } };
 const bundle = await build({ plugins: [inlineCss], entryPoints: [resolve(root, 'scripts/verify-features.ts')], bundle: true, write: false, format: 'iife' });
 const server = createServer((req, res) => {

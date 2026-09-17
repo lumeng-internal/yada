@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.0.0 - 2026-09-17
+
+- 版本类型：MAJOR
+- 变更说明：把对话跳转交给 ChatGPT 官方导航，Yada 只保留复制、时间戳、提示词和官方导航悬停预览。
+- 构建产物：ChatGPT-Yada-v3.0.0-dist_chrome.zip
+
 ## v2.2.2 - 2026-09-17
 
 - 版本类型：PATCH
