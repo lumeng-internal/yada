@@ -1,3 +1,4 @@
+import { fetchCompleteConversation } from "./completeConversation";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 
 export type ApiAuthorRole = "system" | "assistant" | "user" | "tool";
@@ -58,21 +59,7 @@ export async function fetchConversation(conversationId: string, signal?: AbortSi
     headers["Chatgpt-Account-Id"] = accountId;
   }
 
-  const response = await fetch(`/backend-api/conversation/${encodeURIComponent(conversationId)}`, {
-    credentials: "include",
-    signal,
-    headers
-  });
-
-  if (!response.ok) {
-    throw new Error(`ChatGPT conversation API failed: ${response.status}`);
-  }
-
-  const conversation = await response.json() as ApiConversation;
-  return {
-    ...conversation,
-    id: conversation.id ?? conversation.conversation_id ?? conversationId
-  };
+  return fetchCompleteConversation(conversationId, headers, signal);
 }
 
 async function getAccessToken(): Promise<string | null> {

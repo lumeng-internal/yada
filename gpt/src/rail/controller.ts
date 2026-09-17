@@ -1,3 +1,4 @@
+import { readChatGPTOfficialNavigation } from "./officialNavigation";
 import { bindDomAnchorsToTurns } from "../conversation/domCollector";
 import { isInsideComposer } from "../conversation/composerGuard";
 import { loadCurrentConversationSnapshot } from "../conversation/normalizeConversation";
@@ -37,13 +38,14 @@ export class RailController {
           && !(record.type === "childList" && [...record.addedNodes, ...record.removedNodes].every(node => node instanceof Element && node.matches('[data-yada-root]')));
       });
       if (!relevant.length) return;
+      this.syncOfficialNavigation();
       this.scheduleRefresh();
       if (relevant.some(record => {
         const element = record.target instanceof Element ? record.target : record.target.parentElement;
         return record.type !== "attributes" && !!element?.closest('main, #thread');
       })) this.scheduleApi();
     });
-    this.mutation.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-message-id', 'data-turn-id'] });
+    this.mutation.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-message-id', 'data-turn-id', 'class', 'style', 'hidden', 'aria-hidden'] });
     window.addEventListener("resize", this.scheduleRefresh, { passive: true });
     window.addEventListener("wheel", this.cancelJump, { passive: true });
     window.addEventListener("touchstart", this.cancelJump, { passive: true });
@@ -71,17 +73,28 @@ export class RailController {
     window.removeEventListener("keydown", this.cancelJumpOnKey);
     this.view.dispose();
   }
-  private cancelJump = (): void => { this.jumping?.abort(); this.jumping = null; };
+  private cancelJump = (): void => { this.jumping?.abort(); this.jumping = null; this.view.setStatus(""); };
   private cancelJumpOnKey = (event: KeyboardEvent): void => {
     if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Escape', ' '].includes(event.key)) this.cancelJump();
   };
   private async jump(id: string): Promise<void> {
     this.cancelJump(); this.view.clearHover();
+    if (this.syncOfficialNavigation()) return;
     const request = new AbortController(); this.jumping = request;
+    this.view.setStatus("定位中");
     try {
-      const found = await jumpToTurn(id, this.refreshAnchors, () => this.root ?? resolveScrollRoot(), request.signal);
-      if (!request.signal.aborted) this.view.host.title = found ? "" : "未能定位此轮，请稍后重试";
-    } finally { if (this.jumping === request) this.jumping = null; }
+      const found = await jumpToTurn(id, this.refreshAnchors, () => this.root ?? resolveScrollRoot(), request.signal, () => this.view.setStatus("定位中"));
+      if (this.jumping !== request) return;
+      if (!request.signal.aborted) this.view.setStatus(found ? "定位成功" : "该轮暂时无法定位");
+      else this.view.setStatus("");
+    } catch { if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位"); }
+    finally { if (this.jumping === request) this.jumping = null; }
+  }
+  private syncOfficialNavigation(): boolean {
+    const official = readChatGPTOfficialNavigation().ready;
+    this.view.setSuppressed(official);
+    if (official) { this.cancelJump(); this.view.clearHover(); }
+    return official;
   }
   private scheduleApi(): void {
     if (!this.route || this.disposed || this.apiTimer) return;
@@ -124,6 +137,7 @@ export class RailController {
     // Reattach the same host if the application removed it during a layout transition.
     if (!this.view.host.isConnected) document.documentElement.append(this.view.host);
     placeRail(this.view.host, this.root!, this.turns.length);
+    this.syncOfficialNavigation();
     this.view.setActive(getActiveTurn(this.turns, this.root!));
     return this.turns;
   };

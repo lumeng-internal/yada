@@ -2,10 +2,10 @@ import type { YadaTurn } from "../conversation/types";
 import { isInsideComposer } from "../conversation/composerGuard";
 export type ScrollRoot = HTMLElement;
 export function resolveScrollRoot(anchor?: HTMLElement | null): ScrollRoot {
-  let current = anchor ?? document.querySelector<HTMLElement>('#thread, main');
+  let current = anchor ?? document.querySelector<HTMLElement>('main [data-message-id], #thread [data-message-author-role], #thread, main');
   while (current && current !== document.documentElement) {
     const style = getComputedStyle(current);
-    if (/(auto|scroll|overlay)/.test(style.overflowY) && current.clientHeight > 0) return current;
+    if (/(auto|scroll|overlay)/.test(style.overflowY) && current.clientHeight > 0 && current.scrollHeight > current.clientHeight + 24) return current;
     current = current.parentElement;
   }
   return (document.scrollingElement ?? document.documentElement) as HTMLElement;

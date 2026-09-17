@@ -128,13 +128,13 @@ Default preference: re-implement the smallest needed behavior in this project us
 
 ## UI Standards
 
-Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official panels only reposition that host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical; DOM is only for anchors, scrolling and composer insertion. Never auto-send or overwrite a draft.
+Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official side panels reposition it, while visible official conversation navigation hides that same host until it disappears. Prompt modal has its own body-level Shadow DOM host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical; DOM is only for anchors, scrolling and composer insertion. Never auto-send or overwrite a draft.
 
 ## Stage Discipline
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows, PR or push. Run local build and relevant verification before the local commit.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.1.1 repair, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

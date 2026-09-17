@@ -7,10 +7,12 @@ export class RailView {
   private readonly preview = document.createElement("div");
   private turns: readonly YadaTurn[] = [];
   private buttons: HTMLButtonElement[] = [];
+  private suppressed = false;
   private active = -1;
   private hovered = -1;
   private assistant = false;
   private timer = 0;
+  private statusTimer = 0;
   private themeDispose: () => void;
   constructor(onJump: (id: string) => void) {
     document.querySelectorAll(`[id="${RAIL_HOST_ID}"]`).forEach(node => node.remove());
@@ -35,6 +37,7 @@ export class RailView {
       .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
       .preview[hidden] { display:none; }
       .preview strong { display:block; margin-bottom:4px; font-size:11px; opacity:.65; }
+      .preview section + section { margin-top:8px; }
       .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
       .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
       @media (prefers-reduced-motion:reduce) { .mark-bar { transition:none; } }
@@ -70,7 +73,25 @@ export class RailView {
       const bar = document.createElement("span"); bar.className = "mark-bar"; button.append(number, bar); return button;
     });
     this.marks.replaceChildren(...this.buttons);
-    this.host.hidden = !turns.length;
+    this.host.hidden = this.suppressed || !turns.length;
+  }
+  setSuppressed(hidden: boolean): void {
+    this.suppressed = hidden;
+    this.host.hidden = hidden || !this.turns.length;
+    if (hidden) this.clearHover();
+  }
+  setStatus(message: string): void {
+    clearTimeout(this.statusTimer);
+    this.host.title = message;
+    let status = this.host.shadowRoot!.querySelector<HTMLElement>('[role="status"]');
+    if (!status) {
+      status = document.createElement('div'); status.setAttribute('role', 'status');
+      status.style.cssText = 'position:absolute;right:64px;top:0;white-space:nowrap;background:var(--bg);padding:4px 8px;border-radius:6px';
+      this.host.shadowRoot!.append(status);
+    }
+    status.textContent = message;
+    status.hidden = !message;
+    if (message && message !== "定位中") this.statusTimer = window.setTimeout(() => this.setStatus(""), 1800);
   }
   setActive(index: number): void {
     if (this.active === index) return;
@@ -84,9 +105,9 @@ export class RailView {
     for (const button of this.buttons.slice(Math.max(0, this.hovered - 3), this.hovered + 4)) delete button.dataset.distance;
     this.hovered = -1; this.preview.hidden = true;
   }
-  dispose(): void { this.clearHover(); this.themeDispose(); this.host.remove(); }
+  dispose(): void { clearTimeout(this.statusTimer); this.clearHover(); this.themeDispose(); this.host.remove(); }
   private hover(index: number): void {
-    if (index === this.hovered || !this.turns[index]) return;
+    if (this.suppressed || index === this.hovered || !this.turns[index]) return;
     this.clearHover(); this.hovered = index;
     for (let n = Math.max(0, index - 3); n <= Math.min(this.buttons.length - 1, index + 3); n++) this.buttons[n].dataset.distance = String(Math.abs(n - index));
     this.preview.dataset.expanded = "false"; this.showPreview();
@@ -95,8 +116,15 @@ export class RailView {
   private showPreview(): void {
     const turn = this.turns[this.hovered], button = this.buttons[this.hovered]; if (!turn || !button) return;
     const title = document.createElement("strong"); title.textContent = `第 ${turn.index + 1} 轮`;
-    const body = document.createElement("p"); body.textContent = this.assistant ? `User: ${turn.userPreview}\nChatGPT: ${turn.assistantPreview || "[暂无回复]"}` : turn.userPreview;
-    this.preview.replaceChildren(title, body); this.preview.hidden = false;
+    const block = (role: string, text: string): HTMLElement => {
+      const section = document.createElement('section'); section.dataset.previewRole = role;
+      const label = document.createElement('strong'); label.textContent = role;
+      const summary = document.createElement('p'); summary.textContent = text;
+      section.append(label, summary); return section;
+    };
+    this.preview.replaceChildren(title, block('User', turn.userPreview));
+    if (this.assistant) this.preview.append(block('ChatGPT', turn.assistantPreview || '该轮暂无 ChatGPT 回复'));
+    this.preview.hidden = false;
     const rect = button.getBoundingClientRect();
     const width = this.preview.getBoundingClientRect().width;
     this.preview.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.left - width - 12))}px`;

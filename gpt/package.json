@@ -1,11 +1,11 @@
 {
   "name": "chatgpt-yada",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "private": true,
   "description": "Complete ChatGPT Markdown copy with timestamps, conversation navigation and a local prompt library.",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit && vite build && cp manifest.json dist_chrome/manifest.json",
+    "build": "tsc --noEmit && vite build && node scripts/build-bridge.mjs && cp manifest.json dist_chrome/manifest.json",
     "verify:copy": "esbuild scripts/verify-copy.ts --bundle --platform=node --format=esm --outfile=/tmp/chatgpt-yada-copy-verify.mjs && node /tmp/chatgpt-yada-copy-verify.mjs",
     "release:patch": "node scripts/release.mjs patch",
     "release:minor": "node scripts/release.mjs minor",

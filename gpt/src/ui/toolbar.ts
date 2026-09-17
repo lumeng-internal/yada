@@ -41,7 +41,7 @@ export class YadaToolbar {
       void this.copyAll();
     });
 
-    this.prompts = new PromptPanel(this.shadow, this.query<HTMLButtonElement>("[data-prompts]")!);
+    this.prompts = new PromptPanel( this.query<HTMLButtonElement>("[data-prompts]")!);
     const mode = this.query<HTMLButtonElement>("[data-preview-mode]")!;
     const applyMode = (): void => {
       mode.setAttribute("aria-pressed", String(this.previewAssistant));
@@ -191,17 +191,6 @@ export class YadaToolbar {
         }
         [data-preview-mode] { padding: 0; width: 20px; height: 20px; font-size: 16px; color: var(--yada-muted); border: 0; background: transparent; }
         [data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
-        .prompt-panel { position: fixed; box-sizing: border-box; width: min(330px, calc(100vw - 16px)); padding: 12px; overflow: auto; border: 1px solid var(--yada-button-border); border-radius: 12px; background: #fff; color: var(--yada-text); box-shadow: 0 8px 30px #0003; font-size: 13px; }
-        :host([data-yada-theme="dark"]) .prompt-panel { background: #242424; }
-        .prompt-panel[hidden] { display: none; }
-        .prompt-panel input, .prompt-panel textarea { box-sizing: border-box; width: 100%; margin-bottom: 10px; padding: 8px; border: 1px solid var(--yada-button-border); border-radius: 6px; background: transparent; color: inherit; font: inherit; }
-        .prompt-panel textarea { resize: vertical; }
-        .prompt-list { max-height: 300px; overflow: auto; margin: 10px 0; }
-        .prompt-row { display: flex; align-items: center; gap: 4px; margin: 6px 0; }
-        .prompt-panel .prompt-insert { flex: 1; min-width: 0; height: auto; border: 0; border-radius: 5px; text-align: left; padding: 8px 4px; white-space: normal; overflow-wrap: anywhere; line-height: 1.4; }
-        .prompt-insert small { display: block; color: var(--yada-muted); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-weight: normal; }
-        .prompt-panel button { padding: 0 7px; }
-        .prompt-panel [role="alert"] { color: #d14343; }
       </style>
       <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>

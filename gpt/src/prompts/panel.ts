@@ -1,123 +1,184 @@
-import { captureComposerSelection, insertPrompt, type ComposerSelection } from "./composer";
+/* Modal structure, filtering and card rendering adapted from GPT Conversation Toolkit
+ * features/prompt-library.js. Copyright (c) 2026 bujue3709. MIT; see THIRD_PARTY_NOTICES.md.
+ * Yada adapters: storage, editing, composer insertion, cancellation and focus lifecycle.
+ */
+import styles from "./panel.css?inline";
+import { captureComposerSelection, insertPromptWhenReady, type ComposerSelection } from "./composer";
 import { readLibrary, saveLibrary } from "./storage";
 import type { Prompt, PromptLibrary } from "./types";
+import { detectYadaTheme, observeYadaTheme } from "../ui/theme";
 
+export const PROMPT_HOST_ID = "chatgpt-yada-prompt-host";
 export class PromptPanel {
-  private readonly panel = document.createElement("section");
+  readonly host = document.createElement("div");
+  private readonly root: ShadowRoot;
+  private readonly modal: HTMLElement;
   private library: PromptLibrary = { version: 1, prompts: [] };
   private selection: ComposerSelection | null = null;
+  private request: AbortController | null = null;
   private generation = 0;
   private busy = false;
   private disposed = false;
-  constructor(root: ShadowRoot, private readonly button: HTMLButtonElement) {
-    this.panel.className = "prompt-panel";
-    this.panel.hidden = true;
-    this.panel.setAttribute("role", "dialog");
-    this.panel.setAttribute("aria-label", "提示词收藏库");
-    root.append(this.panel);
+  private editing: Prompt | null = null;
+  private readonly disposeTheme: () => void;
+
+  constructor(private readonly button: HTMLButtonElement) {
+    document.getElementById(PROMPT_HOST_ID)?.remove();
+    this.host.id = PROMPT_HOST_ID;
+    this.host.dataset.yadaRoot = "true";
+    this.host.hidden = true;
+    this.root = this.host.attachShadow({ mode: "open" });
+    const style = document.createElement("style"); style.textContent = styles;
+    this.modal = document.createElement("section");
+    this.modal.className = "yada-prompt-modal is-visible";
+    // Upstream complete modal shell; intentionally omit category, sort and import/export.
+    this.modal.innerHTML = `
+      <div class="yada-prompt-backdrop" data-prompt-action="close"></div>
+      <div class="yada-prompt-panel" role="dialog" aria-modal="true" aria-label="提示词收藏库">
+        <div class="yada-prompt-header"><strong>提示词收藏库</strong>
+          <button type="button" class="yada-prompt-close" data-prompt-action="close">关闭</button></div>
+        <div class="yada-prompt-filters"><input type="search" placeholder="搜索提示词" aria-label="搜索提示词"></div>
+        <div class="yada-prompt-list"></div>
+        <p class="yada-prompt-empty">暂无提示词</p>
+        <form class="yada-prompt-editor" hidden>
+          <input name="title" placeholder="标题" aria-label="标题" required>
+          <textarea name="content" rows="4" placeholder="正文" aria-label="正文" required></textarea>
+          <button type="submit" class="yada-prompt-add">保存</button>
+          <button type="button" class="yada-prompt-close" data-prompt-action="cancel">取消</button>
+        </form>
+        <div class="yada-prompt-footer"><span class="yada-prompt-count"></span>
+          <div class="yada-prompt-footer-actions"><button type="button" data-prompt-action="add">新增提示词</button></div></div>
+        <p role="alert" hidden></p>
+      </div>`;
+    this.root.append(style, this.modal);
+    document.body.append(this.host);
+    this.modal.dataset.toolkitTheme = detectYadaTheme();
+    this.disposeTheme = observeYadaTheme(theme => { this.modal.dataset.toolkitTheme = theme; });
     button.addEventListener("pointerdown", this.capture);
     button.addEventListener("click", this.toggle);
+    this.modal.addEventListener("click", this.handleClick);
+    this.query<HTMLInputElement>('input[type="search"]').addEventListener("input", () => this.renderList());
+    this.query<HTMLFormElement>("form").addEventListener("submit", event => { event.preventDefault(); void this.saveEditor(); });
     document.addEventListener("pointerdown", this.outside, true);
     document.addEventListener("keydown", this.keydown, true);
-    window.addEventListener("resize", this.position);
   }
+  private query<T extends HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
   close = (): void => {
     this.generation++;
-    this.selection = null;
-    this.panel.hidden = true;
+    this.request?.abort(); this.request = null;
+    this.selection = null; this.host.hidden = true;
     this.button.setAttribute("aria-expanded", "false");
   };
   dispose(): void {
-    this.disposed = true;
-    this.close(); this.panel.remove();
+    this.disposed = true; this.close(); this.disposeTheme(); this.host.remove();
     this.button.removeEventListener("pointerdown", this.capture);
     this.button.removeEventListener("click", this.toggle);
     document.removeEventListener("pointerdown", this.outside, true);
     document.removeEventListener("keydown", this.keydown, true);
-    window.removeEventListener("resize", this.position);
   }
-  private capture = (): void => { this.selection = captureComposerSelection(); };
+  private capture = (): void => { if (this.host.hidden) this.selection = captureComposerSelection(); };
   private toggle = async (): Promise<void> => {
-    if (!this.panel.hidden) { this.close(); return; }
+    if (!this.host.hidden) { this.close(); return; }
     this.selection ??= captureComposerSelection();
     const generation = ++this.generation;
-    this.panel.hidden = false;
-    this.button.setAttribute("aria-expanded", "true");
-    this.panel.textContent = "加载中…";
-    this.position();
+    if (!this.host.isConnected) document.body.append(this.host);
+    this.host.hidden = false; this.button.setAttribute("aria-expanded", "true");
+    this.query('[role="alert"]').hidden = true;
+    this.query('form').hidden = true;
+    this.query<HTMLInputElement>('input[type="search"]').value = "";
     try {
       const library = await readLibrary();
-      if (generation !== this.generation) return;
-      this.library = library; this.list();
-    } catch { if (generation === this.generation) this.panel.textContent = "无法读取提示词，请重新打开重试。"; }
+      if (this.disposed || generation !== this.generation) return;
+      this.library = library; this.renderList();
+      this.query('input[type="search"]').focus();
+    } catch { if (generation === this.generation) this.error("无法读取提示词，请重新打开重试。"); }
   };
   private outside = (event: PointerEvent): void => {
-    const path = event.composedPath();
-    if (!path.includes(this.panel) && !path.includes(this.button)) this.close();
+    if (!this.host.hidden && !event.composedPath().includes(this.host) && !event.composedPath().includes(this.button)) this.close();
   };
   private keydown = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && !this.panel.hidden) { event.stopPropagation(); this.close(); this.button.focus(); }
+    if (this.host.hidden) return;
+    if (event.key === "Escape") { event.stopPropagation(); this.close(); this.button.focus(); }
+    if (event.key === "Tab") {
+      const items = [...this.modal.querySelectorAll<HTMLElement>('button, input, textarea')].filter(e => e.getClientRects().length && !(e as HTMLButtonElement).disabled);
+      const first = items[0], last = items.at(-1), active = this.root.activeElement;
+      if (event.shiftKey && active === first) { event.preventDefault(); last?.focus(); }
+      else if (!event.shiftKey && active === last) { event.preventDefault(); first?.focus(); }
+    }
   };
-  private position = (): void => {
-    const rect = this.button.getBoundingClientRect();
-    this.panel.style.left = `${Math.max(8, Math.min(rect.right - 330, innerWidth - Math.min(330, innerWidth - 16) - 8))}px`;
-    this.panel.style.top = `${Math.max(8, Math.min(rect.bottom + 8, innerHeight - 100))}px`;
-    this.panel.style.maxHeight = `${Math.max(80, innerHeight - rect.bottom - 24)}px`;
+  private handleClick = (event: MouseEvent): void => {
+    const target = event.target instanceof Element ? event.target : null;
+    const action = target?.closest<HTMLElement>('[data-prompt-action]');
+    if (!action || this.host.hidden) return;
+    const kind = action.dataset.promptAction;
+    if (kind === 'close') { this.close(); this.button.focus(); return; }
+    if (this.busy) return;
+    const prompt = this.library.prompts.find(item => item.id === action.dataset.promptId);
+    if (kind === 'add') this.edit();
+    if (kind === 'cancel') this.query('form').hidden = true;
+    if (kind === 'edit' && prompt) this.edit(prompt);
+    if (kind === 'delete' && prompt) void this.persist({ version: 1, prompts: this.library.prompts.filter(item => item.id !== prompt.id) });
+    if (kind === 'insert' && prompt) void this.insert(prompt);
   };
-  private action(label: string, fn: () => void): HTMLButtonElement {
-    const button = document.createElement("button"); button.type = "button";
-    button.textContent = label; button.addEventListener("click", fn); return button;
+  private renderList(): void {
+    const keyword = this.query<HTMLInputElement>('input[type="search"]').value.trim().toLocaleLowerCase();
+    const items = this.library.prompts.filter(item => `${item.title} ${item.content}`.toLocaleLowerCase().includes(keyword)).sort((a, b) => b.updatedAt - a.updatedAt);
+    const list = this.query('.yada-prompt-list'); list.replaceChildren();
+    this.query('.yada-prompt-empty').hidden = items.length > 0;
+    this.query('.yada-prompt-count').textContent = `${items.length} / ${this.library.prompts.length} 条提示词`;
+    const fragment = document.createDocumentFragment();
+    for (const item of items) {
+      const article = document.createElement('article'); article.className = 'yada-prompt-item';
+      article.dataset.promptId = item.id;
+      const header = document.createElement('div'); header.className = 'yada-prompt-item-header';
+      const insert = this.action(item.title, 'insert', item.id); insert.className = 'yada-prompt-insert';
+      const title = document.createElement('h4'); title.className = 'yada-prompt-item-title'; title.textContent = item.title;
+      const content = document.createElement('p'); content.className = 'yada-prompt-item-content'; content.textContent = item.content;
+      insert.replaceChildren(title, content);
+      const actions = document.createElement('div'); actions.className = 'yada-prompt-item-actions';
+      const edit = this.action('编辑', 'edit', item.id); edit.className = 'yada-prompt-close';
+      const remove = this.action('删除', 'delete', item.id); remove.className = 'yada-prompt-delete';
+      actions.append(edit, remove); header.append(insert, actions); article.append(header); fragment.append(article);
+    }
+    list.append(fragment);
   }
-  private list(): void {
-    this.panel.replaceChildren();
-    const search = document.createElement("input"); search.type = "search"; search.placeholder = "搜索提示词"; search.setAttribute("aria-label", "搜索提示词");
-    const rows = document.createElement("div"); rows.className = "prompt-list";
-    const renderRows = (): void => {
-      rows.replaceChildren();
-      const query = search.value.trim().toLocaleLowerCase();
-      for (const prompt of this.library.prompts.filter(p => `${p.title}\n${p.content}`.toLocaleLowerCase().includes(query))) {
-        const row = document.createElement("div"); row.className = "prompt-row";
-        const insert = this.action(prompt.title, () => {
-          if (insertPrompt(prompt.content, this.selection)) { this.close(); this.selection = null; }
-          else this.error("未找到可写输入框或编辑器拒绝写入，请重试。");
-        });
-        insert.className = "prompt-insert";
-        const summary = document.createElement("small"); summary.textContent = prompt.content; insert.append(summary);
-        row.append(insert, this.action("编辑", () => this.edit(prompt)), this.action("删除", () => {
-          void this.persist({ version: 1, prompts: this.library.prompts.filter(p => p.id !== prompt.id) });
-        })); rows.append(row);
-      }
-      if (!rows.childElementCount) rows.textContent = "暂无提示词";
-    };
-    search.addEventListener("input", renderRows); renderRows();
-    this.panel.append(search, rows, this.action("新增提示词", () => this.edit())); search.focus();
+  private action(text: string, action: string, id: string): HTMLButtonElement {
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = text;
+    button.dataset.promptAction = action; button.dataset.promptId = id; return button;
   }
   private edit(prompt?: Prompt): void {
-    const form = document.createElement("form");
-    const title = document.createElement("input"); title.placeholder = "标题"; title.setAttribute("aria-label", "标题"); title.required = true; title.value = prompt?.title ?? "";
-    const content = document.createElement("textarea"); content.placeholder = "正文"; content.setAttribute("aria-label", "正文"); content.required = true; content.rows = 7; content.value = prompt?.content ?? "";
-    const save = this.action("保存", () => {}); save.type = "submit";
-    form.append(title, content, save, this.action("取消", () => this.list()));
-    form.addEventListener("submit", event => {
-      event.preventDefault(); if (!title.value.trim() || !content.value.trim()) return;
-      const now = Date.now();
-      const updated: Prompt = { id: prompt?.id ?? crypto.randomUUID(), title: title.value.trim(), content: content.value, createdAt: prompt?.createdAt ?? now, updatedAt: now };
-      const prompts = prompt ? this.library.prompts.map(p => p.id === prompt.id ? updated : p) : [...this.library.prompts, updated];
-      void this.persist({ version: 1, prompts });
-    });
-    this.panel.replaceChildren(form); title.focus();
+    this.editing = prompt ?? null; this.query('form').hidden = false;
+    this.query<HTMLInputElement>('[name="title"]').value = prompt?.title ?? '';
+    this.query<HTMLTextAreaElement>('[name="content"]').value = prompt?.content ?? '';
+    this.query('[name="title"]').focus();
+  }
+  private async saveEditor(): Promise<void> {
+    const title = this.query<HTMLInputElement>('[name="title"]').value.trim();
+    const content = this.query<HTMLTextAreaElement>('[name="content"]').value;
+    if (!title || !content.trim() || this.busy) return;
+    const previous = this.editing, now = Date.now();
+    const item: Prompt = { id: previous?.id ?? crypto.randomUUID(), title, content, createdAt: previous?.createdAt ?? now, updatedAt: now };
+    await this.persist({ version: 1, prompts: previous ? this.library.prompts.map(p => p.id === previous.id ? item : p) : [...this.library.prompts, item] });
   }
   private async persist(next: PromptLibrary): Promise<void> {
     if (this.busy) return;
-    this.busy = true;
-    const generation = this.generation;
-    const buttons = this.panel.querySelectorAll<HTMLButtonElement>("button"); buttons.forEach(b => { b.disabled = true; });
-    try { await saveLibrary(next); this.library = next; if (!this.disposed && generation === this.generation) this.list(); }
-    catch { if (!this.disposed && generation === this.generation) this.error("保存失败，内容仍保留，请重试。"); }
-    finally { this.busy = false; buttons.forEach(b => { b.disabled = false; }); }
+    this.busy = true; const generation = this.generation;
+    try {
+      await saveLibrary(next); this.library = next;
+      if (!this.disposed && generation === this.generation) { this.renderList(); this.query('form').hidden = true; }
+    } catch { if (generation === this.generation) this.error('保存失败，内容仍保留，请重试。'); }
+    finally { this.busy = false; }
   }
-  private error(message: string): void {
-    this.panel.querySelector('[role="alert"]')?.remove();
-    const error = document.createElement("p"); error.setAttribute("role", "alert"); error.textContent = message; this.panel.append(error);
+  private async insert(prompt: Prompt): Promise<void> {
+    if (this.busy) return;
+    this.busy = true; const generation = this.generation;
+    const request = new AbortController(); this.request = request;
+    try {
+      const inserted = await insertPromptWhenReady(prompt.content, this.selection, request.signal);
+      if (generation !== this.generation || this.disposed) return;
+      if (inserted) this.close();
+      else this.error('未找到可写输入框或编辑器拒绝写入，请重试。');
+    } finally { this.busy = false; if (this.request === request) this.request = null; }
   }
+  private error(message: string): void { const alert = this.query('[role="alert"]'); alert.textContent = message; alert.hidden = false; }
 }

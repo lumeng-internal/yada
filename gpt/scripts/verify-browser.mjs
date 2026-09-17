@@ -1,12 +1,18 @@
 // Dependency-free local Chrome fixture runner; no external sites, accounts, or workflows.
 import { build } from 'esbuild';
 import { createServer } from 'node:http';
-import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn, execFileSync } from 'node:child_process';
+import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
-const bundle = await build({ entryPoints: [resolve(root, 'scripts/verify-features.ts')], bundle: true, write: false, format: 'iife' });
+execFileSync('git', ['diff', '--exit-code', '415f22eef9da98d30088c3e01b6d79bae30c2374', '--', '../claude', '../gemini'], { cwd: root });
+console.log('PASS claude/ and gemini/ unchanged from 2.1.0 baseline');
+const inlineCss = { name: 'inline-css', setup(build) { build.onLoad({ filter: /\.css$/ }, async ({ path }) => ({ contents: await readFile(path.replace(/\?inline$/, ''), 'utf8'), loader: 'text' })); } };
+const bundle = await build({ plugins: [inlineCss], entryPoints: [resolve(root, 'scripts/verify-features.ts')], bundle: true, write: false, format: 'iife' });
+const bridgeBundle = await build({ entryPoints: [resolve(root, 'src/rail/virtualizerBridgePage.ts')], bundle: true, write: false, format: 'iife' });
+const pageBridge = bridgeBundle.outputFiles[0].text;
 const server = createServer((req, res) => {
+  if (req.url === '/features/virtualizer-bridge-page.js') { res.setHeader('Content-Type', 'text/javascript'); res.end(pageBridge); return; }
   res.setHeader('Content-Type', req.url === '/test.js' ? 'text/javascript' : 'text/html');
   res.end(req.url === '/test.js' ? bundle.outputFiles[0].text : '<!doctype html><meta charset="utf-8"><title>Yada local verification</title><body><script src="/test.js"></script></body>');
 });
@@ -30,7 +36,7 @@ try {
   const { targetId } = await call('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
   await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/c/fixture-1` }, sessionId);
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 120000;
   let result;
   while (Date.now() < deadline) {
     const state = await call('Runtime.evaluate', { expression: 'globalThis.yadaVerification', returnByValue: true }, sessionId);

@@ -1,0 +1,124 @@
+/* Adapted from GPT Conversation Toolkit features/conversation-api.js.
+ * Copyright (c) 2026 bujue3709. MIT; see THIRD_PARTY_NOTICES.md.
+ * Same full-conversation and paginated API contracts; Yada keeps its active-branch normalizer.
+ */
+import type { ApiConversation, ApiConversationMessage, ApiConversationNode } from './fetchConversation';
+
+type PageInfo = { has_previous_page?: boolean; hasPreviousPage?: boolean; start_cursor?: string; startCursor?: string };
+type ConversationResponse = ApiConversation & {
+  current_node_id?: string;
+  conversation?: ConversationResponse;
+  messages?: ApiConversationMessage[];
+  page_info?: PageInfo;
+  pageInfo?: PageInfo;
+};
+const PAGE_NUM_TURNS = 100;
+const MAX_PAGES = 500;
+
+function unwrap(data: ConversationResponse): ConversationResponse { return data.conversation ?? data; }
+export function isCompleteConversationMapping(raw: ConversationResponse): boolean {
+  const data = unwrap(raw), mapping = data.mapping;
+  let next = data.current_node ?? data.current_node_id ?? '';
+  if (!mapping || !next || !mapping[next]) return false;
+  const seen = new Set<string>();
+  while (next) {
+    if (seen.has(next) || !mapping[next]) return false;
+    seen.add(next); next = mapping[next].parent ?? '';
+  }
+  return true;
+}
+export function getPaginatedConversationApiUrl(conversationId: string, before = ''): string {
+  const id = encodeURIComponent(conversationId);
+  const path = before ? `/backend-api/conversations/${id}/messages` : `/backend-api/conversations/${id}`;
+  const params = new URLSearchParams();
+  if (before) params.set('before', before);
+  params.set('include_has_versions', 'true'); params.set('num_turns', String(PAGE_NUM_TURNS));
+  return `${path}?${params}`;
+}
+function getPaginatedConversationCursor(data: ConversationResponse): string {
+  const page = data.page_info ?? data.pageInfo;
+  // Without terminal page evidence, a partial response must never become an api-full snapshot.
+  if (!page || typeof (page.has_previous_page ?? page.hasPreviousPage) !== 'boolean') throw new Error('Missing pagination completeness metadata');
+  const previous = page.has_previous_page === true || page.hasPreviousPage === true;
+  const cursor = page.start_cursor ?? page.startCursor ?? '';
+  if (previous && !cursor) throw new Error('Pagination requested an older page without a cursor');
+  return previous ? cursor : '';
+}
+function mergePaginatedConversationMessages(older: ApiConversationMessage[], newer: ApiConversationMessage[]): ApiConversationMessage[] {
+  const seen = new Set<string>();
+  return [...older, ...newer].filter(message => {
+    if (!message?.id) throw new Error('Conversation message has no stable ID');
+    if (seen.has(message.id)) return false;
+    seen.add(message.id); return true;
+  });
+}
+function buildConversationMappingFromMessages(messages: ApiConversationMessage[], id: string, current: string): ApiConversation {
+  const rootId = `paginated-root:${id}`;
+  const mapping: Record<string, ApiConversationNode> = { [rootId]: { id: rootId, parent: '', children: [] } };
+  let parent = rootId;
+  for (const message of messages) {
+    mapping[parent].children = [message.id];
+    mapping[message.id] = { id: message.id, parent, children: [], message };
+    parent = message.id;
+  }
+  // Preserve first-page current branch tip, never silently switch to a nearby branch.
+  if (current && !mapping[current]) throw new Error('Active branch tip missing after pagination');
+  return { id, mapping, current_node: current || parent };
+}
+
+export async function fetchCompleteConversation(id: string, headers: HeadersInit, signal?: AbortSignal): Promise<ApiConversation> {
+  const request = async (url: string): Promise<ConversationResponse> => {
+    const controller = new AbortController();
+    const abort = (): void => controller.abort();
+    signal?.addEventListener('abort', abort, { once: true });
+    if (signal?.aborted) controller.abort();
+    const timer = setTimeout(abort, 10000);
+    try {
+      const response = await fetch(url, { credentials: 'include', cache: 'no-store', headers, signal: controller.signal });
+      if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+      const data = await response.json();
+      if (!data || typeof data !== 'object') throw new Error('Conversation API returned an empty response');
+      return data as ConversationResponse;
+    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+  };
+  const complete = (raw: ConversationResponse): ApiConversation => {
+    const data = unwrap(raw);
+    if (!isCompleteConversationMapping(raw)) throw new Error('Incomplete active conversation path');
+    return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
+  };
+  const base = `/backend-api/conversation/${encodeURIComponent(id)}`;
+  let activeTip = '';
+  let lastError: unknown;
+  try {
+    const full = await request(`${base}?include_full_conversation=true`);
+    activeTip = unwrap(full).current_node ?? unwrap(full).current_node_id ?? '';
+    return complete(full);
+  } catch (error) { lastError = error; if (signal?.aborted) throw error; }
+  try {
+    const first = unwrap(await request(getPaginatedConversationApiUrl(id)));
+    if (!Array.isArray(first.messages)) throw new Error('Paginated conversation API returned no messages');
+    let messages = mergePaginatedConversationMessages([], first.messages);
+    let cursor = getPaginatedConversationCursor(first);
+    const seen = new Set<string>();
+    let count = 1;
+    while (cursor) {
+      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+      if (seen.has(cursor) || count >= MAX_PAGES) throw new Error('Conversation pagination stalled');
+      seen.add(cursor);
+      const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
+      if (!Array.isArray(page.messages)) throw new Error('Conversation message page returned no messages');
+      messages = mergePaginatedConversationMessages(page.messages, messages);
+      cursor = getPaginatedConversationCursor(page); count++;
+    }
+    if (!messages.length) throw new Error('Paginated conversation is empty');
+    const current = first.current_node ?? first.current_node_id ?? activeTip;
+    const rebuilt = buildConversationMappingFromMessages(messages, id, current);
+    return { ...first, ...rebuilt };
+  } catch (error) { lastError = error; if (signal?.aborted) throw error; }
+  // Upstream legacy candidates remain useful, but still require complete active ancestry.
+  for (const url of [base, `${base}?offset=0&limit=100000`]) {
+    try { return complete(await request(url)); }
+    catch (error) { lastError = error; if (signal?.aborted) throw error; }
+  }
+  throw lastError;
+}

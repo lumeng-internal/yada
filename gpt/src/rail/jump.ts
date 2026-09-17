@@ -1,57 +1,36 @@
-import type { YadaTurn } from "../conversation/types";
-import { trustedUserAnchor, viewport, type ScrollRoot } from "./active";
+import type { YadaTurn } from '../conversation/types';
+import { type ScrollRoot } from './active';
+import { indexConversationMessages, toJumpTarget } from './conversationIndex';
+import { VirtualizedJump } from './virtualizedJump';
 
-function settle(signal: AbortSignal): Promise<void> {
-  return new Promise(resolve => {
-    let frame = 0, timer = 0;
-    const done = (): void => { cancelAnimationFrame(frame); clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
-    if (signal.aborted) { done(); return; }
-    signal.addEventListener("abort", done, { once: true });
-    frame = requestAnimationFrame(() => { frame = requestAnimationFrame(() => { timer = window.setTimeout(done, 100); }); });
-  });
-}
-export function jumpDirection(target: number, rendered: readonly number[]): number {
-  if (!rendered.length) return 0;
-  if (target < Math.min(...rendered)) return -1;
-  if (target > Math.max(...rendered)) return 1;
-  return 0;
-}
+/** Yada boundary adapter. The engine receives immutable API identity once per jump. */
 export async function jumpToTurn(
-  id: string, scan: () => YadaTurn[], getRoot: () => ScrollRoot, signal: AbortSignal
+  id: string, scan: () => YadaTurn[], getRoot: () => ScrollRoot, signal: AbortSignal,
+  onProgress?: (attempt: number) => void
 ): Promise<boolean> {
-  let turns = scan();
-  const index = turns.findIndex(turn => turn.id === id);
-  if (index < 0 || signal.aborted) return false;
-  let root = getRoot();
-  const origin = root.scrollTop;
-  const exact = (): boolean => {
-    turns = scan(); root = getRoot();
-    const turn = turns.find(item => item.id === id);
-    const anchor = trustedUserAnchor(turn);
-    if (!anchor) return false;
-    root.scrollTo({ top: Math.max(0, root.scrollTop + anchor.getBoundingClientRect().top - viewport(root).top - 80), behavior: "instant" });
-    return true;
+  if (signal.aborted) return false;
+  const turns = scan(), turn = turns.find(item => item.id === id);
+  const target = turn && toJumpTarget(turn);
+  if (!target) return false;
+  const route = location.pathname;
+  const request = new AbortController();
+  const cancel = (): void => request.abort();
+  const onKey = (event: KeyboardEvent): void => {
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'PageUp', 'PageDown', 'Home', 'End', 'Escape', ' '].includes(event.key)) cancel();
   };
-  if (!exact()) {
-    root.scrollTo({ top: index / Math.max(1, turns.length - 1) * Math.max(0, root.scrollHeight - root.clientHeight), behavior: "instant" });
+  const userEvents = ['wheel', 'touchstart', 'pointerdown', 'click'] as const;
+  userEvents.forEach(name => window.addEventListener(name, cancel, { capture: true, passive: true }));
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('popstate', cancel);
+  const routeFrame = (): void => { if (location.pathname !== route) cancel(); else if (!request.signal.aborted) routeRaf = requestAnimationFrame(routeFrame); };
+  let routeRaf = requestAnimationFrame(routeFrame);
+  signal.addEventListener('abort', cancel, { once: true });
+  if (signal.aborted) cancel();
+  const engine = new VirtualizedJump(indexConversationMessages(turns), { signal: request.signal, getRoot, onProgress });
+  try { return await engine.jumpToConversationMessage(target); }
+  finally {
+    cancelAnimationFrame(routeRaf); engine.dispose(); signal.removeEventListener('abort', cancel);
+    userEvents.forEach(name => window.removeEventListener(name, cancel, true));
+    window.removeEventListener('keydown', onKey, true); window.removeEventListener('popstate', cancel);
   }
-  for (let attempt = 0; attempt < 28; attempt++) {
-    await settle(signal);
-    if (signal.aborted) return false;
-    if (exact()) {
-      await settle(signal);
-      if (signal.aborted) return false;
-      if (exact()) return true;
-    }
-    const rendered = turns.filter(turn => trustedUserAnchor(turn)).map(turn => turn.index);
-    const direction = jumpDirection(index, rendered);
-    // An ambiguous gap must never be treated as the target. Probe around the estimated region.
-    const step = direction || (attempt % 2 === 0 ? -1 : 1);
-    const previous = root.scrollTop;
-    root.scrollTo({ top: previous + step * viewport(root).height * 0.7, behavior: "instant" });
-    if (root.scrollTop === previous && direction) break;
-  }
-  // A failed search restores the original view; it never claims a nearby turn as a success.
-  if (!signal.aborted && root.isConnected) root.scrollTo({ top: origin, behavior: "instant" });
-  return false;
 }
