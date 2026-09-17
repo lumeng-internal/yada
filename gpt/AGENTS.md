@@ -6,11 +6,11 @@ This file is mandatory reading before every work session in this repository.
 
 Project name: ChatGPT Yada
 
-Positioning: a lightweight ChatGPT extension for 复制全部 + 每条消息真实时间戳 + 提示词库 + ChatGPT 官方导航悬停预览.
+Positioning: a single lightweight ChatGPT extension for 复制全部 + 每条消息真实时间戳 + 提示词库 + ChatGPT 官方导航悬停预览 + 自动准备官方导航。
 
 The final product must stay small, focused, and easy to audit. The goal is not to merge all reference projects into one large enhancement suite.
 
-Current product direction: API-first complete conversation copy with real timestamps, a local prompt library, and hover previews on ChatGPT's official conversation navigation. Yada does not own a navigation rail, does not jump, and does not load chat history. Active conversations may passively reread preview data when official TOC buttons outgrow the last snapshot; this must stay a coalesced, non-streaming refresh.
+Current product direction: one extension. API-first complete conversation copy with real timestamps, a local prompt library, hover previews on ChatGPT's official conversation navigation, and automatic loading of earlier history so ChatGPT's official navigator can appear. Yada does not own a navigation rail, does not jump, and does not scroll or click official buttons.
 
 ## Versioning
 
@@ -83,8 +83,18 @@ Official navigation is owned by ChatGPT:
 
 1. Complete API turns are the only authority for preview text and timestamps.
 2. ChatGPT official TOC buttons own jumping, page scrolling and final positioning.
-3. GPT Navigator Helper (installed separately from the Chrome Web Store, never bundled) may load earlier history so the official TOC can appear. Preferred install: https://chromewebstore.google.com/detail/gpt-navigator-helper/bpbajpcoifjncefjgbnnafkcgmjdcdli . Source/issues: https://github.com/sssstf0rest/GPT-Navigator-Helper . Yada must not copy, modify, or ship that helper. Requires Chrome / Edge 152 or newer.
-4. Never reintroduce a custom rail, marks layer, history hydration, fetch hijacking, IntersectionObserver wrapping, `?message=` refresh, React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
+3. Yada 3.1.0 prepares official navigation itself: a MAIN-world `native-bootstrap-page.js` may enlarge the current conversation's history GET, and isolated `NativeBootstrapController` may temporarily expose ChatGPT's pagination sentinel. Do not restore a custom rail, marks layer, click-to-jump, scroll positioning, or position correction.
+4. Never reintroduce `?message=` refresh, React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
+5. Do not wrap `IntersectionObserver`. Do not assign `scrollTop` or call `scrollIntoView`.
+
+Production entry:
+
+```text
+document_start / MAIN world → native-bootstrap-page.js
+document_idle / isolated world → content.js → Toolbar + NativePreviewController + NativeBootstrapController
+```
+
+No service worker, no backend server, no new production dependencies.
 
 ## Scope Control
 
@@ -93,15 +103,16 @@ The feature set is limited to:
 1. One-click copy of the current ChatGPT conversation as Markdown.
 2. Real per-message timestamps in copied Markdown and official-navigation hover previews.
 3. Local-only prompt CRUD and icon-only copying via chrome.storage.local; no search or composer insertion.
-4. Hover previews on ChatGPT official navigation buttons (`button[data-toc-item-index]`, `button[data-toc-active]`).
-5. Natural light/dark adaptation and existing attachment placeholders.
+4. Hover previews on ChatGPT official navigation buttons.
+5. Automatic official-navigator preparation by enlarging current-session history requests and exposing ChatGPT's own pagination sentinel.
+6. Natural light/dark adaptation and existing attachment placeholders.
 
 Do not add features outside this scope unless the user explicitly changes the product scope in writing.
 
 Explicitly forbidden:
 
 - A second Yada navigation rail or custom tick marks.
-- Clicking official navigation buttons, scrolling the page, or loading earlier history.
+- Clicking official navigation buttons, scrolling the page, or Yada-owned jump/position correction.
 - Selective copy, selection menus, lasso selection, or per-turn controls.
 - GPT quota reminders.
 - Token estimation.
@@ -123,6 +134,7 @@ Explicitly forbidden:
 - Bookmark system.
 - Complex settings pages.
 - A large all-in-one enhancement suite.
+- Service workers.
 
 ## Reference Code Intake Rule
 
@@ -136,19 +148,17 @@ Before migrating any reference code or close derivative implementation, first do
 
 Default preference: re-implement the smallest needed behavior in this project using the reference only as a guide.
 
-GPT Navigator Helper has no clear source license. Never copy, modify, package, or commit its source, fonts, or assets. Prefer the Chrome Web Store listing as the install path and mention the original GitHub repository only as source and issue tracker. It is a separately installed companion, not part of Yada.
+GPT Navigator Helper has no clear source license. Never copy, modify, package, or commit its source, fonts, or assets. It is a design-research source for the 3.1.0 product flow, not a runtime dependency. Users no longer install it separately.
 
 ## UI Standards
 
-Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Prompt modal has its own body-level Shadow DOM host. Official navigation hover preview uses an independent Shadow DOM host with `pointer-events: none`. Do not modify, replace, hide, or click official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps and preview text. Never reintroduce a custom rail, React private-object scanning, a virtualizer bridge, or text matching. Prompts only copy through SVG icon controls and never insert into the composer.
+Render `预览模式圆点 | 导航状态 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Prompt modal has its own body-level Shadow DOM host. Official navigation hover preview uses an independent Shadow DOM host with `pointer-events: none`. Do not modify, replace, hide, or click official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps and preview text. Never reintroduce a custom rail, React private-object scanning, a virtualizer bridge, or text matching. Prompts only copy through SVG icon controls and never insert into the composer.
 
 ## Stage Discipline
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.0.0 is a major rewrite on the dedicated test branch `codex/gpt-native-navigation-v3`; 3.0.1 is the active-conversation preview refresh patch on the same branch. Do not modify or push main unless the user explicitly asks. Never force push.
-
-3.0.1 代码开发完成，但正式进入 main 前，仍需 MacBook 使用 GPT Navigator Helper 原版完成真实长对话验收。需要 Chrome / Edge 152 或更高。首选从 Chrome 应用商店安装 Helper，不要把 Helper 源码拷进 Yada。
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.1.0 is the single-extension official-navigator bootstrap on the dedicated test branch `codex/gpt-native-navigation-v3`. Do not modify or push main unless the user explicitly asks. Never force push.
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

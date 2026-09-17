@@ -19,6 +19,7 @@ export class YadaToolbar {
 
   private prompts: PromptPanel | null = null;
   private previewAssistant = false;
+  private statusHideTimer = 0;
   constructor(private readonly onPreviewMode: (assistant: boolean) => void = () => {}) {}
 
   closePanels(): void { this.prompts?.close(); }
@@ -95,6 +96,7 @@ export class YadaToolbar {
     this.prompts?.dispose();
     window.clearTimeout(this.copyResetTimer);
     window.clearTimeout(this.placementTimer);
+    window.clearTimeout(this.statusHideTimer);
     this.placementObserver?.disconnect();
     this.disposeTheme?.();
     window.removeEventListener("resize", this.handleViewportChange);
@@ -191,11 +193,56 @@ export class YadaToolbar {
         }
         [data-preview-mode] { padding: 0; width: 20px; height: 20px; font-size: 16px; color: var(--yada-muted); border: 0; background: transparent; }
         [data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        [data-nav-status] {
+          max-width: 9.5em;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+          font: 500 11px/1.2 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          color: var(--yada-muted);
+        }
       </style>
       <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
+      <span data-nav-status hidden></span>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
     `;
+  }
+
+  setNavStatus(status: { kind: "hidden" | "preparing" | "ready" | "incomplete"; current?: number; total?: number; reason?: string; title?: string }): void {
+    const node = this.query<HTMLElement>("[data-nav-status]");
+    if (!node) return;
+    window.clearTimeout(this.statusHideTimer);
+    this.statusHideTimer = 0;
+    if (status.kind === "hidden") {
+      node.hidden = true;
+      node.textContent = "";
+      node.removeAttribute("title");
+      return;
+    }
+    if (status.kind === "preparing") {
+      const current = status.current ?? 0;
+      const total = status.total ?? current;
+      node.hidden = false;
+      node.textContent = `导航准备中 ${current}/${total}`;
+      node.title = node.textContent;
+      return;
+    }
+    if (status.kind === "ready") {
+      node.hidden = false;
+      node.textContent = "导航已就绪";
+      node.title = "导航已就绪";
+      this.statusHideTimer = window.setTimeout(() => {
+        if (!node.isConnected) return;
+        node.hidden = true;
+        node.textContent = "";
+        node.removeAttribute("title");
+      }, 1500);
+      return;
+    }
+    node.hidden = false;
+    node.textContent = "导航未完整";
+    node.title = status.title ?? status.reason ?? "导航未完整";
   }
 
   private async copyAll(): Promise<void> {

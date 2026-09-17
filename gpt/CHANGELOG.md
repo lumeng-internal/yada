@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.1.0 - 2026-09-18
+
+- 版本类型：MINOR
+- 变更说明：把官方导航准备做进单一 ChatGPT Yada 扩展：MAIN world 扩大当前会话历史请求，isolated world 自动暴露 ChatGPT 分页触发点；用户不再单独安装 GPT Navigator Helper。
+- 构建产物：ChatGPT-Yada-v3.1.0-dist_chrome.zip
+
 ## v3.0.1 - 2026-09-17
 
 - 版本类型：PATCH

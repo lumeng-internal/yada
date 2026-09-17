@@ -20,10 +20,10 @@ export class NativePreviewController {
   private gapTimer = 0;
   private lastAutoRefreshAt = 0;
   private snapshotButtonCount = 0;
-  private currentButton: HTMLButtonElement | null = null;
+  private currentButton: HTMLElement | null = null;
   private readonly mutation: MutationObserver;
 
-  constructor() {
+  constructor(private readonly onTurnsChanged: (turns: YadaTurn[]) => void = () => {}) {
     document.addEventListener("pointerover", this.onPointerOver);
     document.addEventListener("pointerout", this.onPointerOut);
     document.addEventListener("focusin", this.onFocusIn);
@@ -48,6 +48,7 @@ export class NativePreviewController {
     this.route = id;
     this.resetRequestState();
     this.turns = [];
+    this.onTurnsChanged(this.turns);
     this.snapshotButtonCount = 0;
     this.lastAutoRefreshAt = 0;
     this.clearPreview();
@@ -106,7 +107,7 @@ export class NativePreviewController {
     this.view.reposition();
   };
 
-  private previewButton(button: HTMLButtonElement, fromFetch = false): void {
+  private previewButton(button: HTMLElement, fromFetch = false): void {
     this.currentButton = button;
     const index = resolveOfficialTurnIndex(button, this.turns.length);
     const turn = index == null ? undefined : this.turns[index];
@@ -199,6 +200,7 @@ export class NativePreviewController {
       const snapshot = await loadCurrentConversationSnapshot({ conversationId: id, signal: request.signal });
       if (epoch !== this.epoch || this.disposed) return;
       this.turns = snapshot.turns;
+      this.onTurnsChanged(this.turns);
       this.snapshotButtonCount = this.officialButtonCount();
       if (this.currentButton?.isConnected) this.previewButton(this.currentButton, true);
     } catch {

@@ -1,12 +1,31 @@
-export const OFFICIAL_BUTTON_SELECTOR = "button[data-toc-item-index], button[data-toc-active]";
+const PROMPT_LABEL = /^Prompt\s+\d+/i;
 
-export function officialButtons(root: ParentNode = document): HTMLButtonElement[] {
-  return [...root.querySelectorAll<HTMLButtonElement>(OFFICIAL_BUTTON_SELECTOR)];
+export const OFFICIAL_BUTTON_SELECTOR = [
+  "button[data-toc-item-index]",
+  "button[data-toc-active]",
+  'button[aria-label^="Prompt " i]',
+  'button[aria-description^="Prompt " i]',
+  '[role="button"][aria-label^="Prompt " i]',
+  '[role="button"][aria-description^="Prompt " i]'
+].join(", ");
+
+export function isOfficialNavItem(element: Element | null): element is HTMLElement {
+  if (!(element instanceof HTMLElement)) return false;
+  const index = element.getAttribute("data-toc-item-index");
+  if (index != null && index.trim() !== "" && Number.isInteger(Number(index))) return true;
+  const label = element.getAttribute("aria-label") ?? "";
+  const description = element.getAttribute("aria-description") ?? "";
+  return PROMPT_LABEL.test(label) || PROMPT_LABEL.test(description);
 }
 
-export function closestOfficialButton(target: EventTarget | null): HTMLButtonElement | null {
+export function officialButtons(root: ParentNode = document): HTMLElement[] {
+  return [...root.querySelectorAll<HTMLElement>(OFFICIAL_BUTTON_SELECTOR)].filter(isOfficialNavItem);
+}
+
+export function closestOfficialButton(target: EventTarget | null): HTMLElement | null {
   const node = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
-  return node?.closest<HTMLButtonElement>(OFFICIAL_BUTTON_SELECTOR) ?? null;
+  const found = node?.closest<HTMLElement>(OFFICIAL_BUTTON_SELECTOR);
+  return found && isOfficialNavItem(found) ? found : null;
 }
 
 export function resolveOfficialTurnIndex(button: HTMLElement, turnCount: number): number | null {
@@ -17,7 +36,7 @@ export function resolveOfficialTurnIndex(button: HTMLElement, turnCount: number)
 
   const buttons = officialButtons(button.ownerDocument ?? document);
   if (buttons.length === turnCount) {
-    const order = buttons.indexOf(button as HTMLButtonElement);
+    const order = buttons.indexOf(button);
     if (order >= 0) return order;
   }
 
@@ -31,9 +50,19 @@ function parseIndex(value: string | null): number | null {
 }
 
 function accessibleIndex(button: HTMLElement, turnCount: number): number | null {
-  const text = [button.getAttribute("aria-label"), button.getAttribute("title"), button.textContent]
+  const text = [
+    button.getAttribute("aria-label"),
+    button.getAttribute("aria-description"),
+    button.getAttribute("title"),
+    button.textContent
+  ]
     .filter((value): value is string => !!value && value.trim().length > 0)
     .join(" ");
+  const prompt = text.match(/Prompt\s+(\d+)/i);
+  if (prompt) {
+    const index = Number(prompt[1]) - 1;
+    return index >= 0 && index < turnCount ? index : null;
+  }
   const numbers = [...text.matchAll(/\d+/g)].map(match => Number(match[0]));
   if (!numbers.length) return null;
 

@@ -2,8 +2,9 @@ import { normalizeConversation } from '../src/conversation/normalizeConversation
 import type { ApiConversation, ApiConversationMessage } from '../src/conversation/fetchConversation';
 import { fetchCompleteConversation } from '../src/conversation/completeConversation';
 import { NativePreviewController } from '../src/nativePreview/controller';
-import { closestOfficialButton, resolveOfficialTurnIndex } from '../src/nativePreview/map';
+import { closestOfficialButton, isOfficialNavItem, resolveOfficialTurnIndex } from '../src/nativePreview/map';
 import { PreviewView, formatPreviewTime } from '../src/nativePreview/view';
+import { nativeBootstrapChecks } from './verify-bootstrap';
 import { readLibrary, saveLibrary, PROMPT_KEY, PREVIEW_KEY } from '../src/prompts/storage';
 import { YadaToolbar } from '../src/ui/toolbar';
 import { YADA_PREVIEW_HOST_ID } from '../src/styles';
@@ -160,6 +161,11 @@ function mappingChecks(): void {
   labeled.setAttribute('aria-label', 'identical user question');
   assert(resolveOfficialTurnIndex(labeled, 18) == null, 'identical question text was used as a mapping key');
   partial.remove();
+  const promptButton = document.createElement('button');
+  promptButton.setAttribute('aria-label', 'Prompt 9');
+  document.body.append(promptButton);
+  assert(isOfficialNavItem(promptButton) && resolveOfficialTurnIndex(promptButton, 18) === 8, 'Prompt N official button was ignored');
+  promptButton.remove();
   pass('official button mapping prefers index, then equal-count order, then a unique accessible number; never text matching');
 }
 
@@ -450,6 +456,7 @@ async function run(): Promise<void> {
   await previewViewChecks();
   await controllerChecks();
   await liveRefreshChecks();
+  await nativeBootstrapChecks(assert, pass);
 
   toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
   const mode = document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector<HTMLButtonElement>('[data-preview-mode]')!;

@@ -1,3 +1,4 @@
+import { NativeBootstrapController } from "./nativeBootstrap/controller";
 import { isChatGptConversationPage, isChatGptPage } from "./platform/chatgptAdapter";
 import { NativePreviewController } from "./nativePreview/controller";
 import { YadaToolbar } from "./ui/toolbar";
@@ -5,11 +6,13 @@ import { observeRouteChange } from "./utils/route";
 
 class ChatGptYadaApp {
   private nativePreview: NativePreviewController | null = null;
+  private bootstrap: NativeBootstrapController | null = null;
   private toolbar: YadaToolbar | null = null;
   private routeDispose: (() => void) | null = null;
 
   mount(): void {
-    this.nativePreview = new NativePreviewController();
+    this.bootstrap = new NativeBootstrapController(status => this.toolbar?.setNavStatus(status));
+    this.nativePreview = new NativePreviewController(turns => this.bootstrap?.setExpectedTurns(turns.length));
     this.toolbar = new YadaToolbar(assistant => this.nativePreview?.setPreviewMode(assistant));
     this.toolbar.mount();
     this.syncPageState();
@@ -22,6 +25,8 @@ class ChatGptYadaApp {
   dispose = (): void => {
     this.routeDispose?.();
     this.routeDispose = null;
+    this.bootstrap?.dispose();
+    this.bootstrap = null;
     this.nativePreview?.dispose();
     this.nativePreview = null;
     this.toolbar?.dispose();
@@ -33,6 +38,7 @@ class ChatGptYadaApp {
     this.toolbar?.setVisible(isChatGptPage());
     const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector<HTMLButtonElement>("[data-copy-all]");
     if (copy) copy.hidden = !isChatGptConversationPage();
+    this.bootstrap?.syncRoute();
     this.nativePreview?.syncRoute();
   }
 }
