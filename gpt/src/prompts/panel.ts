@@ -1,12 +1,20 @@
-/* Modal structure, filtering and card rendering adapted from GPT Conversation Toolkit
+/* Modal structure and card rendering adapted from GPT Conversation Toolkit
  * features/prompt-library.js. Copyright (c) 2026 bujue3709. MIT; see THIRD_PARTY_NOTICES.md.
- * Yada adapters: storage, editing, composer insertion, cancellation and focus lifecycle.
+ * Yada adapters: storage, editing, clipboard feedback and focus lifecycle.
  */
 import styles from "./panel.css?inline";
-import { captureComposerSelection, insertPromptWhenReady, type ComposerSelection } from "./composer";
+import { writeTextToClipboard } from "../export/clipboard";
 import { readLibrary, saveLibrary } from "./storage";
 import type { Prompt, PromptLibrary } from "./types";
 import { detectYadaTheme, observeYadaTheme } from "../ui/theme";
+
+const svg = (body: string): string => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+const ICONS: Record<string, string> = {
+  copy: svg('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),
+  edit: svg('<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>'),
+  delete: svg('<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>'),
+  check: svg('<path d="m5 12 4 4L19 6"/>'),
+};
 
 export const PROMPT_HOST_ID = "chatgpt-yada-prompt-host";
 export class PromptPanel {
@@ -14,8 +22,7 @@ export class PromptPanel {
   private readonly root: ShadowRoot;
   private readonly modal: HTMLElement;
   private library: PromptLibrary = { version: 1, prompts: [] };
-  private selection: ComposerSelection | null = null;
-  private request: AbortController | null = null;
+  private copyTimers = new Map<HTMLButtonElement, number>();
   private generation = 0;
   private busy = false;
   private disposed = false;
@@ -36,8 +43,8 @@ export class PromptPanel {
       <div class="yada-prompt-backdrop" data-prompt-action="close"></div>
       <div class="yada-prompt-panel" role="dialog" aria-modal="true" aria-label="提示词收藏库">
         <div class="yada-prompt-header"><strong>提示词收藏库</strong>
-          <button type="button" class="yada-prompt-close" data-prompt-action="close">关闭</button></div>
-        <div class="yada-prompt-filters"><input type="search" placeholder="搜索提示词" aria-label="搜索提示词"></div>
+          <div class="yada-prompt-header-actions"><button type="button" data-prompt-action="add">新增提示词</button>
+          <button type="button" data-prompt-action="close">关闭</button></div></div>
         <div class="yada-prompt-list"></div>
         <p class="yada-prompt-empty">暂无提示词</p>
         <form class="yada-prompt-editor" hidden>
@@ -46,51 +53,54 @@ export class PromptPanel {
           <button type="submit" class="yada-prompt-add">保存</button>
           <button type="button" class="yada-prompt-close" data-prompt-action="cancel">取消</button>
         </form>
-        <div class="yada-prompt-footer"><span class="yada-prompt-count"></span>
-          <div class="yada-prompt-footer-actions"><button type="button" data-prompt-action="add">新增提示词</button></div></div>
+        <p class="sr-only" role="status" aria-live="polite"></p>
         <p role="alert" hidden></p>
       </div>`;
     this.root.append(style, this.modal);
     document.body.append(this.host);
     this.modal.dataset.toolkitTheme = detectYadaTheme();
     this.disposeTheme = observeYadaTheme(theme => { this.modal.dataset.toolkitTheme = theme; });
-    button.addEventListener("pointerdown", this.capture);
     button.addEventListener("click", this.toggle);
     this.modal.addEventListener("click", this.handleClick);
-    this.query<HTMLInputElement>('input[type="search"]').addEventListener("input", () => this.renderList());
     this.query<HTMLFormElement>("form").addEventListener("submit", event => { event.preventDefault(); void this.saveEditor(); });
     document.addEventListener("pointerdown", this.outside, true);
     document.addEventListener("keydown", this.keydown, true);
+    // Prevent wheel/touch from chaining through the fixed modal into the page.
+    this.modal.addEventListener('wheel', this.stopPageScroll, { passive: false });
+    this.modal.addEventListener('touchmove', this.stopPageScroll, { passive: false });
   }
+  private stopPageScroll = (event: Event): void => {
+    const node = event.target instanceof Element ? event.target : null;
+    const scrollable = node?.closest<HTMLElement>('.yada-prompt-list, textarea');
+    if (!scrollable || scrollable.scrollHeight <= scrollable.clientHeight) { event.preventDefault(); return; }
+    if (event instanceof WheelEvent && (event.deltaY < 0 && scrollable.scrollTop <= 0
+      || event.deltaY > 0 && scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight)) event.preventDefault();
+  };
   private query<T extends HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
   close = (): void => {
     this.generation++;
-    this.request?.abort(); this.request = null;
-    this.selection = null; this.host.hidden = true;
+    for (const [button, timer] of this.copyTimers) { clearTimeout(timer); button.innerHTML = ICONS.copy; }
+    this.copyTimers.clear(); this.host.hidden = true;
     this.button.setAttribute("aria-expanded", "false");
   };
   dispose(): void {
     this.disposed = true; this.close(); this.disposeTheme(); this.host.remove();
-    this.button.removeEventListener("pointerdown", this.capture);
     this.button.removeEventListener("click", this.toggle);
     document.removeEventListener("pointerdown", this.outside, true);
     document.removeEventListener("keydown", this.keydown, true);
   }
-  private capture = (): void => { if (this.host.hidden) this.selection = captureComposerSelection(); };
   private toggle = async (): Promise<void> => {
     if (!this.host.hidden) { this.close(); return; }
-    this.selection ??= captureComposerSelection();
     const generation = ++this.generation;
     if (!this.host.isConnected) document.body.append(this.host);
     this.host.hidden = false; this.button.setAttribute("aria-expanded", "true");
     this.query('[role="alert"]').hidden = true;
     this.query('form').hidden = true;
-    this.query<HTMLInputElement>('input[type="search"]').value = "";
     try {
       const library = await readLibrary();
       if (this.disposed || generation !== this.generation) return;
       this.library = library; this.renderList();
-      this.query('input[type="search"]').focus();
+      this.query('[data-prompt-action="add"]').focus();
     } catch { if (generation === this.generation) this.error("无法读取提示词，请重新打开重试。"); }
   };
   private outside = (event: PointerEvent): void => {
@@ -115,39 +125,36 @@ export class PromptPanel {
     if (this.busy) return;
     const prompt = this.library.prompts.find(item => item.id === action.dataset.promptId);
     if (kind === 'add') this.edit();
-    if (kind === 'cancel') this.query('form').hidden = true;
+    if (kind === 'cancel') { this.query('form').hidden = true; this.renderList(); }
     if (kind === 'edit' && prompt) this.edit(prompt);
     if (kind === 'delete' && prompt) void this.persist({ version: 1, prompts: this.library.prompts.filter(item => item.id !== prompt.id) });
-    if (kind === 'insert' && prompt) void this.insert(prompt);
+    if (kind === 'copy' && prompt) void this.copy(prompt, action as HTMLButtonElement);
   };
   private renderList(): void {
-    const keyword = this.query<HTMLInputElement>('input[type="search"]').value.trim().toLocaleLowerCase();
-    const items = this.library.prompts.filter(item => `${item.title} ${item.content}`.toLocaleLowerCase().includes(keyword)).sort((a, b) => b.updatedAt - a.updatedAt);
-    const list = this.query('.yada-prompt-list'); list.replaceChildren();
+    const items = [...this.library.prompts].sort((a, b) => b.updatedAt - a.updatedAt);
+    const list = this.query('.yada-prompt-list'); list.replaceChildren(); list.hidden = false;
     this.query('.yada-prompt-empty').hidden = items.length > 0;
-    this.query('.yada-prompt-count').textContent = `${items.length} / ${this.library.prompts.length} 条提示词`;
     const fragment = document.createDocumentFragment();
     for (const item of items) {
       const article = document.createElement('article'); article.className = 'yada-prompt-item';
       article.dataset.promptId = item.id;
       const header = document.createElement('div'); header.className = 'yada-prompt-item-header';
-      const insert = this.action(item.title, 'insert', item.id); insert.className = 'yada-prompt-insert';
       const title = document.createElement('h4'); title.className = 'yada-prompt-item-title'; title.textContent = item.title;
       const content = document.createElement('p'); content.className = 'yada-prompt-item-content'; content.textContent = item.content;
-      insert.replaceChildren(title, content);
       const actions = document.createElement('div'); actions.className = 'yada-prompt-item-actions';
-      const edit = this.action('编辑', 'edit', item.id); edit.className = 'yada-prompt-close';
-      const remove = this.action('删除', 'delete', item.id); remove.className = 'yada-prompt-delete';
-      actions.append(edit, remove); header.append(insert, actions); article.append(header); fragment.append(article);
+      actions.append(this.action('复制提示词', 'copy', item.id), this.action('编辑提示词', 'edit', item.id), this.action('删除提示词', 'delete', item.id));
+      header.append(title, actions); article.append(header, content); fragment.append(article);
     }
     list.append(fragment);
   }
   private action(text: string, action: string, id: string): HTMLButtonElement {
-    const button = document.createElement('button'); button.type = 'button'; button.textContent = text;
+    const button = document.createElement('button'); button.type = 'button'; button.className = 'yada-prompt-icon';
+    button.setAttribute('aria-label', text); button.title = text; button.innerHTML = ICONS[action];
     button.dataset.promptAction = action; button.dataset.promptId = id; return button;
   }
   private edit(prompt?: Prompt): void {
     this.editing = prompt ?? null; this.query('form').hidden = false;
+    this.query('.yada-prompt-list').hidden = true; this.query('.yada-prompt-empty').hidden = true;
     this.query<HTMLInputElement>('[name="title"]').value = prompt?.title ?? '';
     this.query<HTMLTextAreaElement>('[name="content"]').value = prompt?.content ?? '';
     this.query('[name="title"]').focus();
@@ -169,16 +176,15 @@ export class PromptPanel {
     } catch { if (generation === this.generation) this.error('保存失败，内容仍保留，请重试。'); }
     finally { this.busy = false; }
   }
-  private async insert(prompt: Prompt): Promise<void> {
-    if (this.busy) return;
-    this.busy = true; const generation = this.generation;
-    const request = new AbortController(); this.request = request;
+  private async copy(prompt: Prompt, button: HTMLButtonElement): Promise<void> {
+    const generation = this.generation;
     try {
-      const inserted = await insertPromptWhenReady(prompt.content, this.selection, request.signal);
-      if (generation !== this.generation || this.disposed) return;
-      if (inserted) this.close();
-      else this.error('未找到可写输入框或编辑器拒绝写入，请重试。');
-    } finally { this.busy = false; if (this.request === request) this.request = null; }
+      await writeTextToClipboard(prompt.content);
+      if (this.disposed || generation !== this.generation || !button.isConnected) return;
+      clearTimeout(this.copyTimers.get(button)); button.innerHTML = ICONS.check;
+      this.query('[role="status"]').textContent = '提示词已复制';
+      this.copyTimers.set(button, window.setTimeout(() => { button.innerHTML = ICONS.copy; this.copyTimers.delete(button); this.query('[role="status"]').textContent = ''; }, 1300));
+    } catch { if (generation === this.generation) this.error('复制失败，请重试。'); }
   }
   private error(message: string): void { const alert = this.query('[role="alert"]'); alert.textContent = message; alert.hidden = false; }
 }

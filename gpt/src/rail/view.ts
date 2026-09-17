@@ -1,11 +1,19 @@
-import type { YadaTurn } from "../conversation/types";
+import type { RailEntry } from "./nativeSkeleton";
+
+export function formatPreviewTime(seconds?: number): string {
+  if (seconds === undefined || !Number.isFinite(seconds)) return "";
+  const date = new Date(seconds * 1000);
+  if (!Number.isFinite(date.getTime())) return "";
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+}
 import { detectYadaTheme, observeYadaTheme } from "../ui/theme";
 export const RAIL_HOST_ID = "chatgpt-yada-rail-host";
 export class RailView {
   readonly host = document.createElement("div");
   private readonly marks = document.createElement("div");
   private readonly preview = document.createElement("div");
-  private turns: readonly YadaTurn[] = [];
+  private turns: readonly RailEntry[] = [];
   private buttons: HTMLButtonElement[] = [];
   private suppressed = false;
   private active = -1;
@@ -36,7 +44,11 @@ export class RailView {
       .mark[data-distance="0"] .mark-bar { width:33px; background:#10a37f; height:2px; }
       .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
       .preview[hidden] { display:none; }
-      .preview strong { display:block; margin-bottom:4px; font-size:11px; opacity:.65; }
+      .preview strong { display:block; margin-bottom:4px; font-size:11px; }
+      .preview section strong { color:#10a37f; font-weight:700; }
+      .preview-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; }
+      .preview-header strong { margin:0; white-space:nowrap; }
+      .preview time { white-space:nowrap; opacity:.7; }
       .preview section + section { margin-top:8px; }
       .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
       .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
@@ -55,16 +67,16 @@ export class RailView {
     this.marks.addEventListener("click", event => {
       const button = (event.target as Element).closest<HTMLButtonElement>("button");
       const turn = button && this.turns[Number(button.dataset.index)];
-      if (turn) onJump(turn.id);
+      if (turn) onJump(turn.turnContainerId);
     });
     this.marks.addEventListener("focusin", event => { const button = (event.target as HTMLElement).closest("button"); if (button) this.hover(Number(button.dataset.index)); });
     this.marks.addEventListener("focusout", () => this.clearHover());
     this.themeDispose = observeYadaTheme(theme => this.host.setAttribute("data-yada-theme", theme));
   }
-  setTurns(turns: readonly YadaTurn[]): void {
-    const changed = turns.length !== this.turns.length || turns.some((turn, index) => turn.id !== this.turns[index]?.id);
+  setEntries(turns: readonly RailEntry[]): void {
+    const changed = turns.length !== this.turns.length || turns.some((turn, index) => turn.turnContainerId !== this.turns[index]?.turnContainerId);
     this.turns = turns;
-    if (!changed) return;
+    if (!changed) { if (this.hovered >= 0) this.showPreview(); return; }
     this.clearHover(); this.active = -1;
     this.buttons = turns.map(turn => {
       const button = document.createElement("button"); button.type = "button"; button.className = "mark"; button.dataset.index = String(turn.index);
@@ -122,8 +134,14 @@ export class RailView {
       const summary = document.createElement('p'); summary.textContent = text;
       section.append(label, summary); return section;
     };
-    this.preview.replaceChildren(title, block('User', turn.userPreview));
-    if (this.assistant) this.preview.append(block('ChatGPT', turn.assistantPreview || '该轮暂无 ChatGPT 回复'));
+    const heading = document.createElement('div'); heading.className = 'preview-header'; heading.append(title);
+    const timestamp = formatPreviewTime(turn.turn?.userCreatedAt);
+    if (timestamp) { const time = document.createElement('time'); time.textContent = timestamp; heading.append(time); }
+    this.preview.replaceChildren(heading);
+    if (turn.turn) {
+      this.preview.append(block('Harson', turn.turn.userPreview));
+      if (this.assistant) this.preview.append(block('ChatGPT', turn.turn.assistantPreview || '该轮暂无 ChatGPT 回复'));
+    }
     this.preview.hidden = false;
     const rect = button.getBoundingClientRect();
     const width = this.preview.getBoundingClientRect().width;

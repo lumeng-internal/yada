@@ -1,10 +1,11 @@
-import { readChatGPTOfficialNavigation } from "./officialNavigation";
-import { bindDomAnchorsToTurns } from "../conversation/domCollector";
+import { observeOfficialNavigation, readChatGPTOfficialNavigation } from "./officialNavigation";
+import { NativeSkeleton, findScrollRoot, syncActive, type RailEntry } from "./nativeSkeleton";
+import { observeRouteChange } from "../utils/route";
 import { isInsideComposer } from "../conversation/composerGuard";
 import { loadCurrentConversationSnapshot } from "../conversation/normalizeConversation";
 import type { YadaTurn } from "../conversation/types";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
-import { getActiveTurn, resolveScrollRoot, type ScrollRoot } from "./active";
+import { type ScrollRoot } from "./active";
 import { placeRail } from "./layout";
 import { jumpToTurn } from "./jump";
 import { RailView } from "./view";
@@ -12,7 +13,11 @@ import { RailView } from "./view";
 export class RailController {
   private readonly view = new RailView(id => { void this.jump(id); });
   private apiTurns: YadaTurn[] = [];
-  private turns: YadaTurn[] = [];
+  private entries: RailEntry[] = [];
+  private readonly skeleton = new NativeSkeleton();
+  private official = false;
+  private officialDispose: () => void;
+  private routeDispose: () => void;
   private root: ScrollRoot | null = null;
   private route: string | null = null;
   private epoch = 0;
@@ -38,14 +43,16 @@ export class RailController {
           && !(record.type === "childList" && [...record.addedNodes, ...record.removedNodes].every(node => node instanceof Element && node.matches('[data-yada-root]')));
       });
       if (!relevant.length) return;
-      this.syncOfficialNavigation();
+      this.syncRoute();
       this.scheduleRefresh();
       if (relevant.some(record => {
         const element = record.target instanceof Element ? record.target : record.target.parentElement;
         return record.type !== "attributes" && !!element?.closest('main, #thread');
       })) this.scheduleApi();
     });
-    this.mutation.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-message-id', 'data-turn-id', 'class', 'style', 'hidden', 'aria-hidden'] });
+    this.mutation.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-turn-id-container', 'data-turn', 'data-turn-id', 'class', 'style', 'hidden', 'aria-hidden'] });
+    this.officialDispose = observeOfficialNavigation(() => this.syncOfficialNavigation());
+    this.routeDispose = observeRouteChange(() => this.syncRoute());
     window.addEventListener("resize", this.scheduleRefresh, { passive: true });
     window.addEventListener("wheel", this.cancelJump, { passive: true });
     window.addEventListener("touchstart", this.cancelJump, { passive: true });
@@ -59,14 +66,14 @@ export class RailController {
     clearTimeout(this.apiTimer); clearTimeout(this.refreshTimer); cancelAnimationFrame(this.raf);
     this.apiTimer = this.refreshTimer = this.raf = 0;
     this.fetching = this.pendingFetch = false; this.failures = 0; this.lastFetch = 0;
-    this.apiTurns = []; this.turns = []; this.view.clearHover(); this.view.setTurns([]);
+    this.apiTurns = []; this.entries = []; this.skeleton.reset(); this.view.clearHover(); this.view.setEntries([]);
     this.bindRoot(null);
-    if (id) void this.fetchTurns();
+    if (id) { this.refreshAnchors(); void this.fetchTurns(); }
   }
   dispose(): void {
     this.disposed = true; this.epoch++; this.request?.abort(); this.cancelJump();
     clearTimeout(this.apiTimer); clearTimeout(this.refreshTimer); cancelAnimationFrame(this.raf);
-    this.mutation.disconnect(); this.resize.disconnect(); this.bindRoot(null);
+    this.officialDispose(); this.routeDispose(); this.mutation.disconnect(); this.resize.disconnect(); this.bindRoot(null);
     window.removeEventListener("resize", this.scheduleRefresh);
     window.removeEventListener("wheel", this.cancelJump);
     window.removeEventListener("touchstart", this.cancelJump);
@@ -79,21 +86,25 @@ export class RailController {
   };
   private async jump(id: string): Promise<void> {
     this.cancelJump(); this.view.clearHover();
-    if (this.syncOfficialNavigation()) return;
+    const entry = this.entries.find(entry => entry.turnContainerId === id);
+    if (!entry) return;
     const request = new AbortController(); this.jumping = request;
     this.view.setStatus("定位中");
     try {
-      const found = await jumpToTurn(id, this.refreshAnchors, () => this.root ?? resolveScrollRoot(), request.signal, () => this.view.setStatus("定位中"));
+      const found = await jumpToTurn(entry, this.entries, request.signal);
       if (this.jumping !== request) return;
       if (!request.signal.aborted) this.view.setStatus(found ? "定位成功" : "该轮暂时无法定位");
       else this.view.setStatus("");
     } catch { if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位"); }
-    finally { if (this.jumping === request) this.jumping = null; }
+    // Keep the abort handle until the next jump/input/route change: corrections continue after success.
   }
   private syncOfficialNavigation(): boolean {
     const official = readChatGPTOfficialNavigation().ready;
+    if (official === this.official) return official;
+    this.official = official;
     this.view.setSuppressed(official);
     if (official) { this.cancelJump(); this.view.clearHover(); }
+    else this.refreshAnchors();
     return official;
   }
   private scheduleApi(): void {
@@ -112,7 +123,7 @@ export class RailController {
       this.failures = 0;
       // The immutable API model is always rebound from scratch: virtual lists can recycle DOM nodes.
       this.apiTurns = snapshot.turns;
-      this.view.setTurns(this.apiTurns); this.refreshAnchors();
+      this.refreshAnchors();
     } catch {
       if (epoch !== this.epoch || this.disposed) return;
       this.failures++;
@@ -129,17 +140,17 @@ export class RailController {
     if (this.disposed || this.refreshTimer) return;
     this.refreshTimer = window.setTimeout(() => { this.refreshTimer = 0; this.refreshAnchors(); }, 160);
   };
-  private refreshAnchors = (): YadaTurn[] => {
+  private refreshAnchors = (): RailEntry[] => {
     if (this.disposed || !this.route) return [];
-    this.turns = bindDomAnchorsToTurns(this.apiTurns);
-    const first = this.turns.find(turn => turn.userAnchorElement?.isConnected)?.userAnchorElement;
-    this.bindRoot(resolveScrollRoot(first));
+    this.entries = this.skeleton.scan(this.apiTurns);
+    this.view.setEntries(this.entries);
+    this.bindRoot(findScrollRoot());
     // Reattach the same host if the application removed it during a layout transition.
     if (!this.view.host.isConnected) document.documentElement.append(this.view.host);
-    placeRail(this.view.host, this.root!, this.turns.length);
+    placeRail(this.view.host, this.root!, this.entries.length);
     this.syncOfficialNavigation();
-    this.view.setActive(getActiveTurn(this.turns, this.root!));
-    return this.turns;
+    this.view.setActive(syncActive(this.entries, this.root!));
+    return this.entries;
   };
   private bindRoot(root: ScrollRoot | null): void {
     if (this.root !== root) {
@@ -159,7 +170,7 @@ export class RailController {
     if (this.raf) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = 0;
-      if (this.root && !this.disposed) this.view.setActive(getActiveTurn(this.turns, this.root));
+      if (this.root && !this.disposed) this.view.setActive(syncActive(this.entries, this.root));
     });
   };
 }

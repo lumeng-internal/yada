@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.2.0 - 2026-09-17
+
+- 版本类型：MINOR
+- 变更说明：官方会话骨架导航替换；官方导航即时让位；Harson 与本地轮次时间预览；提示词 SVG icon-only 复制管理。
+- 构建产物：ChatGPT-Yada-v2.2.0-dist_chrome.zip
+
 ## v2.1.1 - 2026-09-17
 
 - 版本类型：PATCH

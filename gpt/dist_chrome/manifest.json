@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Yada",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "description": "Complete ChatGPT Markdown copy with timestamps, conversation navigation and a local prompt library.",
   "host_permissions": [
     "https://chatgpt.com/*"
@@ -19,15 +19,5 @@
   ],
   "permissions": [
     "storage"
-  ],
-  "web_accessible_resources": [
-    {
-      "resources": [
-        "features/virtualizer-bridge-page.js"
-      ],
-      "matches": [
-        "https://chatgpt.com/*"
-      ]
-    }
   ]
 }

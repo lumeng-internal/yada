@@ -5,14 +5,11 @@ import { spawn, execFileSync } from 'node:child_process';
 import { mkdtemp, rm, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 const root = resolve(import.meta.dirname, '..');
-execFileSync('git', ['diff', '--exit-code', '415f22eef9da98d30088c3e01b6d79bae30c2374', '--', '../claude', '../gemini'], { cwd: root });
-console.log('PASS claude/ and gemini/ unchanged from 2.1.0 baseline');
+execFileSync('git', ['diff', '--exit-code', 'a4bc0c56908df1e2643e1adb76c897f119891df2', '--', '../claude', '../gemini'], { cwd: root });
+console.log('PASS claude/ and gemini/ unchanged from 2.1.1 baseline');
 const inlineCss = { name: 'inline-css', setup(build) { build.onLoad({ filter: /\.css$/ }, async ({ path }) => ({ contents: await readFile(path.replace(/\?inline$/, ''), 'utf8'), loader: 'text' })); } };
 const bundle = await build({ plugins: [inlineCss], entryPoints: [resolve(root, 'scripts/verify-features.ts')], bundle: true, write: false, format: 'iife' });
-const bridgeBundle = await build({ entryPoints: [resolve(root, 'src/rail/virtualizerBridgePage.ts')], bundle: true, write: false, format: 'iife' });
-const pageBridge = bridgeBundle.outputFiles[0].text;
 const server = createServer((req, res) => {
-  if (req.url === '/features/virtualizer-bridge-page.js') { res.setHeader('Content-Type', 'text/javascript'); res.end(pageBridge); return; }
   res.setHeader('Content-Type', req.url === '/test.js' ? 'text/javascript' : 'text/html');
   res.end(req.url === '/test.js' ? bundle.outputFiles[0].text : '<!doctype html><meta charset="utf-8"><title>Yada local verification</title><body><script src="/test.js"></script></body>');
 });

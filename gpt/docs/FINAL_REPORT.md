@@ -1,22 +1,24 @@
-# ChatGPT Yada v2.1.1
+# ChatGPT Yada v2.2.0
 
-本轮为 2.1.0 四个真实缺陷的 PATCH 修复：绿色预览缺 ChatGPT、提示词面板被 Header 裁剪、长对话跳转卡顿抖动与错位、Yada 与官方导航重复显示。保留复制 Markdown 与真实时间戳实现、灰绿圆点及存储键、每轮一个刻度和 2.1.0 提示词数据。
+本轮按 Owner 指定以 MINOR 发布：官方会话骨架替换导航架构，并将提示词库改为纯图标复制管理。范围仅 gpt/，基线 a4bc0c56908df1e2643e1adb76c897f119891df2。
 
-## 实现
+## 实现结果
 
-- 预览拆为两个独立标题/摘要区块，各自 2 行，悬停约一秒各自最多 5 行；绿色始终包含 ChatGPT，未回复有明确文案。
-- 移植 MIT GPT Conversation Toolkit 的 modal、卡片列表、搜索、新增编辑器、空状态、明暗样式及打开/关闭结构。面板为唯一 body-level Shadow DOM host，移除旧 Header 内 popover 和样式。Yada 本地适配编辑、删除、原生输入/撤销、有效选区、变更草稿追加、编辑器等待重取和点击去重。
-- TypeScript 移植 Toolkit 的虚拟列表窗口、ID/角色读取、索引校准、桥接优先挂载、窗口变化等待、单向步进、停滞/边界/nudge。页面桥接保留上游协议和 React 对象发现，并随包分开构建。按明确产品约束移除上游比例猜测、反向探测与弱匹配成功分支。
-- 完整 API 读取采用上游实际 full 参数和 before 游标分页；重叠页去重、缺页/游标停滞失败，保留当前分支。复制格式化和时间处理没有重写。
-- AI-MarkDone 最终校准逻辑：scrollIntoView(auto/start)、短暂稳定等待、同 ID 节点重取、替换检测、两次重校准上限、位置容差、用户接管停止、准确目标高亮。Yada 适配真实 Header 测量。
-- AI-MarkDone 官方导航结构和选择器，加可见性/几何兜底；只隐藏恢复同一 Yada host，不删除或修改官方导航。
+- 官方骨架决定导航轮数、顺序、当前轮和目标位置；API 仅补充预览正文与时间，复制全部和完整会话读取保留原实现。API 等待或失败不影响骨架导航。
+- 官方按钮原生 click 优先；否则按 turnContainerId 重新查询并滚动。长距离直接跳、短距离 rAF 缓动，200/600/1200/2000ms 校正，用户输入/路由切换取消。删除 React 私有对象扫描、virtualizer bridge、构建脚本和公开资源。
+- 全页面官方 TOC 检测和独立即时 Observer；可见时隐藏、清预览、取消跳转，消失后复用同一 host/marks layer。结构未变时保留刻度节点。
+- Harson / ChatGPT 为绿色粗体，各自 2/5 行预览；轮次右侧为 User 自己的本地时间，缺失不伪造。
+- 独立 body Shadow DOM 提示词面板；无搜索/底部统计，卡片仅 SVG 复制/编辑/删除控件。完整正文复制后保持打开、短暂对勾；删除 composer 插入模块。v1 存储与原 ID/createdAt 保留；面板自然高度，长列表独立滚动。
+- 移植来源和 MIT 许可已按实际生产代码更新；不复制上游其他文件。
 
-## 验证与边界
+## 本地验证与发布记录
 
-`verify:copy`、`verify:features`、严格 TypeScript/生产构建、`git diff --check` 通过。浏览器 fixture 使用 120 轮、6 轮挂载窗口、210–1620px 可变高度；包含窗口异步重建、节点替换、冻结窗口失败、用户事件取消、实际页面 reload。
+2026-09-17：verify:copy、verify:features（13 组浏览器验收）、严格 TypeScript/生产构建及 diff 检查通过。五处版本为 2.2.0，ZIP/dist 三个文件逐字节一致，MIT 声明随包附带；详细清单见 TEST_CHECKLIST。测试模拟 API/storage，DOM 使用官方骨架结构，不构造 React 私有对象。MacBook 真实页面仍需复验，未标记为通过。
 
-**MacBook 真实页面复验待执行**。本机未登录真实 ChatGPT，未把 fixture 写成真实验收；上游私有 React/API 接口在真实网页是否适配，需要按 TEST_CHECKLIST 复验。
+固定命令：`npm run verify:copy`、`npm run verify:features`、`npm run build`、`git diff --check`。产物：`dist_chrome/`、`ChatGPT-Yada-v2.2.0-dist_chrome.zip`，发布时核对五处版本和 ZIP/dist 逐文件一致。
 
-仅修改 gpt/；claude/、gemini/ 与 415f22eef9da98d30088c3e01b6d79bae30c2374 基线一致。不新增依赖、不安装大型测试框架、不建 PR、不创建或运行 GitHub Actions。按本次授权提交 `fix(gpt): port stable navigation and prompt library` 并普通推送 GitHub main，无 force push。
+按本轮明确授权创建单个提交 `feat(gpt): replace navigation with official conversation skeleton`，fetch/rebase 后普通 push main；最终 SHA 以 Git main 和本任务交付记录为准。无 PR、force push 或远端工作流调用。
 
-产物：`dist_chrome/`、`ChatGPT-Yada-v2.1.1-dist_chrome.zip`。许可与上游固定 SHA 见 THIRD_PARTY_NOTICES。
+HOSTED_CI = DISABLED_BY_OWNER_NO_QUOTA（NOT_USED_BY_POLICY），不是 PASS。Claude/Gemini 保持基线不变。
+
+ZIP SHA-256：`6e8618244c2e8c1ad31467e5009757fe08215b5b7b3548b364453425e1c4c67b`。

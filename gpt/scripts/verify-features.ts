@@ -1,14 +1,11 @@
 import { normalizeConversation } from '../src/conversation/normalizeConversation';
-import { bindDomAnchorsToTurns, collectDomConversationTurns } from '../src/conversation/domCollector';
 import type { ApiConversation, ApiConversationMessage } from '../src/conversation/fetchConversation';
 import { fetchCompleteConversation } from '../src/conversation/completeConversation';
-import { getActiveTurn, resolveScrollRoot } from '../src/rail/active';
+import { NativeSkeleton, findScrollRoot, getTurnEl, syncActive } from '../src/rail/nativeSkeleton';
 import { RailController } from '../src/rail/controller';
-import { jumpToTurn } from '../src/rail/jump';
-import { readableTop } from '../src/rail/alignment';
+import { jumpToTurn, targetY } from '../src/rail/jump';
 import { readChatGPTOfficialNavigation } from '../src/rail/officialNavigation';
-import { RailView } from '../src/rail/view';
-import { captureComposerSelection, insertPrompt, insertPromptWhenReady } from '../src/prompts/composer';
+import { RailView, formatPreviewTime } from '../src/rail/view';
 import { readLibrary, saveLibrary, PROMPT_KEY, PREVIEW_KEY } from '../src/prompts/storage';
 import { YadaToolbar } from '../src/ui/toolbar';
 
@@ -18,65 +15,40 @@ Object.assign(globalThis, { yadaVerification: result });
 const assert = (value: unknown, message: string): void => { if (!value) throw new Error(message); };
 const pass = (message: string): void => { result.checks.push(message); };
 const wait = (ms = 80): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
+const frame = (): Promise<void> => new Promise(resolve => requestAnimationFrame(() => resolve()));
 async function until(fn: () => boolean, message: string): Promise<void> {
   for (let i = 0; i < 90; i++) { if (fn()) return; await wait(); }
   throw new Error(message);
 }
 function el(tag: string, text = ''): HTMLElement { const node = document.createElement(tag); node.textContent = text; return node; }
 const css = el('style');
-css.textContent = `body{margin:0;font:14px/1.4 system-ui}main{width:1000px;margin-top:40px}#thread{height:680px;overflow-y:auto;position:relative}#messages{position:relative}article.fixture{position:absolute;left:60px;right:60px;overflow:hidden}header{position:fixed;top:0;left:0;right:0;height:96px;z-index:20;background:white;transform:translateZ(0);overflow:hidden}#conversation-header-actions{float:right}form.composer{position:fixed;bottom:10px;left:70px;width:600px}#prompt-textarea{min-height:40px;white-space:pre-wrap;border:1px solid gray}.user{min-height:60px}.assistant{margin-top:20px}`;
+css.textContent = `body{margin:0;font:14px/1.4 system-ui}main{width:1000px;margin-top:40px}#thread{height:680px;overflow-y:auto;position:relative}header{position:fixed;top:0;left:0;right:0;height:96px;z-index:20;background:white;overflow:hidden}#conversation-header-actions{float:right}#messages{padding-bottom:650px}section{margin:0}#draft{position:fixed;bottom:10px}`;
 document.head.append(css);
 const header = el('header'); header.id = 'page-header'; const actions = el('div'); actions.id = 'conversation-header-actions'; header.append(actions);
-const main = el('main'), scroller = el('div'), messages = el('div'); scroller.id = 'thread'; messages.id = 'messages'; scroller.append(messages); main.append(scroller);
-const form = el('form'); form.className = 'composer'; let editor = el('div'); editor.id = 'prompt-textarea'; editor.contentEditable = 'true'; editor.setAttribute('role', 'textbox'); form.append(editor);
-const draft = el('div', 'unsent attachment'); draft.dataset.messageAuthorRole = 'user'; draft.dataset.messageId = 'u119'; form.append(draft);
-document.body.append(header, main, form);
-let sends = 0, inputs = 0;
-const send = document.createElement('button'); send.textContent = 'Send'; send.disabled = true; form.append(send);
-form.addEventListener('submit', event => { event.preventDefault(); sends++; });
-form.addEventListener('input', () => { inputs++; send.disabled = !editor.innerText.trim(); });
+const main = el('main'), scroller = el('div'), messages = el('div');
+scroller.id = 'thread'; messages.id = 'messages'; messages.className = 'fixture_convSearchResultHighlightRoot';
+scroller.append(messages); main.append(scroller);
+const draft = el('textarea') as HTMLTextAreaElement; draft.id = 'draft'; draft.value = 'Existing unsent draft';
+document.body.append(header, main, draft);
+const phantom = el('div'); phantom.dataset.turnIdContainer = 'client-created-root'; messages.append(phantom);
 const api: ApiConversation = { id: 'fixture-1', current_node: 'a119', mapping: { root: { id: 'root', message: null } } };
 for (let i = 0; i < 120; i++) {
-  api.mapping![`u${i}`] = { id: `u${i}`, parent: i ? `a${i - 1}` : 'root', message: { id: `u${i}`, author: { role: 'user' }, content: { content_type: 'text', parts: [`User ${i} question`] }, create_time: 1700000000 + i } };
+  api.mapping![`u${i}`] = { id: `u${i}`, parent: i ? `a${i - 1}` : 'root', message: { id: `u${i}`, author: { role: 'user' }, content: { content_type: 'text', parts: ['identical user question'] }, create_time: 1700000000 + i } };
   api.mapping![`a${i}`] = { id: `a${i}`, parent: `u${i}`, message: { id: `a${i}`, author: { role: 'assistant' }, channel: 'final', content: { content_type: 'text', parts: [`Assistant ${i} answer`] }, create_time: 1700000001 + i } };
-}
-const turns = normalizeConversation(api);
-const heights = turns.map((_, i) => [210, 970, 345, 1620, 540, 285][i % 6]);
-const offsets: number[] = [0]; heights.forEach(height => offsets.push(offsets.at(-1)! + height));
-messages.style.height = `${offsets.at(-1)! + 650}px`;
-let renderedStart = -1, rebuilds = 0, bridgeCalls = 0, bridgeDisabled = false, frozen = false;
-function renderVirtual(force = false): void {
-  if (frozen) return;
-  const at = Math.max(0, offsets.findIndex((offset, i) => i < 120 && offset + heights[i] > scroller.scrollTop));
-  const start = Math.max(0, Math.min(114, at - 2));
-  if (!force && start === renderedStart) return;
-  renderedStart = start; rebuilds++; messages.replaceChildren();
-  for (let i = start; i < start + 6; i++) {
-    const article = el('article'); article.className = 'fixture'; article.dataset.testid = `conversation-turn-${i + 1}`; article.dataset.index = String(i); article.style.top = `${offsets[i]}px`; article.style.height = `${heights[i] - 20}px`;
-    const user = el('div', `User ${i} question`); user.className = 'user'; user.dataset.messageAuthorRole = 'user'; user.dataset.messageId = `u${i}`;
-    const assistant = el('div', `Assistant ${i} answer`); assistant.className = 'assistant'; assistant.dataset.messageAuthorRole = 'assistant'; assistant.dataset.messageId = `a${i}`;
-    article.append(user, assistant); messages.append(article);
+  for (const role of ['user', 'assistant']) {
+    const container = el('div'); const id = `${role === 'user' ? 'u' : 'a'}${i}`; container.dataset.turnIdContainer = id;
+    container.style.height = `${role === 'user' ? 100 : [210, 970, 345, 1620, 540, 285][i % 6]}px`;
+    if (i < 6) { const section = el('section', role === 'user' ? 'identical user question' : `Answer ${i}`); section.dataset.turn = role; section.dataset.turnId = id; container.append(section); }
+    messages.append(container);
   }
 }
-scroller.addEventListener('scroll', () => renderVirtual()); renderVirtual();
-// The REAL upstream page bridge discovers this React ref and calls it via its unchanged protocol.
-Object.assign(scroller, { '__reactProps$yadaFixture': { ref: { current: {
-  scrollToIndex(value: { index: number } | number) {
-    if (bridgeDisabled) throw new Error('fixture native API unavailable');
-    const index = typeof value === 'number' ? value : value.index;
-    bridgeCalls++;
-    scroller.scrollTop = offsets[Math.max(0, Math.min(119, index))];
-    // Asynchronous topology replacement, not a mocked successful bridge response.
-    setTimeout(() => renderVirtual(true), 35);
-  }, getVirtualItems() { return []; }, getTotalSize() { return offsets.at(-1); }
-} } } });
+const turns = normalizeConversation(api), skeleton = new NativeSkeleton();
 const storage = {
   async get(key: string) { const value = localStorage.getItem(key); return { [key]: value === null ? undefined : JSON.parse(value) }; },
   async set(values: Record<string, unknown>) { for (const [key, value] of Object.entries(values)) localStorage.setItem(key, JSON.stringify(value)); }
 };
-Object.assign(globalThis, { chrome: { runtime: { getURL: (path: string) => `${location.origin}/${path}` }, storage: { local: storage } } });
-let fetches = 0;
-const normalFetch = async (url: string): Promise<Response> => { if (url.includes('/api/auth/session')) return new Response('{}'); fetches++; return new Response(JSON.stringify(api)); };
+Object.assign(globalThis, { chrome: { storage: { local: storage } } });
+const normalFetch = async (): Promise<Response> => new Response(JSON.stringify(api));
 Object.assign(globalThis, { fetch: normalFetch });
 let controller: RailController | null = null, toolbar: YadaToolbar | null = null, reloading = false;
 const promptHost = (): HTMLElement => document.getElementById('chatgpt-yada-prompt-host')!;
@@ -84,8 +56,8 @@ const modal = (): ShadowRoot => promptHost().shadowRoot!;
 const promptButton = (): HTMLButtonElement => document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector('[data-prompts]')!;
 const clickAction = (action: string): void => { const button = modal().querySelector<HTMLButtonElement>(`[data-prompt-action="${action}"]`); assert(button, `missing ${action}`); button!.click(); };
 async function openPanel(): Promise<void> {
-  promptButton().dispatchEvent(new PointerEvent('pointerdown')); promptButton().click();
-  await until(() => !promptHost().hidden && !!modal().querySelector('input[type="search"]') && modal().activeElement?.getAttribute('type') === 'search', 'prompt panel did not load');
+  promptButton().click();
+  await until(() => !promptHost().hidden && modal().activeElement?.getAttribute('data-prompt-action') === 'add', 'prompt panel did not load');
 }
 async function apiChecks(): Promise<void> {
   const calls: string[] = [];
@@ -112,161 +84,174 @@ async function apiChecks(): Promise<void> {
 async function run(): Promise<void> {
   if (savedChecks.length) {
     toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
-    const expectedGreen = sessionStorage.getItem('yada-reload-mode') !== 'gray';
-    await until(() => document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector('[data-preview-mode]')?.getAttribute('aria-pressed') === String(expectedGreen), 'gray/green preference did not survive page reload');
+    await until(() => document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector('[data-preview-mode]')?.getAttribute('aria-pressed') === 'true', 'preview mode lost on reload');
     await openPanel();
-    assert(modal().querySelector('.yada-prompt-item-title')?.textContent === 'Reload retained', 'prompt not retained after real page reload');
-    pass(`actual browser reload retains ${expectedGreen ? 'green' : 'gray'} preview preference and v1 prompt data`);
-    if (expectedGreen) {
-      clickAction('close');
-      document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector<HTMLButtonElement>('[data-preview-mode]')!.click();
-      await until(() => localStorage.getItem(PREVIEW_KEY) === 'false', 'gray not persisted');
-      sessionStorage.setItem('yada-reload-mode', 'gray');
-      sessionStorage.setItem('yada-reload-checks', JSON.stringify(result.checks)); reloading = true; location.reload(); return;
-    }
-    sessionStorage.removeItem('yada-reload-checks'); sessionStorage.removeItem('yada-reload-mode'); return;
+    assert(modal().querySelector('.yada-prompt-item-title')?.textContent === 'Reload retained', 'prompt lost on reload');
+    assert((await readLibrary()).prompts[0].id === 'existing-210-id', 'ID lost on reload');
+    pass('real browser reload retains preview preference and existing v1 prompt IDs/content');
+    sessionStorage.removeItem('yada-reload-checks'); return;
   }
   await apiChecks();
-  assert(collectDomConversationTurns().length === 6 && bindDomAnchorsToTurns(turns).length === 120, 'partial DOM changed canonical count');
-  assert(!bindDomAnchorsToTurns(turns)[119].userAnchorElement, 'composer attachment became a target');
-  const wrapper = el('div'); wrapper.style.overflowY = 'auto'; messages.firstElementChild!.prepend(wrapper); wrapper.textContent = 'not scrollable';
-  assert(resolveScrollRoot(wrapper) === scroller, 'CSS-only overflow was accepted as scroll root');
-  pass('120 API turns, mounted window only, composer exclusion, real overflow scroll-root selection');
-  const previouslyBound = bindDomAnchorsToTurns(turns); const recycled = messages.querySelector<HTMLElement>('[data-message-id="u0"]')!;
-  recycled.dataset.messageId = 'unknown'; assert(!bindDomAnchorsToTurns(previouslyBound)[0].anchorMappingTrusted, 'recycled ID trusted'); recycled.dataset.messageId = 'u0';
-  pass('recycled DOM identities are not trusted');
-  for (let n = 0; n < 2; n++) { const stale = el('div'); stale.id = 'chatgpt-yada-rail-host'; document.documentElement.append(stale); }
+  const entries = skeleton.scan(turns);
+  assert(entries.length === 120 && entries[119].turnContainerId === 'u119' && entries[0].skeletonIndex === 1, 'skeleton count/phantom/order');
+  assert(messages.querySelectorAll('section[data-turn="user"]').length === 6, 'fixture must only mount six user bodies');
+  const sparse = skeleton.scan([turns[119], turns[0]]);
+  assert(sparse[119].turn?.userMessageId === 'u119' && sparse[0].turn?.userMessageId === 'u0' && sparse[1].turn === null, 'exact IDs must reserve turns before ordinal mapping');
+  const ordinal = skeleton.scan(turns.map(turn => ({ ...turn, userMessageId: 'api-' + turn.id, turnDomId: null })));
+  assert(ordinal[119].turn?.userMessageId === 'api-u119', 'ordered API fallback absent');
+  assert(skeleton.scan().every(entry => !entry.turn), 'API-free skeleton must work');
+  // No phantom and index-zero user must also be observed correctly.
+  phantom.remove(); assert(skeleton.scan().length === 120 && skeleton.scan()[0].skeletonIndex === 0, 'even parity failed'); messages.prepend(phantom);
+  const nested = el('div'); nested.dataset.turnIdContainer = 'nested-false-turn'; getTurnEl('u0')!.append(nested);
+  assert(skeleton.scan().length === 120, 'nested containers counted'); nested.remove();
+  assert(findScrollRoot(getTurnEl('u0')) === scroller, 'scroll root incorrect');
+  pass('120 persistent user skeletons / 6 mounted bodies; phantom/direct-child/parity; exact API identity then ordered enrichment');
+  for (const index of [1, 60, 119, 2]) {
+    const abort = new AbortController();
+    assert(await jumpToTurn(entries[index], entries, abort.signal), `jump failed ${index}`);
+    assert(Math.abs(scroller.scrollTop - targetY(getTurnEl(`u${index}`)!, scroller)) < 2, `wrong container ${index}`);
+    assert(syncActive(entries, scroller) === index, `wrong active ${index}`);
+    abort.abort();
+  }
+  pass('front/middle/end and identical-text turns jump by distinct container IDs without mounted messages');
+  const abort = new AbortController(); scroller.scrollTop = 0;
+  const long = jumpToTurn(entries[60], entries, abort.signal);
+  assert(scroller.scrollTop > 10000, 'long jump must be synchronous direct scroll'); await long; abort.abort();
+  const shortAbort = new AbortController(), target = targetY(getTurnEl('u60')!, scroller);
+  scroller.scrollTop = target - 300; const short = jumpToTurn(entries[60], entries, shortAbort.signal);
+  assert(scroller.scrollTop < target - 250, 'short jump was immediate'); await wait(90);
+  assert(scroller.scrollTop > target - 300 && scroller.scrollTop < target, 'short jump lacks rAF easing');
+  assert(await short, 'short jump failed'); assert(Math.abs(scroller.scrollTop - target) < 2, 'short jump alignment'); shortAbort.abort();
+  pass('>600px direct jump and 280ms short-distance rAF interpolation');
+  const official = el('div'); official.style.cssText = 'position:fixed;right:16px;top:120px;width:35px;height:500px;overflow:auto';
+  let nativeCalls = -1;
+  for (let i = 0; i < 120; i++) {
+    const b = document.createElement('button'); b.dataset.tocItemIndex = String(entries[i].skeletonIndex); b.textContent = '—'; b.style.cssText = 'display:block;width:30px;height:3px;padding:0;border:0';
+    b.addEventListener('click', () => { nativeCalls = i; }); official.append(b);
+  }
+  document.body.append(official);
+  assert(await jumpToTurn(entries[60], entries, new AbortController().signal) && nativeCalls === 60, 'native skeleton-index click failed');
+  [...official.children].forEach((b, i) => b.setAttribute('data-toc-item-index', String(i)));
+  await jumpToTurn(entries[60], entries, new AbortController().signal); assert(nativeCalls === 60, 'ordinal native-index fallback failed');
+  [...official.children].forEach(b => { b.removeAttribute('data-toc-item-index'); b.setAttribute('data-toc-active', 'false'); });
+  await jumpToTurn(entries[60], entries, new AbortController().signal); assert(nativeCalls === 60, 'active-only native buttons not called');
+  official.remove(); pass('official buttons outside main: exact skeleton index, changed ordinal semantics and visible-order fallback');
+  const correction = new AbortController(); await jumpToTurn(entries[70], entries, correction.signal);
+  const started = performance.now();
+  for (const ms of [200, 600, 1200, 2000]) {
+    await wait(Math.max(0, ms - 80 - (performance.now() - started)));
+    const old = getTurnEl('u70')!, fresh = old.cloneNode(true) as HTMLElement;
+    fresh.style.transform = `translateY(${ms / 2}px)`; old.replaceWith(fresh);
+    await wait(Math.max(0, ms + 55 - (performance.now() - started)));
+    assert(getTurnEl('u70') === fresh && Math.abs(scroller.scrollTop - targetY(fresh, scroller)) < 2, `fresh-node correction failed at ${ms}ms`);
+  }
+  correction.abort(); getTurnEl('u70')!.style.transform = '';
+  pass('200/600/1200/2000ms corrections re-query replaced target containers and correct >40px error');
+  for (const event of [new WheelEvent('wheel'), new Event('touchstart'), ...['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].map(key => new KeyboardEvent('keydown', { key }))]) {
+    const cancel = new AbortController(); await jumpToTurn(entries[60], entries, cancel.signal);
+    window.dispatchEvent(event); scroller.scrollTop += 120; const top = scroller.scrollTop;
+    await wait(240); assert(scroller.scrollTop === top, `continued after ${event.type}/${(event as KeyboardEvent).key}`); cancel.abort();
+  }
+  const routeAbort = new AbortController(); await jumpToTurn(entries[60], entries, routeAbort.signal);
+  history.pushState({}, '', '/c/route-changed'); scroller.scrollTop += 120; const routeTop = scroller.scrollTop;
+  await wait(260); assert(scroller.scrollTop === routeTop, 'route did not cancel correction'); routeAbort.abort(); history.replaceState({}, '', '/c/fixture-1');
+  pass('wheel/touch/all scroll keys and SPA route changes immediately stop subsequent correction');
+  // Fetch remains pending while the skeleton renders: API is not a navigation prerequisite.
+  let resolveApi!: (value: Response) => void;
+  Object.assign(globalThis, { fetch: () => new Promise<Response>(resolve => { resolveApi = resolve; }) });
   controller = new RailController(); controller.syncRoute();
-  toolbar = new YadaToolbar(value => controller?.setPreviewMode(value)); toolbar.mount(); toolbar.setVisible(true);
-  await until(() => document.getElementById('chatgpt-yada-rail-host')?.shadowRoot?.querySelectorAll('.mark').length === 120, 'rail did not load');
-  const host = document.getElementById('chatgpt-yada-rail-host')!, shadow = host.shadowRoot!, layer = shadow.querySelector('.marks')!, firstMarker = shadow.querySelector('.mark');
-  assert(document.querySelectorAll('#chatgpt-yada-rail-host').length === 1 && shadow.querySelectorAll('.marks').length === 1, 'duplicate hosts/layers');
-  const scan = () => turns; // Jump adapter must not require repeated full DOM/API scans.
-  for (const index of [2, 117, 1, 60]) {
-    assert(await jumpToTurn(`u${index}`, scan, () => scroller, new AbortController().signal), `jump failed ${index}`);
-    const node = messages.querySelector<HTMLElement>(`[data-message-id="u${index}"]`)!;
-    assert(Math.abs(node.getBoundingClientRect().top - readableTop(scroller, node)) <= 8, `target ${index} covered/misaligned`);
-    assert(getActiveTurn(bindDomAnchorsToTurns(turns), scroller) === index, 'active index incorrect');
-  }
-  assert(bridgeCalls >= 3 && rebuilds > 3 && shadow.querySelector('.mark') === firstMarker, 'bridge unused or rail rebuilt');
-  pass('variable-height (210–1620px) front/middle/end jumps through real upstream page bridge and asynchronous window rebuilds');
-  // Replace the exact node after the first alignment and shift it by 90px.
-  scroller.scrollTop = offsets[50]; renderVirtual(true); await wait();
-  const old = messages.querySelector<HTMLElement>('[data-message-id="u50"]')!;
-  setTimeout(() => { const replacement = old.cloneNode(true) as HTMLElement; replacement.style.transform = 'translateY(90px)'; old.replaceWith(replacement); }, 30);
-  assert(await jumpToTurn('u50', scan, () => scroller, new AbortController().signal), 'replacement calibration failed');
-  const latest = messages.querySelector<HTMLElement>('[data-message-id="u50"]')!;
-  assert(latest !== old && Math.abs(latest.getBoundingClientRect().top - readableTop(scroller, latest)) <= 8, 'stale node declared success');
-  pass('same message ID re-resolved after node replacement; measured header offset and stable re-calibration');
-  bridgeDisabled = true;
-  scroller.scrollTop = offsets[20]; renderVirtual(true); await wait();
-  assert(await jumpToTurn('u25', scan, () => scroller, new AbortController().signal), 'directional native-unavailable fallback failed');
-  pass('bridge-unavailable path uses mounted-window direction and mutation-driven paging');
-  // Frozen window exercises stagnation/boundary/nudge without reversing toward a neighbor.
-  frozen = true;
-  const tops: number[] = []; const recordTop = (): void => { tops.push(scroller.scrollTop); }; scroller.addEventListener('scroll', recordTop);
-  assert(!await jumpToTurn('u110', scan, () => scroller, new AbortController().signal), 'missing target falsely resolved');
-  scroller.removeEventListener('scroll', recordTop);
-  assert(tops.every((top, i) => i === 0 || top >= tops[i - 1]), 'fallback oscillated');
-  frozen = false; bridgeDisabled = false;
-  const neighbor = turns.map(turn => ({ ...turn })); neighbor[25].userMessageId = 'missing-id'; neighbor[25].userPreview = 'User 24 question';
-  scroller.scrollTop = offsets[24]; renderVirtual(true); await wait();
-  assert(!await jumpToTurn('u25', () => neighbor, () => scroller, new AbortController().signal), 'similar adjacent message claimed success');
-  pass('stagnation/boundary failure is explicit and monotonic; nearby similar text cannot satisfy missing ID');
-  for (const event of [new WheelEvent('wheel'), new Event('touchstart'), new KeyboardEvent('keydown', { key: 'PageDown' }), new KeyboardEvent('keydown', { key: 'Home' }), new PointerEvent('pointerdown'), new MouseEvent('click')]) {
-    scroller.scrollTop = offsets[30]; renderVirtual(true); await wait();
-    const pending = jumpToTurn('u30', scan, () => scroller, new AbortController().signal);
-    window.dispatchEvent(event); const top = scroller.scrollTop;
-    assert(!await pending, `user intent ${event.type} ignored`); await wait(100); assert(scroller.scrollTop === top, 'scroll continued after user takeover');
-  }
-  pass('wheel/touch/navigation keys/pointer/click cancel immediately without later calibration');
-  scroller.scrollTop = offsets[30]; renderVirtual(true); await wait();
-  const routePending = jumpToTurn('u30', scan, () => scroller, new AbortController().signal);
-  history.pushState({}, '', '/c/another-route');
-  assert(!await routePending, 'pushState route did not cancel'); history.replaceState({}, '', '/c/fixture-1');
-  pass('SPA pushState cancels within the next frame without waiting for route polling');
-  const cancel = new AbortController(); const pending = jumpToTurn('u80', scan, () => scroller, cancel.signal); cancel.abort(); assert(!await pending, 'route abort ignored');
-  const marker = shadow.querySelectorAll<HTMLButtonElement>('.mark')[30]; marker.click();
-  await wait(20);
-  const officialRoot = el('div'); officialRoot.className = 'abc_convSearchResultHighlightRoot';
-  const official = el('div'); official.className = 'fixed inset-e-4 top-1/2 z-20 -translate-y-1/2';
-  official.style.cssText = 'position:fixed;right:16px;top:200px;width:40px;display:flex;flex-direction:column';
-  for (let i = 0; i < 6; i++) { const b = el('button', '—'); b.style.height = '16px'; official.append(b); }
-  officialRoot.append(official); main.append(officialRoot);
-  await until(() => host.hidden, 'official navigation did not hide Yada');
-  assert(readChatGPTOfficialNavigation().ready && shadow.querySelector<HTMLElement>('.preview')!.hidden, 'official detection/preview cleanup failed');
-  official.style.display = 'none'; await until(() => !host.hidden, 'same host failed to restore');
-  assert(document.getElementById('chatgpt-yada-rail-host') === host && shadow.querySelector('.marks') === layer, 'host/layer replaced');
-  officialRoot.className = 'future-renamed-root'; official.className = 'future-navigation'; official.style.display = 'flex'; official.style.top = '400px';
-  await until(() => host.hidden, 'geometry fallback missing'); officialRoot.remove(); await until(() => !host.hidden, 'official removal restore failed');
-  assert(document.querySelectorAll('#chatgpt-yada-rail-host').length === 1, 'duplicate restored rail');
-  pass('official selectors and geometry fallback: hide/clear/cancel, hidden/remove restore SAME host and marks layer');
-  // Exercise the preview view directly with >500 characters, without a truncated API preview fixture.
-  controller.dispose(); controller = null;
-  const previewView = new RailView(() => {}); previewView.setTurns([{ ...turns[0], userPreview: '长用户摘要'.repeat(150), assistantPreview: 'assistantPreview remains visible' }]);
-  const pvRoot = previewView.host.shadowRoot!, pvMark = pvRoot.querySelector<HTMLButtonElement>('.mark')!;
-  previewView.host.style.cssText = 'position:fixed;right:30px;top:300px;height:40px';
-  pvMark.focus();
-  const preview = pvRoot.querySelector<HTMLElement>('.preview')!;
-  assert(!preview.querySelector('[data-preview-role="ChatGPT"]'), 'gray shows assistant');
+  const host = document.getElementById('chatgpt-yada-rail-host')!, shadow = host.shadowRoot!, layer = shadow.querySelector('.marks')!, marker = shadow.querySelector<HTMLButtonElement>('.mark')!;
+  assert(shadow.querySelectorAll('.mark').length === 120 && !host.hidden, 'API-pending rail not ready');
+  marker.focus(); assert(shadow.querySelector('.preview')!.textContent === '第 1 轮', 'unmatched preview should be round only');
+  resolveApi(new Response(JSON.stringify(api))); Object.assign(globalThis, { fetch: normalFetch }); await wait(250);
+  assert(shadow.querySelector('.mark') === marker, 'API enrichment rebuilt markers');
+  marker.focus(); shadow.querySelectorAll<HTMLButtonElement>('.mark')[60].click();
+  document.body.append(official); const inserted = performance.now(); await frame();
+  assert(host.hidden && performance.now() - inserted < 100, `native insertion did not suppress in one frame/100ms: hidden=${host.hidden}, latency=${performance.now()-inserted}, ready=${readChatGPTOfficialNavigation().ready}, rect=${JSON.stringify(official.getBoundingClientRect())}`);
+  assert(readChatGPTOfficialNavigation().ready && shadow.querySelector<HTMLElement>('.preview')!.hidden, 'preview not cleared');
+  assert(!host.title, 'jump was not cancelled on official insertion');
+  official.hidden = true; await frame(); assert(!host.hidden, 'hidden native did not restore rail');
+  official.hidden = false; await frame(); assert(host.hidden, 'unhidden native failed');
+  official.setAttribute('aria-hidden', 'true'); await frame(); assert(!host.hidden, 'aria-hidden native failed');
+  official.removeAttribute('aria-hidden'); official.style.visibility = 'hidden'; await frame(); assert(!host.hidden, 'visibility hidden native failed');
+  official.style.visibility = 'visible'; official.style.top = '-600px'; await frame(); assert(!host.hidden, 'offscreen native suppressed rail');
+  official.style.top = '120px'; await frame(); assert(host.hidden, 'restored native failed');
+  official.remove(); await frame(); assert(!host.hidden && document.getElementById(host.id) === host && shadow.querySelector('.marks') === layer && shadow.querySelector('.mark') === marker, 'host/layer/marker was rebuilt');
+  pass(`official insertion hides within one frame (<100ms); hidden/aria/visibility/viewport/removal restore same host and marks; preview and jump cleared`);
+  history.pushState({}, '', '/'); await frame(); await frame(); assert(host.hidden, 'route exit not cleared');
+  history.replaceState({}, '', '/c/api-failure'); Object.assign(globalThis, { fetch: async () => { throw new Error('offline fixture'); } });
+  await frame(); await wait(250); assert(shadow.querySelectorAll('.mark').length === 120 && !host.hidden, 'API failure removed skeleton rail');
+  controller.dispose(); controller = null; Object.assign(globalThis, { fetch: normalFetch }); history.replaceState({}, '', '/c/fixture-1');
+  pass('API pending/failure leaves navigation usable; SPA lifecycle resets without React/page bridge');
+  const previewView = new RailView(() => {}), userTime = new Date(2026, 8, 17, 8, 31, 42).getTime() / 1000;
+  const previewEntry = { ...entries[6], index: 0, turn: { ...turns[6], userCreatedAt: userTime, userPreview: '长用户正文'.repeat(180), assistantPreview: 'Assistant remains visible '.repeat(80) } };
+  previewView.setEntries([previewEntry]); previewView.host.style.cssText = 'position:fixed;right:30px;top:300px;height:40px';
+  const pv = previewView.host.shadowRoot!, pvMark = pv.querySelector<HTMLButtonElement>('.mark')!; pvMark.focus();
+  const preview = pv.querySelector<HTMLElement>('.preview')!;
+  assert(preview.querySelector('[data-preview-role="Harson"]') && !preview.querySelector('[data-preview-role="ChatGPT"]') && !preview.textContent!.includes('User'), 'gray mode label/content');
+  assert(preview.querySelector('time')?.textContent === '09月17日 周四 08:31:42', 'local preview time format');
+  const titleRect = preview.querySelector('.preview-header strong')!.getBoundingClientRect(), timeRect = preview.querySelector('time')!.getBoundingClientRect();
+  assert(Math.abs(titleRect.top - timeRect.top) < 5 && timeRect.left > titleRect.right, 'round/time not on same row');
   previewView.setPreviewMode(true);
-  const assistantBlock = preview.querySelector<HTMLElement>('[data-preview-role="ChatGPT"]')!;
-  assert(assistantBlock.textContent!.includes('ChatGPT') && assistantBlock.textContent!.includes('assistantPreview'), 'long User pushed assistant out');
   for (const section of preview.querySelectorAll<HTMLElement>('section')) {
-    assert(getComputedStyle(section.querySelector('p')!).webkitLineClamp === '2', 'summaries share clamp');
-    assert(section.getBoundingClientRect().bottom <= preview.getBoundingClientRect().bottom, 'block clipped');
+    const label = getComputedStyle(section.querySelector('strong')!);
+    assert(label.color === 'rgb(16, 163, 127)' && Number(label.fontWeight) >= 700, 'role not green/bold');
+    assert(getComputedStyle(section.querySelector('p')!).webkitLineClamp === '2' && section.getBoundingClientRect().bottom <= preview.getBoundingClientRect().bottom, 'independent 2-line block clipped');
   }
-  await wait(1100); assert([...preview.querySelectorAll('p')].every(p => getComputedStyle(p).webkitLineClamp === '5'), 'separate hover expansion failed');
-  previewView.setTurns([{ ...turns[0], assistantPreview: '' }]); previewView.setPreviewMode(false); previewView.setPreviewMode(true);
-  assert(preview.textContent!.includes('该轮暂无 ChatGPT 回复'), 'pending reply placeholder absent');
-  previewView.dispose();
+  assert(preview.querySelector('[data-preview-role="ChatGPT"]'), 'assistant missing with long Harson text');
+  await wait(1100); assert([...preview.querySelectorAll('p')].every(p => getComputedStyle(p).webkitLineClamp === '5'), 'independent 5-line expansion failed');
+  previewView.setEntries([{ ...previewEntry, turn: { ...previewEntry.turn, userCreatedAt: undefined } }]);
+  assert(!preview.querySelector('time') && formatPreviewTime(NaN) === '', 'missing time fabricated');
+  previewView.dispose(); pass('Harson gray / Harson+ChatGPT green; green bold labels; local same-row time; missing-time omission; independent 2/5-line previews');
+  toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
   const mode = document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector<HTMLButtonElement>('[data-preview-mode]')!;
-  mode.click(); await wait(); assert((await storage.get(PREVIEW_KEY))[PREVIEW_KEY] === true, 'preview persistence key changed');
-  pass('gray User-only; 750-character User and assistant independently visible at 2/5 lines; pending placeholder and unchanged preference key');
-  // Native editor events and undo; invalid saved bookmark must append, not overwrite a changed draft.
-  editor.textContent = ''; editor.focus(); assert(insertPrompt('hello') && editor.innerText === 'hello', 'empty insertion failed');
-  assert(inputs > 0 && !send.disabled, 'normal input did not update composer send state');
-  editor.textContent = 'abcdef'; editor.focus(); const range = document.createRange(); range.setStart(editor.firstChild!, 2); range.setEnd(editor.firstChild!, 4); window.getSelection()!.removeAllRanges(); window.getSelection()!.addRange(range);
-  const bookmark = captureComposerSelection(); assert(insertPrompt('X', bookmark) && editor.innerText === 'abXef', 'saved selection not replaced');
-  document.execCommand('undo'); assert(editor.innerText === 'abcdef', 'native undo missing');
-  const sameTextBookmark = captureComposerSelection();
-  editor.replaceChildren(document.createTextNode('abcdef'));
-  assert(insertPrompt('same-text-remount', sameTextBookmark) && /^abcdef\n{2,3}same-text-remount$/.test(editor.innerText), 'invalid live Range reused after node replacement');
-  editor.textContent = 'changed draft'; assert(insertPrompt('tail', bookmark) && /^changed draft\n{2,3}tail$/.test(editor.innerText), 'changed draft overwritten');
-  const textarea = document.createElement('textarea'); editor.removeAttribute('id'); textarea.id = 'prompt-textarea'; form.prepend(textarea); textarea.value = 'abcd'; textarea.focus(); textarea.setSelectionRange(1, 3);
-  assert(insertPrompt('Z', captureComposerSelection()) && textarea.value === 'aZd', 'textarea selection failed'); textarea.remove(); editor.id = 'prompt-textarea';
-  const savedEditor = editor; editor.remove();
-  const waiting = insertPromptWhenReady('remounted', null, new AbortController().signal);
-  setTimeout(() => { editor = savedEditor.cloneNode(false) as HTMLElement; form.prepend(editor); }, 80);
-  assert(await waiting && editor.innerText === 'remounted', 'wait/reacquire editor failed');
-  pass('native contenteditable/textarea insertion, input/send-state events, selection, changed draft append, undo, editor remount');
-  await saveLibrary({ version: 1, prompts: [] }); await openPanel();
-  const panel = modal().querySelector<HTMLElement>('.yada-prompt-panel')!;
-  assert(promptHost().parentElement === document.body && !document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector('.yada-prompt-panel'), 'panel still in header');
-  assert(panel.getBoundingClientRect().width >= 500 && panel.getBoundingClientRect().height >= 300 && panel.getBoundingClientRect().bottom <= innerHeight, 'modal collapsed/clipped');
-  document.documentElement.classList.add('dark'); await wait(); assert(modal().querySelector<HTMLElement>('.yada-prompt-modal')!.dataset.toolkitTheme === 'dark', 'dark theme absent'); document.documentElement.classList.remove('dark');
-  clickAction('add'); modal().querySelector<HTMLInputElement>('[name="title"]')!.value = '<img src=x onerror=alert(1)>';
-  modal().querySelector<HTMLTextAreaElement>('[name="content"]')!.value = 'prompt body'; modal().querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
-  await until(() => !!modal().querySelector('.yada-prompt-item'), 'add not saved'); assert(!modal().querySelector('img'), 'unsafe prompt rendering');
-  const search = modal().querySelector<HTMLInputElement>('input[type="search"]')!; search.value = 'no match'; search.dispatchEvent(new Event('input')); assert(!modal().querySelector('.yada-prompt-item'), 'search failed'); search.value = 'body'; search.dispatchEvent(new Event('input')); assert(modal().querySelector('.yada-prompt-item'), 'content search failed');
-  clickAction('edit'); modal().querySelector<HTMLInputElement>('[name="title"]')!.value = 'Updated title'; modal().querySelector<HTMLTextAreaElement>('[name="content"]')!.value = 'updated body'; modal().querySelector<HTMLButtonElement>('button[type="submit"]')!.click();
-  await until(() => modal().querySelector('.yada-prompt-item-title')?.textContent === 'Updated title', 'edit not saved');
-  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); assert(promptHost().hidden, 'Escape failed'); await openPanel();
-  editor.textContent = 'existing draft'; editor.blur(); window.getSelection()?.removeAllRanges();
-  const insert = modal().querySelector<HTMLButtonElement>('[data-prompt-action="insert"]')!; insert.click(); insert.click();
-  await until(() => promptHost().hidden, 'insert did not close');
-  assert(/^existing draft\n{2,3}updated body$/.test(editor.innerText) && sends === 0, 'draft overwritten, duplicate inserted or auto-sent');
-  document.execCommand('undo'); assert(editor.innerText === 'existing draft', 'panel insertion lost undo');
-  await openPanel(); clickAction('delete'); await until(() => !modal().querySelector('.yada-prompt-item'), 'delete failed');
-  assert((await readLibrary()).prompts.length === 0, 'deletion not persisted');
-  document.body.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); assert(promptHost().hidden, 'outside close failed');
-  history.pushState({}, '', '/'); await openPanel(); assert(!promptHost().hidden, 'new conversation modal unavailable'); clickAction('close');
-  pass('body Shadow DOM modal size/theme; CRUD/search/reopen/storage/safe rendering; one insertion, retained draft, undo, no send; new conversation');
-  await saveLibrary({ version: 1, prompts: [{ id: 'existing-210-id', title: 'Reload retained', content: '2.1.0 storage preserved', createdAt: 10, updatedAt: 20 }] });
-  assert(localStorage.getItem(PROMPT_KEY), 'storage key changed');
-  toolbar.dispose(); toolbar = null;
-  assert(!document.getElementById('chatgpt-yada-prompt-host'), 'disposed prompt host leaked');
-  pass('independent hosts and listeners disposed; existing 2.1.0 IDs/timestamps/schema retained');
+  await wait(); mode.click(); await until(() => localStorage.getItem(PREVIEW_KEY) === 'true', 'preview preference not retained');
+  const original = { id: 'existing-210-id', title: '<img src=x onerror=alert(1)>', content: '  Full prompt\nwith whitespace\n' + 'Body '.repeat(200), createdAt: 10, updatedAt: 20 };
+  await saveLibrary({ version: 1, prompts: [original] }); await openPanel();
+  const panel = modal().querySelector<HTMLElement>('.yada-prompt-panel')!, list = modal().querySelector<HTMLElement>('.yada-prompt-list')!;
+  assert(promptHost().parentElement === document.body && !modal().querySelector('input[type="search"], .yada-prompt-footer'), 'search/footer or wrong host');
+  assert(modal().querySelector('.yada-prompt-header')!.querySelectorAll('button').length === 2, 'header must only have add/close');
+  assert(!modal().querySelector('img') && getComputedStyle(panel).minHeight === '0px' && panel.getBoundingClientRect().height < 320, 'one-item panel not compact/safe');
+  const card = modal().querySelector<HTMLElement>('.yada-prompt-item')!, icons = [...card.querySelectorAll<HTMLButtonElement>('button')];
+  assert(icons.length === 3 && icons.every(b => b.querySelector('svg') && !b.textContent!.trim() && b.title === b.getAttribute('aria-label')), 'icons must be SVG-only and accessible');
+  assert(icons.map(b => b.title).join(',') === '复制提示词,编辑提示词,删除提示词', 'wrong icon labels');
+  assert(icons.every(b => b.getBoundingClientRect().width === 30) && getComputedStyle(card).cursor === 'default', 'compact icon/card cursor');
+  let copied = '', copies = 0;
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text: string) => { copied = text; copies++; } } });
+  card.click(); assert(!copies && modal().querySelector<HTMLElement>('form')!.hidden && draft.value === 'Existing unsent draft', 'card has action');
+  const copyIcon = icons[0], oldSvg = copyIcon.innerHTML; copyIcon.click(); await wait();
+  assert(copied === original.content && !promptHost().hidden && copyIcon.innerHTML !== oldSvg && !copyIcon.textContent!.trim(), 'copy is truncated/title included/closes/not check icon');
+  await wait(1400); assert(copyIcon.innerHTML === oldSvg, 'check icon did not restore');
+  // Clipboard API failure must use the real textarea selection + execCommand fallback.
+  Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async () => { throw new Error('denied'); } } });
+  const exec = document.execCommand.bind(document); let fallback = '';
+  document.execCommand = (command: string): boolean => { if (command === 'copy') { fallback = (document.activeElement as HTMLTextAreaElement).value; return true; } return exec(command); };
+  copyIcon.click(); await wait(); assert(fallback === original.content && !promptHost().hidden, 'clipboard fallback failed'); document.execCommand = exec;
+  assert(draft.value === 'Existing unsent draft', 'copy changed draft');
+  pass('body Shadow DOM compact modal; no search/footer; exactly 3 accessible 30px SVG icons; inert card; full-content copy/check/reset/fallback stays open');
+  clickAction('edit'); modal().querySelector<HTMLInputElement>('[name="title"]')!.value = 'Updated title';
+  modal().querySelector<HTMLTextAreaElement>('[name="content"]')!.value = 'Updated body'; modal().querySelector<HTMLButtonElement>('[type="submit"]')!.click();
+  await until(() => modal().querySelector('.yada-prompt-item-title')?.textContent === 'Updated title', 'edit failed');
+  let library = await readLibrary(); assert(library.prompts[0].id === original.id && library.prompts[0].createdAt === 10 && library.prompts[0].updatedAt > 20, 'edit lost ID/createdAt');
+  clickAction('add'); modal().querySelector<HTMLInputElement>('[name="title"]')!.value = 'Second'; modal().querySelector<HTMLTextAreaElement>('[name="content"]')!.value = 'Second body'; modal().querySelector<HTMLButtonElement>('[type="submit"]')!.click();
+  await until(() => modal().querySelectorAll('.yada-prompt-item').length === 2, 'add failed');
+  assert(panel.getBoundingClientRect().height < 400, 'two-item panel not natural height');
+  clickAction('delete'); await until(() => modal().querySelectorAll('.yada-prompt-item').length === 1, 'delete failed');
+  assert((await readLibrary()).prompts[0].id === original.id, 'delete affected another prompt');
+  clickAction('close');
+  await saveLibrary({ version: 1, prompts: Array.from({ length: 40 }, (_, i) => ({ id: `many-${i}`, title: `Prompt ${i}`, content: 'Long preview '.repeat(60), createdAt: i, updatedAt: i })) }); await openPanel();
+  assert(list.scrollHeight > list.clientHeight && getComputedStyle(list).overflowY === 'auto' && panel.scrollHeight <= panel.clientHeight + 1 && panel.getBoundingClientRect().height <= Math.min(innerHeight * .72, 680) + 1, 'only list should scroll within max-height');
+  const headerTop = modal().querySelector('.yada-prompt-header')!.getBoundingClientRect().top, pageTop = document.scrollingElement!.scrollTop;
+  list.scrollTop = 500; await frame(); assert(modal().querySelector('.yada-prompt-header')!.getBoundingClientRect().top === headerTop && document.scrollingElement!.scrollTop === pageTop, 'header/page scrolled');
+  const wheel = new WheelEvent('wheel', { bubbles:true, cancelable:true, deltaY:500 }); modal().querySelector('.yada-prompt-backdrop')!.dispatchEvent(wheel); assert(wheel.defaultPrevented, 'backdrop wheel leaks');
+  clickAction('edit'); assert(list.hidden && modal().querySelector('form')!.getBoundingClientRect().bottom <= panel.getBoundingClientRect().bottom, 'editor is scroll-clipped'); clickAction('cancel');
+  document.documentElement.classList.add('dark'); await wait(); assert(modal().querySelector<HTMLElement>('.yada-prompt-modal')!.dataset.toolkitTheme === 'dark', 'dark theme lost'); document.documentElement.classList.remove('dark');
+  document.dispatchEvent(new KeyboardEvent('keydown', { key:'Escape', bubbles:true })); assert(promptHost().hidden, 'escape close failed');
+  await openPanel(); (modal().querySelector('.yada-prompt-backdrop') as HTMLElement).click(); assert(promptHost().hidden, 'backdrop close failed');
+  pass('add/edit/delete preserve unrelated IDs and createdAt; 1–2 items shrink; many items scroll only list; header/editor fixed; theme/Escape/backdrop');
+  await saveLibrary({ version:1, prompts:[{ ...original, title:'Reload retained' }] });
+  assert(localStorage.getItem(PROMPT_KEY), 'v1 key lost'); toolbar.dispose(); toolbar = null;
+  assert(!document.getElementById('chatgpt-yada-prompt-host'), 'disposed modal leaked');
   sessionStorage.setItem('yada-reload-checks', JSON.stringify(result.checks)); reloading = true; location.reload();
 }
 void run().catch(error => { result.error = error.stack ?? String(error); }).finally(() => {
