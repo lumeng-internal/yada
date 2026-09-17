@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-yada",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "private": true,
   "description": "Complete ChatGPT Markdown copy with timestamps, conversation navigation and a local prompt library.",
   "type": "module",

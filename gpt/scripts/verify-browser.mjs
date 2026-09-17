@@ -33,7 +33,7 @@ try {
   const { targetId } = await call('Target.createTarget', { url: 'about:blank' });
   const { sessionId } = await call('Target.attachToTarget', { targetId, flatten: true });
   await call('Page.navigate', { url: `http://127.0.0.1:${server.address().port}/c/fixture-1` }, sessionId);
-  const deadline = Date.now() + 120000;
+  const deadline = Date.now() + 180000;
   let result;
   while (Date.now() < deadline) {
     const state = await call('Runtime.evaluate', { expression: 'globalThis.yadaVerification', returnByValue: true }, sessionId);

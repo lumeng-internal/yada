@@ -141,7 +141,7 @@ Render `预览模式圆点 | 复制全部 | 提示词` in the header actions wit
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.2.1 PATCH release, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.2.2 PATCH release, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

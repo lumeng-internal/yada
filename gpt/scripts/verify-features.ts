@@ -8,9 +8,9 @@ import { readChatGPTOfficialNavigation } from '../src/rail/officialNavigation';
 import { RailView, formatPreviewTime } from '../src/rail/view';
 import { readLibrary, saveLibrary, PROMPT_KEY, PREVIEW_KEY } from '../src/prompts/storage';
 import { YadaToolbar } from '../src/ui/toolbar';
-import { HISTORY_SOURCE, getHistoryPageStatus, rewriteConversationHistoryRequest, wrapFetchForHistory } from '../src/history/historyPage';
+import { HISTORY_SOURCE, getHistoryPageStatus, rewriteConversationHistoryRequest, rewriteFetchInput, wrapFetchForHistory } from '../src/history/historyPage';
 import { HistoryHydrator, captureReadingAnchor, restoreReadingAnchor } from '../src/history/historyHydrator';
-import type { HistoryBridge } from '../src/history/historyClient';
+import { PageHistoryBridge, type HistoryBridge } from '../src/history/historyClient';
 import type { HistoryLimits, HistoryPageResult } from '../src/history/historyState';
 import {
   canUseMessageFallback,
@@ -29,9 +29,22 @@ const assert = (value: unknown, message: string): void => { if (!value) throw ne
 const pass = (message: string): void => { result.checks.push(message); };
 const wait = (ms = 80): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
 const frame = (): Promise<void> => new Promise(resolve => requestAnimationFrame(() => resolve()));
-async function until(fn: () => boolean, message: string): Promise<void> {
-  for (let i = 0; i < 90; i++) { if (fn()) return; await wait(); }
+async function until(fn: () => boolean, message: string, rounds = 90): Promise<void> {
+  for (let i = 0; i < rounds; i++) { if (fn()) return; await wait(); }
   throw new Error(message);
+}
+function waitForHidden(host: HTMLElement): Promise<number> {
+  if (host.hidden) return Promise.resolve(performance.now());
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => { observer.disconnect(); reject(new Error('host never hid')); }, 1000);
+    const observer = new MutationObserver(() => {
+      if (!host.hidden) return;
+      observer.disconnect();
+      clearTimeout(timer);
+      resolve(performance.now());
+    });
+    observer.observe(host, { attributes: true, attributeFilter: ['hidden'] });
+  });
 }
 function el(tag: string, text = ''): HTMLElement { const node = document.createElement(tag); node.textContent = text; return node; }
 const TURN_COUNT = 18;
@@ -88,13 +101,23 @@ async function openPanel(): Promise<void> {
 function okPage(extra: Partial<HistoryPageResult> = {}): HistoryPageResult {
   return { ok: true, status: 200, triggered: true, generation: 1, hasSentinel: true, conversationId: 'fixture-1', ...extra };
 }
-function mockBridge(handler: (n: number, emit: (event: Record<string, unknown>) => void) => HistoryPageResult | Promise<HistoryPageResult>): HistoryBridge {
+function mockBridge(handler: (n: number, emit: (event: Record<string, unknown>) => void, signal?: AbortSignal) => HistoryPageResult | Promise<HistoryPageResult>): HistoryBridge {
   let n = 0;
   const listeners: Array<(event: { type: string }) => void> = [];
   const emit = (event: Record<string, unknown>): void => { for (const listener of listeners) listener(event as { type: string }); };
   return {
     async query() { return { generation: n, hasSentinel: true, conversationId: 'fixture-1' }; },
-    async loadPage() { const result = await handler(n, emit); n++; return result; },
+    async loadPage(_conversationId, signal) {
+      const current = n++;
+      const work = Promise.resolve(handler(current, emit, signal));
+      if (!signal) return work;
+      return new Promise((resolve, reject) => {
+        const onAbort = (): void => reject(new DOMException('Aborted', 'AbortError'));
+        if (signal.aborted) { onAbort(); return; }
+        signal.addEventListener('abort', onAbort, { once: true });
+        work.then(value => { signal.removeEventListener('abort', onAbort); resolve(value); }, error => { signal.removeEventListener('abort', onAbort); reject(error); });
+      });
+    },
     subscribe(listener) { listeners.push(listener); return () => { const index = listeners.indexOf(listener); if (index >= 0) listeners.splice(index, 1); }; }
   };
 }
@@ -125,6 +148,29 @@ function attachPager(): { sentinel: HTMLElement; io: IntersectionObserver } {
   });
   io.observe(sentinel);
   return { sentinel, io };
+}
+function attachFetchingSentinel(): { sentinel: HTMLElement; io: IntersectionObserver; disconnect: () => void } {
+  const sentinel = el('div'); sentinel.dataset.testid = 'conversation-pagination-sentinel';
+  messages.prepend(sentinel);
+  const io = new IntersectionObserver(entries => {
+    if (!entries.some(entry => entry.isIntersecting)) return;
+    void fetch(`${location.origin}/backend-api/conversations/fixture-1?num_turns=5`).then(response => response.json()).catch(() => undefined);
+  });
+  io.observe(sentinel);
+  return { sentinel, io, disconnect() { io.disconnect(); sentinel.remove(); } };
+}
+function officialNavFixture(onClick?: (index: number) => void): HTMLElement {
+  const nav = el('div');
+  nav.style.cssText = 'position:fixed;right:16px;top:120px;width:35px;height:500px;overflow:auto';
+  for (let i = 0; i < TURN_COUNT; i++) {
+    const button = document.createElement('button');
+    button.dataset.tocItemIndex = String(i);
+    button.textContent = '—';
+    button.style.cssText = 'display:block;width:30px;height:3px;padding:0;border:0';
+    if (onClick) button.addEventListener('click', () => onClick(i));
+    nav.append(button);
+  }
+  return nav;
 }
 async function apiChecks(): Promise<void> {
   const calls: string[] = [];
@@ -189,6 +235,77 @@ async function historyContractChecks(): Promise<void> {
   second.remove(); sentinelIo.disconnect();
   pass('ordinary IntersectionObserver behavior preserved; replaced sentinel starts a new generation');
 }
+async function historyRaceChecks(): Promise<void> {
+  const origin = location.origin;
+  const historyUrl = `${origin}/backend-api/conversations/fixture-1?num_turns=5`;
+  const signal = new AbortController().signal;
+  const seen: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
+  const rewritten = wrapFetchForHistory(async (input, init) => {
+    seen.push({ input, init });
+    return new Response(JSON.stringify({ page_info: { has_previous_page: false } }));
+  }, () => 'fixture-1');
+  const request = new Request(historyUrl, { headers: { Accept: 'application/json' } });
+  const init = { signal, cache: 'no-store' as RequestCache, credentials: 'include' as RequestCredentials, headers: { 'X-Yada-Test': 'keep', Accept: 'application/json' } };
+  const helper = rewriteFetchInput(request, init, `${historyUrl}&rewritten=1`);
+  assert(helper.input instanceof Request && String((helper.input as Request).url).includes('rewritten=1'), 'Request rewrite dropped the new URL');
+  assert(helper.init === init, 'Request+init helper dropped caller init');
+  await rewritten(request, init);
+  assert(seen[0]?.input instanceof Request && String((seen[0].input as Request).url).includes('num_turns=100'), 'Request+init did not raise num_turns');
+  assert(seen[0]?.init?.signal === signal && seen[0]?.init?.cache === 'no-store' && seen[0]?.init?.credentials === 'include', 'Request+init lost signal/cache/credentials');
+  assert(new Headers(seen[0]?.init?.headers).get('X-Yada-Test') === 'keep', 'Request+init lost custom header');
+  pass('Request+init rewrite keeps signal, cache, credentials and custom headers');
+
+  const log: Array<Record<string, unknown>> = [];
+  const onMessage = (event: MessageEvent): void => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const data = event.data as { source?: string } | null;
+    if (data?.source === HISTORY_SOURCE) log.push(event.data as Record<string, unknown>);
+  };
+  window.addEventListener('message', onMessage);
+  const previousFetch = window.fetch;
+  try {
+    const delayed: Array<(response: Response) => void> = [];
+    let hangNext = false;
+    let secondNext = false;
+    window.fetch = wrapFetchForHistory(async () => {
+      if (hangNext) {
+        hangNext = false;
+        return new Promise(resolve => delayed.push(resolve));
+      }
+      if (secondNext) {
+        secondNext = false;
+        return new Response(JSON.stringify({ page_info: { has_previous_page: false, start_cursor: 'second' } }));
+      }
+      return new Response(JSON.stringify({ page_info: { has_previous_page: true, start_cursor: 'refresh' } }));
+    }, () => 'fixture-1');
+    const pager = attachFetchingSentinel();
+    window.postMessage({ source: HISTORY_SOURCE, type: 'fetch-result', status: 200, ok: true, conversationId: 'fixture-1', generation: 1, hasSentinel: true, hasPreviousPage: true, cursor: 'stale' }, location.origin);
+    const bridge = new PageHistoryBridge();
+    hangNext = true;
+    const first = bridge.loadPage('fixture-1');
+    await until(() => delayed.length === 1, 'first history GET was not bound');
+    secondNext = true;
+    const second = bridge.loadPage('fixture-1');
+    const secondResult = await second;
+    delayed[0](new Response(JSON.stringify({ page_info: { has_previous_page: true, start_cursor: 'first' } })));
+    const firstResult = await first;
+    assert(firstResult.nonce != null && secondResult.nonce != null && firstResult.nonce !== secondResult.nonce, 'page loads did not use distinct nonces');
+    assert(firstResult.cursor === 'first' && firstResult.hasPreviousPage === true, 'late first response attached to the wrong page');
+    assert(secondResult.cursor === 'second' && secondResult.hasPreviousPage === false, `second page used another request page_info: cursor=${String(secondResult.cursor)} prev=${String(secondResult.hasPreviousPage)}`);
+    assert(!log.some(item => item.type === 'page-settled' && item.nonce === secondResult.nonce && item.cursor === 'first'), 'delayed first result settled on the second nonce');
+    const staleSettled = log.filter(item => item.type === 'page-settled' && item.cursor === 'stale');
+    assert(staleSettled.every(item => item.nonce !== firstResult.nonce && item.nonce !== secondResult.nonce), 'background fetch-result became a page result');
+    const refreshBefore = log.length;
+    await window.fetch(historyUrl);
+    await wait(40);
+    assert(!log.slice(refreshBefore).some(item => (item.type === 'fetch-result' || item.type === 'page-settled') && (item.nonce === firstResult.nonce || item.nonce === secondResult.nonce) && item.cursor === 'refresh'), 'background session refresh changed the active page cursor');
+    pager.disconnect();
+    pass('history page transactions bind one GET per nonce and ignore stale/background fetches');
+  } finally {
+    window.removeEventListener('message', onMessage);
+    window.fetch = previousFetch;
+  }
+}
 async function run(): Promise<void> {
   if (savedChecks.length) {
     toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
@@ -202,6 +319,7 @@ async function run(): Promise<void> {
   await apiChecks();
   clearPendingJump();
   await historyContractChecks();
+  await historyRaceChecks();
   const partial = skeleton.scan(turns);
   assert(partial.length === 18, 'API 18 turns must create 18 rail entries');
   assert(partial.filter(entry => entry.materialized).length === 5, 'initial 5 skeletons must not shrink the rail');
@@ -293,7 +411,63 @@ async function run(): Promise<void> {
   const afterThree = pages;
   await wait(150);
   assert(pages === afterThree, 'resume continued after 3 idle recoveries');
+  assert(pausing.sessionPageCount <= 20 && pausing.sessionResumeCount === 3, 'idle resumes reset the 20-page session budget');
   pausing.dispose();
+  mountWindow(13, 17, 2);
+  let remainingLoads = 0;
+  const remaining = makeHydrator(mockBridge(async n => {
+    remainingLoads++;
+    await wait(20);
+    mountWindow(Math.max(0, 12 - n), 17, 2);
+    return okPage({ hasPreviousPage: true, cursor: `remain-${n}` });
+  }), { maxPages: 4, maxMs: 5_000, idleMs: 40, maxResumes: 3, pageTimeoutMs: 200 });
+  void remaining.startAuto();
+  await wait(25); remaining.pause();
+  await wait(55); remaining.pause();
+  await wait(55); remaining.pause();
+  await wait(80);
+  assert(remainingLoads <= 4 && remaining.sessionPageCount === remainingLoads, 'pause/resume re-granted a fresh 20-page budget');
+  remaining.dispose();
+  mountWindow(13, 17, 2);
+  const budget = makeHydrator(mockBridge(async () => {
+    await wait(25);
+    return okPage({ hasPreviousPage: true, cursor: `age-${Date.now()}` });
+  }), { maxPages: 20, maxMs: 120, idleMs: 30, maxResumes: 3, pageTimeoutMs: 80 });
+  void budget.startAuto();
+  await wait(20); budget.pause();
+  await wait(45); budget.pause();
+  await wait(45); budget.pause();
+  await wait(80);
+  assert(budget.status === 'PARTIAL_STOPPED' && budget.sessionPageCount <= 20, '3 resumes re-granted a fresh 60s budget');
+  budget.dispose();
+  mountWindow(13, 17, 2);
+  const cancellable = makeHydrator(mockBridge(async (_n, _emit, signal) => {
+    try { await wait(80, signal); } catch { /* aborted */ }
+    if (signal?.aborted) return okPage({ hasPreviousPage: true, cursor: 'click-cancel' });
+    mountWindow(8, 17, 2);
+    return okPage({ hasPreviousPage: true, cursor: 'click-cancel' });
+  }), { pageTimeoutMs: 400, idleMs: 1000 });
+  void cancellable.startAuto();
+  const clickAbort = new AbortController();
+  const clickWait = cancellable.materialize('u1', clickAbort.signal);
+  await wait(20);
+  clickAbort.abort();
+  assert(await clickWait === false, 'explicit target wait was not cancelled');
+  assert(cancellable.status === 'HISTORY_HYDRATING' || cancellable.sessionPageCount >= 1, 'cancelling a click stopped background hydration');
+  cancellable.dispose();
+  await wait(100);
+  mountWindow(13, 17, 2);
+  let settleCursor = '';
+  const delayedSettle = makeHydrator(mockBridge(async (n, emit) => {
+    emit({ type: 'fetch-result', cursor: 'stale', hasPreviousPage: true, conversationId: 'fixture-1', generation: 1, hasSentinel: true });
+    mountWindow(n === 0 ? 8 : 0, 17, 2);
+    await wait(50);
+    settleCursor = n === 0 ? 'page-one' : 'page-two';
+    return okPage({ nonce: 600 + n, cursor: settleCursor, hasPreviousPage: n === 0 });
+  }));
+  await delayedSettle.startAuto();
+  assert(skeleton.scan(turns).every(entry => entry.materialized), 'skeleton change before page-settled used another request');
+  delayedSettle.dispose();
   mountWindow(13, 17, 2);
   scroller.scrollTop = targetY(getTurnEl('u16')!, scroller);
   const beforeTop = getTurnEl('u16')!.getBoundingClientRect().top;
@@ -324,13 +498,36 @@ async function run(): Promise<void> {
   assert(syncActive(skeleton.scan(turns), scroller) === 13, 'active index was local instead of global');
   pass('API 18 markers with 5 DOM skeletons; 5→10→18 keeps marker nodes; global round numbers');
 
-  const officialNav = el('div'); officialNav.style.cssText = 'position:fixed;right:16px;top:120px;width:35px;height:500px;overflow:auto';
-  for (let i = 0; i < TURN_COUNT; i++) {
-    const b = document.createElement('button'); b.dataset.tocItemIndex = String(i); b.textContent = '—'; b.style.cssText = 'display:block;width:30px;height:3px;padding:0;border:0';
-    officialNav.append(b);
-  }
-  document.body.append(officialNav); const inserted = performance.now(); await frame();
-  assert(host.hidden && performance.now() - inserted < 100, `native insertion did not suppress in one frame/100ms: hidden=${host.hidden}, latency=${performance.now()-inserted}, ready=${readChatGPTOfficialNavigation().ready}, rect=${JSON.stringify(officialNav.getBoundingClientRect())}`);
+  mountWindow(13, 17, 2); await wait(250);
+  const takeoverFetch = window.fetch;
+  const takeoverPager = attachFetchingSentinel();
+  window.fetch = wrapFetchForHistory(async () => {
+    await wait(800);
+    return new Response(JSON.stringify({ page_info: { has_previous_page: true, start_cursor: 'takeover' } }));
+  }, () => 'fixture-1');
+  let takeoverClick = -1;
+  const takeoverNav = officialNavFixture(index => { takeoverClick = index; });
+  shadow.querySelectorAll<HTMLButtonElement>('.mark')[1].click();
+  document.body.append(takeoverNav);
+  await until(() => takeoverClick === 1, 'official navigation cancelled the in-flight jump instead of taking it over');
+  assert(host.hidden, 'Yada stayed visible after official takeover');
+  assert(shadow.querySelector('[role="status"]')?.textContent === '定位成功' || host.title === '定位成功', 'takeover did not mark the jump successful');
+  assert(!location.search.includes('message='), 'official takeover fell back to ?message= refresh');
+  takeoverNav.remove();
+  takeoverPager.disconnect();
+  window.fetch = takeoverFetch;
+  await frame(); await frame();
+  assert(!host.hidden, 'host did not restore after official takeover fixture');
+  pass('official navigation appearing mid-jump hides Yada and clicks the matching official button');
+
+  const officialNav = officialNavFixture();
+  const hiddenWait = waitForHidden(host);
+  const inserted = performance.now();
+  document.body.append(officialNav);
+  const hidAt = await hiddenWait;
+  const hideLatency = hidAt - inserted;
+  assert(host.hidden && hideLatency < 100, `native insertion did not suppress in one frame/100ms: hidden=${host.hidden}, latency=${hideLatency}, ready=${readChatGPTOfficialNavigation().ready}, rect=${JSON.stringify(officialNav.getBoundingClientRect())}`);
+  await frame();
   assert(readChatGPTOfficialNavigation().ready && shadow.querySelector<HTMLElement>('.preview')!.hidden, 'preview not cleared');
   officialNav.hidden = true; await frame(); assert(!host.hidden, 'hidden native did not restore rail');
   officialNav.hidden = false; await frame(); assert(host.hidden, 'unhidden native failed');
@@ -361,11 +558,13 @@ async function run(): Promise<void> {
   assert(getTurnEl('u1') && Math.abs(scroller.scrollTop - targetY(getTurnEl('u1')!, scroller)) < 2, 'turn 2 jumped to the wrong id');
   pass('loaded turn 16 jumps directly; unloaded turn 2 hydrates then jumps by userMessageId');
 
+  mountWindow(0, 17, 2);
+  const jumpLoaded = skeleton.scan(turns);
   const abort = new AbortController(); scroller.scrollTop = 0;
-  const long = jumpToTurn(loaded[10], loaded, abort.signal);
+  const long = jumpToTurn(jumpLoaded[10], jumpLoaded, abort.signal);
   assert(scroller.scrollTop > 600, 'long jump must be synchronous direct scroll'); await long; abort.abort();
   const shortAbort = new AbortController(), target = targetY(getTurnEl('u10')!, scroller);
-  scroller.scrollTop = target - 300; const short = jumpToTurn(loaded[10], loaded, shortAbort.signal);
+  scroller.scrollTop = target - 300; const short = jumpToTurn(jumpLoaded[10], jumpLoaded, shortAbort.signal);
   assert(scroller.scrollTop < target - 250, 'short jump was immediate'); await wait(90);
   assert(scroller.scrollTop > target - 300 && scroller.scrollTop < target, 'short jump lacks rAF easing');
   assert(await short, 'short jump failed'); assert(Math.abs(scroller.scrollTop - target) < 2, 'short jump alignment'); shortAbort.abort();
@@ -373,17 +572,17 @@ async function run(): Promise<void> {
   const official = el('div'); official.style.cssText = 'position:fixed;right:16px;top:120px;width:35px;height:500px;overflow:auto';
   let nativeCalls = -1;
   for (let i = 0; i < TURN_COUNT; i++) {
-    const b = document.createElement('button'); b.dataset.tocItemIndex = String(loaded[i].skeletonIndex); b.textContent = '—'; b.style.cssText = 'display:block;width:30px;height:3px;padding:0;border:0';
+    const b = document.createElement('button'); b.dataset.tocItemIndex = String(jumpLoaded[i].skeletonIndex); b.textContent = '—'; b.style.cssText = 'display:block;width:30px;height:3px;padding:0;border:0';
     b.addEventListener('click', () => { nativeCalls = i; }); official.append(b);
   }
   document.body.append(official);
-  assert(await jumpToTurn(loaded[10], loaded, new AbortController().signal) && nativeCalls === 10, 'native skeleton-index click failed');
+  assert(await jumpToTurn(jumpLoaded[10], jumpLoaded, new AbortController().signal) && nativeCalls === 10, 'native skeleton-index click failed');
   [...official.children].forEach((b, i) => b.setAttribute('data-toc-item-index', String(i)));
-  await jumpToTurn(loaded[10], loaded, new AbortController().signal); assert(nativeCalls === 10, 'ordinal native-index fallback failed');
+  await jumpToTurn(jumpLoaded[10], jumpLoaded, new AbortController().signal); assert(nativeCalls === 10, 'ordinal native-index fallback failed');
   [...official.children].forEach(b => { b.removeAttribute('data-toc-item-index'); b.setAttribute('data-toc-active', 'false'); });
-  await jumpToTurn(loaded[10], loaded, new AbortController().signal); assert(nativeCalls === 10, 'active-only native buttons not called');
+  await jumpToTurn(jumpLoaded[10], jumpLoaded, new AbortController().signal); assert(nativeCalls === 10, 'active-only native buttons not called');
   official.remove(); pass('official buttons outside main: exact skeleton index, changed ordinal semantics and visible-order fallback');
-  const correction = new AbortController(); await jumpToTurn(loaded[12], loaded, correction.signal);
+  const correction = new AbortController(); await jumpToTurn(jumpLoaded[12], jumpLoaded, correction.signal);
   const started = performance.now();
   for (const ms of [200, 600, 1200, 2000]) {
     await wait(Math.max(0, ms - 80 - (performance.now() - started)));
@@ -395,11 +594,11 @@ async function run(): Promise<void> {
   correction.abort(); getTurnEl('u12')!.style.transform = '';
   pass('200/600/1200/2000ms corrections re-query replaced target containers and correct >40px error');
   for (const event of [new WheelEvent('wheel'), new Event('touchstart'), ...['ArrowUp','ArrowDown','PageUp','PageDown','Home','End',' '].map(key => new KeyboardEvent('keydown', { key }))]) {
-    const cancel = new AbortController(); await jumpToTurn(loaded[10], loaded, cancel.signal);
+    const cancel = new AbortController(); await jumpToTurn(jumpLoaded[10], jumpLoaded, cancel.signal);
     window.dispatchEvent(event); scroller.scrollTop += 120; const top = scroller.scrollTop;
     await wait(240); assert(scroller.scrollTop === top, `continued after ${event.type}/${(event as KeyboardEvent).key}`); cancel.abort();
   }
-  const routeAbort = new AbortController(); await jumpToTurn(loaded[10], loaded, routeAbort.signal);
+  const routeAbort = new AbortController(); await jumpToTurn(jumpLoaded[10], jumpLoaded, routeAbort.signal);
   history.pushState({}, '', '/c/route-changed'); scroller.scrollTop += 120; const routeTop = scroller.scrollTop;
   await wait(260); assert(scroller.scrollTop === routeTop, 'route did not cancel correction'); routeAbort.abort(); history.replaceState({}, '', '/c/fixture-1');
   pass('wheel/touch/all scroll keys and SPA route changes immediately stop subsequent correction');
@@ -420,6 +619,39 @@ async function run(): Promise<void> {
   assert(messageQueryHref(`${location.origin}/c/fixture-1?message=`) === null, 'message fallback formed a refresh loop');
   clearPendingJump();
   pass('?message= fallback runs once, restores pending target, and cannot loop');
+
+  mountWindow(13, 17, 2);
+  sessionStorage.removeItem('chatgpt-yada:message-fallback:fixture-1');
+  writePendingJump({ conversationId: 'fixture-1', userMessageId: 'u2', index: 1, attempted: true });
+  Object.assign(globalThis, { fetch: async () => { throw new Error('offline restore'); } });
+  let indexClick = -1;
+  const indexNav = officialNavFixture(index => { indexClick = index; });
+  document.body.append(indexNav);
+  controller = new RailController(); controller.syncRoute();
+  await until(() => indexClick === 1, 'API failure did not restore via saved official index');
+  assert(!readPendingJump(), 'pending survived a successful official-index restore');
+  indexNav.remove(); controller.dispose(); controller = null;
+  Object.assign(globalThis, { fetch: normalFetch });
+  pass('pending restore uses saved index when official buttons are complete and API failed');
+
+  mountWindow(13, 17, 2);
+  clearPendingJump();
+  writePendingJump({ conversationId: 'fixture-1', userMessageId: 'u2', index: 1, attempted: true });
+  let resolveDelayed!: (value: Response) => void;
+  Object.assign(globalThis, { fetch: () => new Promise<Response>(resolve => { resolveDelayed = resolve; }) });
+  controller = new RailController(); controller.syncRoute();
+  await wait(6500);
+  assert(readPendingJump()?.userMessageId === 'u2', 'pending restore window closed before 6.5s');
+  let delayedClick = -1;
+  const delayedNav = officialNavFixture(index => { delayedClick = index; });
+  document.body.append(delayedNav);
+  resolveDelayed(new Response(JSON.stringify(api)));
+  await until(() => delayedClick === 1 || !readPendingJump(), 'API delay over 6s did not restore the pending jump', 120);
+  assert(delayedClick === 1, 'delayed API restore did not click the saved official button');
+  delayedNav.remove(); controller.dispose(); controller = null;
+  Object.assign(globalThis, { fetch: normalFetch });
+  clearPendingJump();
+  pass('pending restore still works when API returns after 6s');
 
   const previewView = new RailView(() => {}), userTime = new Date(2026, 8, 17, 8, 31, 42).getTime() / 1000;
   const previewEntry = { ...loaded[6], index: 0, turn: { ...turns[6], userCreatedAt: userTime, userPreview: '长用户正文'.repeat(180), assistantPreview: 'Assistant remains visible '.repeat(80) } };

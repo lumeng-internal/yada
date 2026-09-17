@@ -1,4 +1,4 @@
-import { observeOfficialNavigation, readChatGPTOfficialNavigation } from "./officialNavigation";
+import { hasOfficialNavigationButtons, observeOfficialNavigation, readChatGPTOfficialNavigation, type OfficialSyncPhase } from "./officialNavigation";
 import { NativeSkeleton, findScrollRoot, skeletonSignature, syncActive, type RailEntry } from "./nativeSkeleton";
 import { observeRouteChange } from "../utils/route";
 import { isInsideComposer } from "../conversation/composerGuard";
@@ -7,16 +7,19 @@ import type { YadaTurn } from "../conversation/types";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import { type ScrollRoot } from "./active";
 import { placeRail } from "./layout";
-import { jumpToTurn } from "./jump";
+import { clickOfficial, clickOfficialIndex, jumpToTurn } from "./jump";
 import { RailView } from "./view";
 import { HistoryHydrator } from "../history/historyHydrator";
 import {
   canUseMessageFallback,
   clearPendingJump,
   markMessageFallbackUsed,
+  PENDING_RESTORE_MS,
+  PENDING_TTL_MS,
   readPendingJump,
   replaceWithMessageQuery,
-  writePendingJump
+  writePendingJump,
+  type PendingJump
 } from "../history/pendingNavigation";
 
 export class RailController {
@@ -45,6 +48,9 @@ export class RailController {
   private request: AbortController | null = null;
   private jumping: AbortController | null = null;
   private restoringPending = false;
+  private restoreNotify: (() => void) | null = null;
+  private activeTargetUserMessageId: string | null = null;
+  private activeTargetIndex: number | null = null;
   constructor() {
     this.hydrator = new HistoryHydrator({
       getConversationId: () => this.route,
@@ -74,7 +80,7 @@ export class RailController {
       })) this.scheduleApi();
     });
     this.mutation.observe(document.body, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-turn-id-container', 'data-turn', 'data-turn-id', 'class', 'style', 'hidden', 'aria-hidden'] });
-    this.officialDispose = observeOfficialNavigation(() => this.syncOfficialNavigation());
+    this.officialDispose = observeOfficialNavigation(phase => this.syncOfficialNavigation(phase));
     this.routeDispose = observeRouteChange(() => this.syncRoute());
     window.addEventListener("resize", this.scheduleRefresh, { passive: true });
     window.addEventListener("wheel", this.onUserInterrupt, { passive: true });
@@ -108,16 +114,24 @@ export class RailController {
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.view.dispose();
   }
-  private cancelJump = (): void => { this.jumping?.abort(); this.jumping = null; this.view.setStatus(""); };
+  private cancelJump = (): void => {
+    this.jumping?.abort();
+    this.jumping = null;
+    this.activeTargetUserMessageId = null;
+    this.activeTargetIndex = null;
+    this.view.setStatus("");
+  };
   private onUserInterrupt = (): void => { this.cancelJump(); this.hydrator.pause(); };
   private onUserKey = (event: KeyboardEvent): void => {
     if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Escape', ' '].includes(event.key)) this.onUserInterrupt();
   };
   private onVisibility = (): void => { if (document.visibilityState === "hidden") this.hydrator.pause(); };
-  private async jump(userMessageId: string): Promise<void> {
+  private async jump(userMessageId: string): Promise<boolean> {
     this.cancelJump(); this.view.clearHover();
     const entry = this.entries.find(item => item.userMessageId === userMessageId);
-    if (!entry) return;
+    if (!entry) return false;
+    this.activeTargetUserMessageId = entry.userMessageId;
+    this.activeTargetIndex = entry.index;
     const request = new AbortController(); this.jumping = request;
     this.view.setStatus("定位中");
     try {
@@ -129,13 +143,21 @@ export class RailController {
         },
         fallbackRefresh: () => this.useMessageFallback(entry)
       });
-      if (this.jumping !== request) return;
+      if (this.jumping !== request) return false;
       if (found) {
         clearPendingJump();
+        this.activeTargetUserMessageId = null;
+        this.activeTargetIndex = null;
         if (!request.signal.aborted) this.view.setStatus("定位成功");
-      } else if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位");
+        return !request.signal.aborted;
+      }
+      if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位");
       else this.view.setStatus("");
-    } catch { if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位"); }
+      return false;
+    } catch {
+      if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位");
+      return false;
+    }
   }
   private useMessageFallback(entry: RailEntry): boolean {
     const id = this.route;
@@ -147,29 +169,98 @@ export class RailController {
   private async restorePending(conversationId: string): Promise<void> {
     const pending = readPendingJump();
     if (!pending || pending.conversationId !== conversationId) return;
+    const remain = Math.min(PENDING_RESTORE_MS, PENDING_TTL_MS - (Date.now() - pending.createdAt));
+    if (remain <= 0) { clearPendingJump(); return; }
     this.restoringPending = true;
     const epoch = this.epoch;
-    for (let i = 0; i < 40 && epoch === this.epoch && !this.disposed; i++) {
-      this.refreshAnchors();
-      const entry = this.entries.find(item => item.userMessageId === pending.userMessageId);
-      if (entry && (entry.materialized || readChatGPTOfficialNavigation().ready)) {
-        await this.jump(pending.userMessageId);
-        clearPendingJump();
+    await new Promise<void>(resolve => {
+      let busy = false;
+      let done = false;
+      const finish = (): void => {
+        if (done) return;
+        done = true;
+        this.restoreNotify = null;
+        observer.disconnect();
+        clearTimeout(timeout);
+        clearInterval(poll);
         this.restoringPending = false;
-        return;
-      }
-      await new Promise(resolve => setTimeout(resolve, 150));
-    }
-    clearPendingJump();
-    this.restoringPending = false;
+        resolve();
+      };
+      const tick = (): void => {
+        if (done) return;
+        if (epoch !== this.epoch || this.disposed) { clearPendingJump(); finish(); return; }
+        if (busy) return;
+        busy = true;
+        void this.attemptRestore(pending, epoch).then(ok => {
+          busy = false;
+          if (ok || epoch !== this.epoch || this.disposed) finish();
+        }, () => { busy = false; });
+      };
+      this.restoreNotify = tick;
+      const observer = new MutationObserver(tick);
+      observer.observe(document.documentElement, {
+        childList: true,
+        subtree: true,
+        attributes: true,
+        attributeFilter: ['data-toc-item-index', 'data-toc-active', 'data-turn-id-container', 'hidden', 'aria-hidden']
+      });
+      const timeout = window.setTimeout(() => { clearPendingJump(); finish(); }, remain);
+      const poll = window.setInterval(tick, 500);
+      tick();
+    });
   }
-  private syncOfficialNavigation(): boolean {
+  private async attemptRestore(pending: PendingJump, epoch: number): Promise<boolean> {
+    if (epoch !== this.epoch || this.disposed) return true;
+    if (Date.now() - pending.createdAt > PENDING_TTL_MS) { clearPendingJump(); return true; }
+    this.refreshAnchors();
+    const entry = this.entries.find(item => item.userMessageId === pending.userMessageId);
+    const officialReady = readChatGPTOfficialNavigation().ready;
+    if (!entry && officialReady && clickOfficialIndex(pending.index)) {
+      clearPendingJump();
+      this.view.setStatus("定位成功");
+      return true;
+    }
+    if (entry && (entry.materialized || officialReady || this.apiTurns.length)) {
+      const ok = await this.jump(pending.userMessageId);
+      if (ok) { clearPendingJump(); return true; }
+    }
+    return false;
+  }
+  private tryOfficialTakeover(): boolean {
+    const id = this.activeTargetUserMessageId;
+    const index = this.activeTargetIndex;
+    if (id == null || index == null) return false;
+    const entry = this.entries.find(item => item.userMessageId === id);
+    const clicked = (entry ? clickOfficial(entry, this.entries) : false) || clickOfficialIndex(index);
+    if (!clicked) return false;
+    this.hydrator.markTargetReached(id);
+    this.hydrator.haltBackground();
+    clearPendingJump();
+    this.activeTargetUserMessageId = null;
+    this.activeTargetIndex = null;
+    this.view.setStatus("定位成功");
+    return true;
+  }
+  private syncOfficialNavigation(phase: OfficialSyncPhase = 'confirm'): boolean {
+    if (phase === 'immediate') {
+      if (hasOfficialNavigationButtons()) this.view.setSuppressed(true);
+      this.restoreNotify?.();
+      return this.official;
+    }
     const official = readChatGPTOfficialNavigation().ready;
-    if (official === this.official) return official;
-    this.official = official;
     this.view.setSuppressed(official);
-    if (official) { this.cancelJump(); this.view.clearHover(); }
-    else this.refreshAnchors();
+    if (official === this.official) {
+      if (official && this.activeTargetUserMessageId) this.tryOfficialTakeover();
+      this.restoreNotify?.();
+      return official;
+    }
+    this.official = official;
+    if (official) {
+      this.view.clearHover();
+      if (this.activeTargetUserMessageId != null) this.tryOfficialTakeover();
+      else this.cancelJump();
+    } else this.refreshAnchors();
+    this.restoreNotify?.();
     return official;
   }
   private scheduleApi(): void {
@@ -198,6 +289,7 @@ export class RailController {
       if (epoch === this.epoch && !this.disposed) {
         this.fetching = false;
         if (this.pendingFetch) { this.pendingFetch = false; this.scheduleApi(); }
+        this.restoreNotify?.();
       }
     }
   }

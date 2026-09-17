@@ -30,7 +30,16 @@ function usable(button: HTMLButtonElement | undefined): button is HTMLButtonElem
   return !!button && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
 }
 
-function clickOfficial(entry: RailEntry, entries: readonly RailEntry[]): boolean {
+export function clickOfficialIndex(index: number): boolean {
+  const buttons = officialButtons();
+  if (!buttons.length) return false;
+  const exact = buttons.find(button => button.dataset.tocItemIndex === String(index));
+  const native = exact ?? buttons[index];
+  if (usable(native)) { native.click(); return true; }
+  return false;
+}
+
+export function clickOfficial(entry: RailEntry, entries: readonly RailEntry[]): boolean {
   const buttons = officialButtons();
   if (!buttons.length) return false;
   if (buttons.length === entries.length) {

@@ -6,7 +6,8 @@
   var INSTALLED = "__chatgptYadaHistoryPage";
   var generation = 0;
   var sentinel = null;
-  var lastFetch = null;
+  var activeLoad = null;
+  var settledNonces = /* @__PURE__ */ new Set();
   function conversationIdFromHref(url = location.href) {
     try {
       const parsed = new URL(url);
@@ -50,23 +51,9 @@
     if (needsVersions) url.searchParams.set("include_has_versions", "true");
     return url.toString();
   }
-  function wrapFetchForHistory(original, getConversationId) {
-    return function patchedFetch(input, init) {
-      const request = input instanceof Request ? input : null;
-      const method = init?.method ?? request?.method ?? "GET";
-      const url = request ? request.url : String(input);
-      const headers = new Headers(init?.headers ?? request?.headers);
-      const conversationId = getConversationId();
-      const rewritten = rewriteConversationHistoryRequest(url, method, conversationId, { accept: headers.get("accept") });
-      const nextInput = rewritten ? request ? new Request(rewritten, request) : rewritten : input;
-      return original.call(this, nextInput, request && rewritten ? void 0 : init).then((response) => {
-        const used = rewritten ?? url;
-        if (conversationId && method.toUpperCase() === "GET" && isConversationHistoryUrl(used, conversationId) && !headers.get("accept")?.toLowerCase().includes("text/event-stream")) {
-          void noteFetch(response, conversationId);
-        }
-        return response;
-      });
-    };
+  function rewriteFetchInput(input, init, rewrittenUrl) {
+    if (input instanceof Request) return { input: new Request(rewrittenUrl, input), init };
+    return { input: rewrittenUrl, init };
   }
   function isConversationHistoryUrl(rawUrl, conversationId) {
     try {
@@ -79,26 +66,97 @@
       return false;
     }
   }
-  async function noteFetch(response, conversationId) {
-    const peek = await peekPageInfo(response);
-    lastFetch = { status: response.status, ok: response.ok, conversationId, ...peek };
-    post({ type: "fetch-result", ...lastFetch, generation, hasSentinel: getHistoryPageStatus().hasSentinel });
+  function wrapFetchForHistory(original, getConversationId) {
+    return function patchedFetch(input, init) {
+      const request = input instanceof Request ? input : null;
+      const method = (init?.method ?? request?.method ?? "GET").toUpperCase();
+      const url = request ? request.url : String(input);
+      const headers = new Headers(init?.headers ?? request?.headers);
+      const conversationId = getConversationId();
+      const rewritten = rewriteConversationHistoryRequest(url, method, conversationId, { accept: headers.get("accept") });
+      const next = rewritten ? rewriteFetchInput(input, init, rewritten) : { input, init };
+      const used = rewritten ?? url;
+      const load = shouldBindLoad(method, used, conversationId, headers.get("accept"));
+      return original.call(this, next.input, next.init).then((response) => {
+        if (load) trackBoundResponse(response, load);
+        return response;
+      });
+    };
   }
-  async function peekPageInfo(response) {
-    try {
-      const data = await response.clone().json();
-      const nested = data && typeof data.conversation === "object" && data.conversation ? data.conversation : null;
-      const page = data?.page_info ?? data?.pageInfo ?? nested?.page_info ?? nested?.pageInfo;
-      if (!page || typeof page !== "object") return {};
-      const has = page.has_previous_page ?? page.hasPreviousPage;
-      const cursor = page.start_cursor ?? page.startCursor;
-      return {
-        hasPreviousPage: typeof has === "boolean" ? has : void 0,
-        cursor: typeof cursor === "string" && cursor ? cursor : null
-      };
-    } catch {
-      return {};
-    }
+  function shouldBindLoad(method, url, conversationId, accept) {
+    if (!activeLoad || activeLoad.requestSeen || method !== "GET" || !conversationId) return null;
+    if (conversationId !== activeLoad.conversationId) return null;
+    if (accept?.toLowerCase().includes("text/event-stream")) return null;
+    if (!isConversationHistoryUrl(url, conversationId)) return null;
+    activeLoad.requestSeen = true;
+    activeLoad.requestUrl = url;
+    return activeLoad;
+  }
+  function trackBoundResponse(response, load) {
+    const meta = {
+      nonce: load.nonce,
+      conversationId: load.conversationId,
+      sentinelGeneration: load.sentinelGeneration,
+      status: response.status,
+      ok: response.ok,
+      generation,
+      hasSentinel: getHistoryPageStatus().hasSentinel
+    };
+    void peekPageInfo(response.clone()).then((peek) => {
+      post({ type: "fetch-result", ...meta, ...peek });
+      if (!response.ok) schedulePageSettled(load, { ...meta, ...peek, triggered: true });
+    });
+    wrapJsonOnce(response, (data) => {
+      schedulePageSettled(load, { ...meta, ...pageInfoFrom(data), triggered: true });
+    });
+  }
+  function wrapJsonOnce(response, onJson) {
+    let consumed = false;
+    const notify = (data) => {
+      if (!consumed) {
+        consumed = true;
+        onJson(data);
+      }
+    };
+    const originalJson = response.json.bind(response);
+    response.json = async (...args) => {
+      const data = await originalJson(...args);
+      notify(data);
+      return data;
+    };
+    const originalClone = response.clone.bind(response);
+    response.clone = () => {
+      const cloned = originalClone();
+      wrapJsonOnce(cloned, notify);
+      return cloned;
+    };
+  }
+  function schedulePageSettled(load, payload) {
+    if (settledNonces.has(load.nonce)) return;
+    settledNonces.add(load.nonce);
+    const dispatch = () => {
+      post({ type: "page-settled", triggered: true, ...payload, generation, hasSentinel: getHistoryPageStatus().hasSentinel });
+      if (activeLoad?.nonce === load.nonce) activeLoad = null;
+      settledNonces.delete(load.nonce);
+    };
+    const raf = window.requestAnimationFrame.bind(window);
+    raf(() => raf(() => window.setTimeout(dispatch, 0)));
+  }
+  function peekPageInfo(response) {
+    return response.json().then(pageInfoFrom).catch(() => ({}));
+  }
+  function pageInfoFrom(data) {
+    if (!data || typeof data !== "object") return {};
+    const record = data;
+    const nested = record.conversation && typeof record.conversation === "object" ? record.conversation : null;
+    const page = record.page_info ?? record.pageInfo ?? nested?.page_info ?? nested?.pageInfo;
+    if (!page || typeof page !== "object") return {};
+    const has = page.has_previous_page ?? page.hasPreviousPage;
+    const cursor = page.start_cursor ?? page.startCursor;
+    return {
+      hasPreviousPage: typeof has === "boolean" ? has : void 0,
+      cursor: typeof cursor === "string" && cursor ? cursor : null
+    };
   }
   function post(payload) {
     try {
@@ -141,25 +199,40 @@
     const status = getHistoryPageStatus();
     const record = sentinel?.target?.isConnected ? sentinel : null;
     if (!record || conversationId && status.conversationId && conversationId !== status.conversationId) {
-      post({ type: "load-result", nonce, triggered: false, ok: false, status: 0, ...status, conversationId: status.conversationId });
+      post({ type: "load-result", nonce, triggered: false, sentinelGeneration: generation, ...status, conversationId });
       return;
     }
+    const load = {
+      nonce,
+      conversationId: conversationId || status.conversationId || "",
+      sentinelGeneration: generation,
+      startedAt: Date.now(),
+      requestSeen: false
+    };
+    activeLoad = load;
     try {
       record.callback([syntheticEntry(record)], record.observer);
     } catch {
-      post({ type: "load-result", nonce, triggered: false, ok: false, status: 0, ...getHistoryPageStatus() });
+      if (activeLoad?.nonce === nonce) activeLoad = null;
+      post({ type: "load-result", nonce, triggered: false, sentinelGeneration: generation, ...getHistoryPageStatus(), conversationId: load.conversationId });
       return;
     }
-    post({
-      type: "load-result",
-      nonce,
-      triggered: true,
-      ok: lastFetch?.ok !== false,
-      status: lastFetch?.status ?? 0,
-      hasPreviousPage: lastFetch?.hasPreviousPage,
-      cursor: lastFetch?.cursor,
-      ...getHistoryPageStatus()
-    });
+    post({ type: "load-result", nonce, triggered: true, sentinelGeneration: load.sentinelGeneration, ...getHistoryPageStatus(), conversationId: load.conversationId });
+    const raf = window.requestAnimationFrame.bind(window);
+    raf(() => raf(() => window.setTimeout(() => {
+      if (activeLoad?.nonce !== nonce || activeLoad.requestSeen) return;
+      post({
+        type: "page-settled",
+        nonce,
+        triggered: true,
+        ok: true,
+        status: 0,
+        sentinelGeneration: load.sentinelGeneration,
+        ...getHistoryPageStatus(),
+        conversationId: load.conversationId
+      });
+      if (activeLoad?.nonce === nonce) activeLoad = null;
+    }, 0)));
   }
   function wrapIntersectionObserver(Native) {
     class YadaHistoryObserver {

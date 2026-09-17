@@ -3,6 +3,7 @@
  * Only control events are exchanged; never conversation bodies, tokens, or account data.
  */
 import type { HistoryFetchResult, HistoryPageResult } from "./historyState";
+import { HISTORY_LIMITS } from "./historyState";
 
 const HISTORY_SOURCE = "chatgpt-yada-history";
 
@@ -11,7 +12,7 @@ export type HistoryStatusSnapshot = { generation: number; hasSentinel: boolean; 
 export interface HistoryBridge {
   query(): Promise<HistoryStatusSnapshot>;
   loadPage(conversationId: string, signal?: AbortSignal): Promise<HistoryPageResult>;
-  subscribe(listener: (event: { type: string } & Partial<HistoryFetchResult & HistoryStatusSnapshot>) => void): () => void;
+  subscribe(listener: (event: { type: string } & Partial<HistoryFetchResult & HistoryStatusSnapshot & HistoryPageResult>) => void): () => void;
 }
 
 function listen<T extends { source?: string; type?: string }>(
@@ -42,12 +43,12 @@ function post(payload: Record<string, unknown>): void {
 }
 
 export class PageHistoryBridge implements HistoryBridge {
-  subscribe(listener: (event: { type: string } & Partial<HistoryFetchResult & HistoryStatusSnapshot>) => void): () => void {
+  subscribe(listener: (event: { type: string } & Partial<HistoryFetchResult & HistoryStatusSnapshot & HistoryPageResult>) => void): () => void {
     const onMessage = (event: MessageEvent): void => {
       if (event.source !== window || event.origin !== location.origin) return;
       const data = event.data as { source?: string; type?: string } | null;
       if (!data || data.source !== HISTORY_SOURCE) return;
-      listener(data as { type: string } & Partial<HistoryFetchResult & HistoryStatusSnapshot>);
+      listener(data as { type: string } & Partial<HistoryFetchResult & HistoryStatusSnapshot & HistoryPageResult>);
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
@@ -66,19 +67,43 @@ export class PageHistoryBridge implements HistoryBridge {
   }
   async loadPage(conversationId: string, signal?: AbortSignal): Promise<HistoryPageResult> {
     const nonce = Date.now() + Math.random();
+    const failed: HistoryPageResult = { ok: false, status: 0, triggered: false, generation: 0, hasSentinel: false, nonce, conversationId };
     const controller = new AbortController();
     const onAbort = (): void => controller.abort();
     signal?.addEventListener("abort", onAbort, { once: true });
-    const timer = setTimeout(() => controller.abort(), 400);
+    if (signal?.aborted) {
+      signal.removeEventListener("abort", onAbort);
+      throw new DOMException("Aborted", "AbortError");
+    }
+    const timer = setTimeout(() => controller.abort(), HISTORY_LIMITS.pageTimeoutMs);
     post({ type: "load-page", conversationId, nonce });
+    let triggered = false;
     try {
-      return await listen<HistoryPageResult & { type: string; nonce?: number }>(
+      const ack = await listen<HistoryPageResult & { type: string; nonce?: number }>(
         data => data.type === "load-result" && data.nonce === nonce,
         controller.signal
       );
+      if (!ack.triggered) return { ...failed, ...ack, nonce, triggered: false, conversationId };
+      triggered = true;
+      const settled = await listen<HistoryPageResult & { type: string; nonce?: number }>(
+        data => data.type === "page-settled" && data.nonce === nonce,
+        controller.signal
+      );
+      return {
+        ok: settled.ok !== false,
+        status: settled.status ?? 0,
+        triggered: true,
+        generation: settled.generation ?? 0,
+        hasSentinel: settled.hasSentinel === true,
+        nonce,
+        conversationId: settled.conversationId ?? conversationId,
+        sentinelGeneration: settled.sentinelGeneration,
+        hasPreviousPage: settled.hasPreviousPage,
+        cursor: settled.cursor
+      };
     } catch (error) {
       if (signal?.aborted) throw error;
-      return { ok: false, status: 0, triggered: false, generation: 0, hasSentinel: false, conversationId };
+      return { ...failed, triggered };
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onAbort);

@@ -11,7 +11,6 @@ import {
   historyProgressTitle,
   isChatGenerating,
   type HistoryLimits,
-  type HistoryPageResult,
   type RailHistoryStatus
 } from "./historyState";
 
@@ -62,6 +61,8 @@ type HydratorOptions = {
   limits?: Partial<HistoryLimits>;
 };
 
+type TargetWaiter = { id: string; resolve: (ok: boolean) => void; signal?: AbortSignal; onAbort?: () => void };
+
 const wait = (ms: number, signal?: AbortSignal): Promise<void> => new Promise((resolve, reject) => {
   const timer = setTimeout(() => { signal?.removeEventListener("abort", onAbort); resolve(); }, ms);
   const onAbort = (): void => { clearTimeout(timer); reject(new DOMException("Aborted", "AbortError")); };
@@ -74,25 +75,43 @@ export class HistoryHydrator {
   private readonly bridge: HistoryBridge;
   private conversationId: string | null = null;
   private paused = false;
-  private resumes = 0;
-  private idleTimer = 0;
   private terminal = false;
-  private targetId: string | null = null;
+  private skipIdleResume = false;
   private inflight: Promise<boolean> | null = null;
   private epoch = 0;
+  private sessionStartedAt = 0;
+  private sessionPages = 0;
+  private sessionLastCursor: string | null | undefined;
+  private sessionStalls = 0;
+  private sessionResumes = 0;
+  private runAbort: AbortController | null = null;
+  private activeTargetId: string | null = null;
+  private waiters: TargetWaiter[] = [];
+  private idleTimer = 0;
   status: RailHistoryStatus = "API_LOADING";
   constructor(private readonly opts: HydratorOptions) {
     this.limits = { ...HISTORY_LIMITS, ...opts.limits };
     this.bridge = opts.bridge ?? new PageHistoryBridge();
   }
+  get sessionPageCount(): number { return this.sessionPages; }
+  get sessionResumeCount(): number { return this.sessionResumes; }
+  get sessionAgeMs(): number { return this.sessionStartedAt ? Date.now() - this.sessionStartedAt : 0; }
   reset(conversationId: string | null): void {
     this.epoch++;
+    this.runAbort?.abort();
+    this.runAbort = null;
     this.conversationId = conversationId;
     this.paused = false;
-    this.resumes = 0;
     this.terminal = false;
-    this.targetId = null;
+    this.skipIdleResume = false;
     this.inflight = null;
+    this.sessionStartedAt = 0;
+    this.sessionPages = 0;
+    this.sessionLastCursor = undefined;
+    this.sessionStalls = 0;
+    this.sessionResumes = 0;
+    this.failWaiters();
+    this.activeTargetId = null;
     clearTimeout(this.idleTimer);
     this.status = conversationId ? "API_LOADING" : "PARTIAL_STOPPED";
     this.emit();
@@ -101,19 +120,37 @@ export class HistoryHydrator {
     this.epoch++;
     this.terminal = true;
     this.paused = true;
+    this.runAbort?.abort();
+    this.runAbort = null;
     this.inflight = null;
+    this.failWaiters();
     clearTimeout(this.idleTimer);
   }
   pause(): void {
     this.paused = true;
+    this.failWaiters();
+    this.activeTargetId = null;
+    this.runAbort?.abort();
     clearTimeout(this.idleTimer);
-    this.idleTimer = window.setTimeout(() => this.resumeFromIdle(), this.limits.idleMs);
+    if (!this.skipIdleResume && !this.terminal) this.idleTimer = window.setTimeout(() => this.resumeFromIdle(), this.limits.idleMs);
+  }
+  haltBackground(): void {
+    this.paused = true;
+    this.skipIdleResume = true;
+    this.terminal = true;
+    this.activeTargetId = null;
+    clearTimeout(this.idleTimer);
+    this.runAbort?.abort();
+  }
+  markTargetReached(userMessageId: string): void {
+    this.resolveWaiters(userMessageId, true);
+    if (this.activeTargetId === userMessageId) this.activeTargetId = null;
   }
   private resumeFromIdle(): void {
     this.idleTimer = 0;
-    if (!this.paused || this.terminal || document.visibilityState === "hidden") return;
-    if (this.resumes >= this.limits.maxResumes) return;
-    this.resumes++;
+    if (!this.paused || this.terminal || this.skipIdleResume || document.visibilityState === "hidden") return;
+    if (this.sessionResumes >= this.limits.maxResumes) return;
+    this.sessionResumes++;
     this.paused = false;
     void this.startAuto();
   }
@@ -125,106 +162,150 @@ export class HistoryHydrator {
     }
     const status = await this.bridge.query();
     if (!status.hasSentinel) return;
-    await this.begin();
+    this.ensureLoop();
+    await this.inflight;
   }
   async materialize(userMessageId: string, signal?: AbortSignal): Promise<boolean> {
     if (this.opts.isMaterialized(userMessageId)) return true;
-    this.targetId = userMessageId;
-    const wasPaused = this.paused;
+    if (this.terminal && this.sessionPages >= this.limits.maxPages) return false;
+    this.failWaiters();
+    this.activeTargetId = userMessageId;
     this.paused = false;
-    this.terminal = false;
-    try {
-      return await this.begin(signal);
-    } finally {
-      this.targetId = null;
-      this.paused = wasPaused;
-    }
+    this.skipIdleResume = false;
+    if (!this.terminal || this.opts.materializedCount() < this.opts.totalCount()) this.terminal = false;
+    const waiter = this.addWaiter(userMessageId, signal);
+    this.ensureLoop();
+    return waiter;
   }
-  private begin(signal?: AbortSignal): Promise<boolean> {
-    return this.inflight ??= this.loop(signal).finally(() => { this.inflight = null; });
-  }
-  private async loop(signal?: AbortSignal): Promise<boolean> {
-    const epoch = this.epoch, started = Date.now();
-    let pages = 0, stalls = 0, lastCursor: string | null | undefined;
-    const fetchState: { current: HistoryPageResult | null } = { current: null };
-    const unsub = this.bridge.subscribe(event => {
-      if (event.type === "fetch-result") fetchState.current = {
-        ok: event.ok !== false,
-        status: event.status ?? 0,
-        triggered: true,
-        generation: event.generation ?? 0,
-        hasSentinel: event.hasSentinel === true,
-        hasPreviousPage: event.hasPreviousPage,
-        cursor: event.cursor,
-        conversationId: event.conversationId
+  private addWaiter(userMessageId: string, signal?: AbortSignal): Promise<boolean> {
+    return new Promise(resolve => {
+      const waiter: TargetWaiter = { id: userMessageId, resolve, signal };
+      const onAbort = (): void => {
+        this.waiters = this.waiters.filter(item => item !== waiter);
+        if (this.activeTargetId === userMessageId) this.activeTargetId = null;
+        resolve(false);
       };
+      waiter.onAbort = onAbort;
+      if (signal?.aborted) { onAbort(); return; }
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.waiters.push(waiter);
+      this.flushWaiters();
     });
+  }
+  private ensureLoop(): void {
+    if (!this.conversationId) return;
+    if (this.inflight) {
+      const previous = this.inflight;
+      if (this.runAbort?.signal.aborted) {
+        void previous.finally(() => {
+          if (!this.inflight && this.conversationId && (!this.paused || this.activeTargetId) && !this.terminal) this.startLoop();
+        });
+      }
+      return;
+    }
+    this.startLoop();
+  }
+  private startLoop(): void {
+    if (this.inflight || !this.conversationId) return;
+    this.runAbort = new AbortController();
+    const signal = this.runAbort.signal;
+    const run = this.loop(signal).finally(() => {
+      if (this.runAbort?.signal === signal) this.runAbort = null;
+      if (this.inflight === run) this.inflight = null;
+    });
+    this.inflight = run;
+  }
+  private async loop(signal: AbortSignal): Promise<boolean> {
+    const epoch = this.epoch;
+    if (!this.sessionStartedAt) this.sessionStartedAt = Date.now();
     this.status = "HISTORY_HYDRATING";
     this.emit();
     try {
-      while (epoch === this.epoch && !this.terminal) {
-        if (signal?.aborted) return false;
-        if (this.targetId && this.opts.isMaterialized(this.targetId)) return true;
-        if (!this.targetId && this.opts.totalCount() > 0 && this.opts.materializedCount() >= this.opts.totalCount()) {
+      while (epoch === this.epoch && !this.terminal && !signal.aborted) {
+        this.flushWaiters();
+        if (this.activeTargetId && this.opts.isMaterialized(this.activeTargetId)) {
+          this.markTargetReached(this.activeTargetId);
+          if (!this.activeTargetId && this.paused) return false;
+        }
+        if (!this.activeTargetId && this.opts.totalCount() > 0 && this.opts.materializedCount() >= this.opts.totalCount()) {
           this.status = "COMPLETE";
           this.terminal = true;
           this.emit();
           return true;
         }
-        if (this.paused && !this.targetId) return false;
-        if (document.visibilityState === "hidden" && !this.targetId) { this.pause(); return false; }
-        if (isChatGenerating() && !this.targetId) { this.pause(); return false; }
-        if (Date.now() - started > this.limits.maxMs) { this.stop(); return false; }
-        if (pages >= this.limits.maxPages) { this.stop(); return false; }
+        if (this.paused && !this.activeTargetId) return false;
+        if (document.visibilityState === "hidden" && !this.activeTargetId) { this.pause(); return false; }
+        if (isChatGenerating() && !this.activeTargetId) { this.pause(); return false; }
+        if (Date.now() - this.sessionStartedAt > this.limits.maxMs) { this.stop(); return false; }
+        if (this.sessionPages >= this.limits.maxPages) { this.stop(); return false; }
         const conversationId = this.opts.getConversationId();
         if (!conversationId || conversationId !== this.conversationId) return false;
         const before = this.opts.skeletonSignature();
         const beforeCount = this.opts.materializedCount();
         const anchor = captureReadingAnchor();
-        pages++;
+        this.sessionPages++;
         const result = await this.bridge.loadPage(conversationId, signal);
-        if (epoch !== this.epoch) return false;
-        const deadline = Date.now() + this.limits.pageTimeoutMs;
-        while (Date.now() < deadline && epoch === this.epoch) {
-          if (signal?.aborted) return false;
-          if (fetchState.current && fetchState.current.conversationId === conversationId && (fetchState.current.status === 429 || (fetchState.current.status >= 400 && !fetchState.current.ok))) break;
+        if (epoch !== this.epoch || signal.aborted) return false;
+        const deadline = Date.now() + Math.min(400, this.limits.pageTimeoutMs);
+        while (Date.now() < deadline && epoch === this.epoch && !signal.aborted) {
           this.opts.applyBindings();
-          if (this.targetId && this.opts.isMaterialized(this.targetId)) break;
+          this.flushWaiters();
+          if (this.activeTargetId && this.opts.isMaterialized(this.activeTargetId)) break;
           if (this.opts.skeletonSignature() !== before || this.opts.materializedCount() !== beforeCount) break;
           await wait(40, signal);
         }
-        if (epoch !== this.epoch) return false;
+        if (epoch !== this.epoch || signal.aborted) return false;
         this.opts.applyBindings();
         restoreReadingAnchor(anchor);
+        this.flushWaiters();
         this.emit();
-        const fetch = fetchState.current?.conversationId === conversationId ? fetchState.current : result;
-        fetchState.current = null;
-        if (fetch.status === 429 || (fetch.status >= 400 && !fetch.ok)) { this.stop(); return false; }
-        if (!result.triggered && !this.opts.isMaterialized(this.targetId ?? "")) { this.stop(); return false; }
-        if (fetch.hasPreviousPage === false) {
+        if (result.status === 429 || (result.status >= 400 && !result.ok)) { this.stop(); return false; }
+        if (!result.triggered && !(this.activeTargetId && this.opts.isMaterialized(this.activeTargetId))) { this.stop(); return false; }
+        if (result.hasPreviousPage === false) {
           this.opts.applyBindings();
+          this.flushWaiters();
           if (this.opts.materializedCount() >= this.opts.totalCount()) {
             this.status = "COMPLETE";
             this.terminal = true;
           } else this.stop();
           this.emit();
-          return this.targetId ? this.opts.isMaterialized(this.targetId) : this.status === "COMPLETE";
+          return this.activeTargetId ? this.opts.isMaterialized(this.activeTargetId) : this.status === "COMPLETE";
         }
-        if (fetch.cursor && fetch.cursor === lastCursor) { this.stop(); return false; }
-        if (fetch.cursor) lastCursor = fetch.cursor;
+        if (result.cursor && result.cursor === this.sessionLastCursor) { this.stop(); return false; }
+        if (result.cursor) this.sessionLastCursor = result.cursor;
         if (this.opts.skeletonSignature() === before && this.opts.materializedCount() === beforeCount) {
-          stalls++;
-          if (stalls >= this.limits.stallRounds) { this.stop(); return false; }
-        } else stalls = 0;
+          this.sessionStalls++;
+          if (this.sessionStalls >= this.limits.stallRounds) { this.stop(); return false; }
+        } else this.sessionStalls = 0;
       }
-      return this.targetId ? this.opts.isMaterialized(this.targetId) : this.opts.materializedCount() >= this.opts.totalCount();
+      return this.activeTargetId ? this.opts.isMaterialized(this.activeTargetId) : this.opts.materializedCount() >= this.opts.totalCount();
     } catch (error) {
-      if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) return false;
+      if (signal.aborted || (error instanceof DOMException && error.name === "AbortError")) return false;
       this.stop();
       return false;
     } finally {
-      unsub();
       this.emit();
+    }
+  }
+  private flushWaiters(): void {
+    for (const waiter of [...this.waiters]) {
+      if (this.opts.isMaterialized(waiter.id)) this.resolveWaiters(waiter.id, true);
+    }
+  }
+  private resolveWaiters(id: string, ok: boolean): void {
+    const matched = this.waiters.filter(waiter => waiter.id === id);
+    this.waiters = this.waiters.filter(waiter => waiter.id !== id);
+    for (const waiter of matched) {
+      if (waiter.onAbort) waiter.signal?.removeEventListener("abort", waiter.onAbort);
+      waiter.resolve(ok);
+    }
+  }
+  private failWaiters(): void {
+    const pending = this.waiters;
+    this.waiters = [];
+    for (const waiter of pending) {
+      if (waiter.onAbort) waiter.signal?.removeEventListener("abort", waiter.onAbort);
+      waiter.resolve(false);
     }
   }
   private completeIfDone(): void {
@@ -239,6 +320,8 @@ export class HistoryHydrator {
     this.status = this.opts.materializedCount() >= this.opts.totalCount() && this.opts.totalCount() > 0
       ? "COMPLETE"
       : "PARTIAL_STOPPED";
+    this.failWaiters();
+    this.activeTargetId = null;
     this.emit();
   }
   private emit(): void {

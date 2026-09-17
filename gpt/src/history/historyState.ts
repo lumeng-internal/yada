@@ -5,7 +5,7 @@ export const HISTORY_LIMITS = {
   maxMs: 60_000,
   maxResumes: 3,
   idleMs: 2500,
-  pageTimeoutMs: 8000,
+  pageTimeoutMs: 10_000,
   stallRounds: 2
 } as const;
 
@@ -24,6 +24,8 @@ export type HistoryPageResult = {
   triggered: boolean;
   generation: number;
   hasSentinel: boolean;
+  nonce?: number;
+  sentinelGeneration?: number;
   hasPreviousPage?: boolean;
   cursor?: string | null;
   conversationId?: string | null;
@@ -32,6 +34,8 @@ export type HistoryPageResult = {
 export type HistoryFetchResult = {
   status: number;
   ok: boolean;
+  nonce?: number;
+  sentinelGeneration?: number;
   hasPreviousPage?: boolean;
   cursor?: string | null;
   conversationId: string | null;

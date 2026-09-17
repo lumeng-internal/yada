@@ -3,10 +3,13 @@ export type PendingJump = {
   userMessageId: string;
   index: number;
   attempted: true;
+  createdAt: number;
 };
 
 const PENDING_KEY = "chatgpt-yada:pending-jump:v1";
 const FALLBACK_PREFIX = "chatgpt-yada:message-fallback:";
+export const PENDING_TTL_MS = 60_000;
+export const PENDING_RESTORE_MS = 45_000;
 
 function storage(): Storage | null {
   try { return sessionStorage; } catch { return null; }
@@ -18,14 +21,19 @@ export function readPendingJump(): PendingJump | null {
   try {
     const parsed = JSON.parse(raw) as PendingJump;
     if (!parsed?.conversationId || !parsed.userMessageId || parsed.attempted !== true) return null;
-    return parsed;
+    const createdAt = Number(parsed.createdAt) || 0;
+    if (!createdAt || Date.now() - createdAt > PENDING_TTL_MS) {
+      storage()?.removeItem(PENDING_KEY);
+      return null;
+    }
+    return { ...parsed, createdAt };
   } catch {
     return null;
   }
 }
 
-export function writePendingJump(pending: PendingJump): void {
-  storage()?.setItem(PENDING_KEY, JSON.stringify(pending));
+export function writePendingJump(pending: Omit<PendingJump, "createdAt"> & { createdAt?: number }): void {
+  storage()?.setItem(PENDING_KEY, JSON.stringify({ ...pending, createdAt: pending.createdAt ?? Date.now() }));
 }
 
 export function clearPendingJump(): void {

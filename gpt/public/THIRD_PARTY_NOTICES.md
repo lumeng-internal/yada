@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 2.2.1
+# Third-party notices — ChatGPT Yada 2.2.2
 
 ## Intake and scope
 
