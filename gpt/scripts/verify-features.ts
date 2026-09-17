@@ -83,16 +83,19 @@ async function openPanel(): Promise<void> {
 function officialNavFixture(count: number, onClick?: (index: number) => void, attrs?: (index: number) => Record<string, string>): HTMLElement {
   const nav = el('div');
   nav.style.cssText = 'position:fixed;right:16px;top:120px;width:35px;height:500px;overflow:auto';
-  for (let i = 0; i < count; i++) {
-    const button = document.createElement('button');
-    const extra = attrs?.(i) ?? { 'data-toc-item-index': String(i) };
-    for (const [key, value] of Object.entries(extra)) button.setAttribute(key, value);
-    button.textContent = '—';
-    button.style.cssText = 'display:block;width:30px;height:8px;padding:0;border:0;margin:2px 0';
-    if (onClick) button.addEventListener('click', () => onClick(i));
-    nav.append(button);
-  }
+  for (let i = 0; i < count; i++) appendOfficialButton(nav, i, onClick, attrs?.(i));
   return nav;
+}
+
+function appendOfficialButton(nav: HTMLElement, index: number, onClick?: (index: number) => void, attrs?: Record<string, string>): HTMLButtonElement {
+  const button = document.createElement('button');
+  const extra = attrs ?? { 'data-toc-item-index': String(index) };
+  for (const [key, value] of Object.entries(extra)) button.setAttribute(key, value);
+  button.textContent = '—';
+  button.style.cssText = 'display:block;width:30px;height:8px;padding:0;border:0;margin:2px 0';
+  if (onClick) button.addEventListener('click', () => onClick(index));
+  nav.append(button);
+  return button;
 }
 
 function previewRoot(): ShadowRoot | null {
@@ -298,6 +301,138 @@ async function controllerChecks(): Promise<void> {
   pass('route change closes preview and abandons the previous conversation request');
 }
 
+async function liveRefreshChecks(): Promise<void> {
+  let payload = makeApi(18, 'fixture-live');
+  let failLoads = 0;
+  let delayMs = 0;
+  let reads = 0;
+  const readsById: Record<string, number> = {};
+  const conversationFetch = async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    if (url.includes('/api/auth/session')) return new Response('{}');
+    if (url.includes('include_full_conversation')) {
+      const id = decodeURIComponent(url.match(/\/conversation\/([^/?]+)/)?.[1] ?? '');
+      reads++;
+      readsById[id] = (readsById[id] ?? 0) + 1;
+      if (delayMs) await wait(delayMs);
+      if (failLoads > 0) {
+        failLoads--;
+        return new Response('nope', { status: 500 });
+      }
+      return new Response(JSON.stringify(payload));
+    }
+    return new Response('nope', { status: 500 });
+  };
+  Object.assign(globalThis, { fetch: conversationFetch });
+
+  controller = new NativePreviewController();
+  history.replaceState({}, '', '/c/fixture-live');
+  let clicks = 0;
+  const nav = officialNavFixture(18, () => { clicks += 1; });
+  document.body.append(nav);
+  controller.syncRoute();
+  await wait(80);
+  hover(nav.children[0] as HTMLButtonElement);
+  await until(() => previewBox()?.textContent?.includes('第 1 轮') === true, 'initial 18-turn preview missing');
+  assert(nav.querySelectorAll('button').length === 18, 'official navigation did not start with 18 buttons');
+  await wait(700);
+  const afterInitial = reads;
+  leave(nav.children[0] as HTMLButtonElement);
+  hover(nav.children[6] as HTMLButtonElement);
+  await wait(120);
+  assert(previewBox()?.textContent?.includes('第 7 轮') === true, 'mapped hover lost the existing turn');
+  assert(reads === afterInitial, 'mapped hover repeated the conversation request');
+  leave(nav.children[6] as HTMLButtonElement);
+  pass('initial API has 18 turns and 18 official buttons; mapped hover does not refetch');
+
+  payload = makeApi(19, 'fixture-live');
+  const nineteenth = appendOfficialButton(nav, 18, () => { clicks += 1; });
+  hover(nineteenth);
+  await until(() => previewBox()?.textContent?.includes('第 19 轮') === true, 'hovering the 19th official button did not refresh preview data');
+  assert(reads > afterInitial, 'unmapped 19th button did not reread the conversation');
+  nineteenth.click();
+  assert(clicks === 1, 'official 19th button click was intercepted');
+  leave(nineteenth);
+  await wait(700);
+  pass('same-route 19th official button rereads API and shows 第 19 轮; native click unchanged');
+
+  const afterNineteenth = reads;
+  payload = makeApi(30, 'fixture-live');
+  for (let i = 19; i < 30; i++) appendOfficialButton(nav, i);
+  await wait(900);
+  const stormReads = reads - afterNineteenth;
+  assert(stormReads >= 1 && stormReads <= 2, `button inserts caused a request storm: ${stormReads}`);
+  pass('rapid extra official buttons coalesce into a limited number of requests');
+
+  delayMs = 180;
+  payload = makeApi(33, 'fixture-live');
+  const pendingStart = reads;
+  const pendingButton = appendOfficialButton(nav, 30);
+  hover(pendingButton);
+  await wait(80);
+  appendOfficialButton(nav, 31);
+  appendOfficialButton(nav, 32);
+  await wait(900);
+  const pendingReads = reads - pendingStart;
+  assert(pendingReads >= 1 && pendingReads <= 2, `in-flight refresh was not coalesced: ${pendingReads}`);
+  delayMs = 0;
+  leave(pendingButton);
+  nav.remove();
+  controller.dispose();
+  controller = null;
+  pass('in-flight API plus new ticks appends at most one pending refresh');
+
+  failLoads = 1;
+  payload = makeApi(18, 'fixture-recover');
+  const recoverStart = reads;
+  controller = new NativePreviewController();
+  history.replaceState({}, '', '/c/fixture-recover');
+  const recoverNav = officialNavFixture(18);
+  document.body.append(recoverNav);
+  controller.syncRoute();
+  await wait(120);
+  assert(reads === recoverStart + 1, 'failed first load was not attempted');
+  hover(recoverNav.children[4] as HTMLButtonElement);
+  await until(() => previewBox()?.textContent?.includes('第 5 轮') === true, 'hover after a failed load did not recover preview data');
+  leave(recoverNav.children[4] as HTMLButtonElement);
+  recoverNav.remove();
+  controller.dispose();
+  controller = null;
+  pass('first API failure recovers on the next unmapped hover');
+
+  payload = makeApi(18, 'timer-old');
+  controller = new NativePreviewController();
+  history.replaceState({}, '', '/c/timer-old');
+  const oldNav = officialNavFixture(18);
+  document.body.append(oldNav);
+  controller.syncRoute();
+  await until(() => (readsById['timer-old'] ?? 0) >= 1, 'old conversation was not read');
+  hover(oldNav.children[2] as HTMLButtonElement);
+  await until(() => previewBox()?.textContent?.includes('第 3 轮') === true, 'old conversation preview missing before route change');
+  delayMs = 500;
+  payload = makeApi(19, 'timer-old');
+  appendOfficialButton(oldNav, 18);
+  payload = makeApi(2, 'timer-new');
+  delayMs = 0;
+  history.pushState({}, '', '/c/timer-new');
+  controller.syncRoute();
+  oldNav.remove();
+  const newNav = officialNavFixture(2);
+  document.body.append(newNav);
+  await wait(800);
+  hover(newNav.children[1] as HTMLButtonElement);
+  await until(() => previewBox()?.textContent?.includes('第 2 轮') === true, 'new conversation preview missing after cancelled refresh');
+  assert(!previewBox()!.textContent!.includes('第 19 轮'), 'cancelled old refresh overwrote the new conversation');
+  assert((readsById['timer-new'] ?? 0) >= 1 && (readsById['timer-new'] ?? 0) <= 2, 'route change left stale timers requesting the new conversation repeatedly');
+  leave(newNav.children[1] as HTMLButtonElement);
+  newNav.remove();
+  controller.dispose();
+  controller = null;
+  history.replaceState({}, '', '/c/fixture-1');
+  Object.assign(globalThis, { fetch: normalFetch });
+  pass('route change cancels old request/timer; old results cannot overwrite the new conversation');
+}
+
 async function run(): Promise<void> {
   if (savedChecks.length) {
     toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
@@ -314,6 +449,7 @@ async function run(): Promise<void> {
   assert(closestOfficialButton(document.createTextNode('x')) == null, 'closestOfficialButton must ignore non-elements');
   await previewViewChecks();
   await controllerChecks();
+  await liveRefreshChecks();
 
   toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
   const mode = document.getElementById('chatgpt-yada-toolbar-host')!.shadowRoot!.querySelector<HTMLButtonElement>('[data-preview-mode]')!;

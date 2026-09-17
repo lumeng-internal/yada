@@ -10,7 +10,7 @@ Positioning: a lightweight ChatGPT extension for 复制全部 + 每条消息真�
 
 The final product must stay small, focused, and easy to audit. The goal is not to merge all reference projects into one large enhancement suite.
 
-Current product direction: API-first complete conversation copy with real timestamps, a local prompt library, and hover previews on ChatGPT's official conversation navigation. Yada does not own a navigation rail, does not jump, and does not load chat history.
+Current product direction: API-first complete conversation copy with real timestamps, a local prompt library, and hover previews on ChatGPT's official conversation navigation. Yada does not own a navigation rail, does not jump, and does not load chat history. Active conversations may passively reread preview data when official TOC buttons outgrow the last snapshot; this must stay a coalesced, non-streaming refresh.
 
 ## Versioning
 
@@ -83,7 +83,7 @@ Official navigation is owned by ChatGPT:
 
 1. Complete API turns are the only authority for preview text and timestamps.
 2. ChatGPT official TOC buttons own jumping, page scrolling and final positioning.
-3. GPT Navigator Helper (installed separately, never bundled) may load earlier history so the official TOC can appear. Yada must not copy, modify, or ship that helper.
+3. GPT Navigator Helper (installed separately from the Chrome Web Store, never bundled) may load earlier history so the official TOC can appear. Preferred install: https://chromewebstore.google.com/detail/gpt-navigator-helper/bpbajpcoifjncefjgbnnafkcgmjdcdli . Source/issues: https://github.com/sssstf0rest/GPT-Navigator-Helper . Yada must not copy, modify, or ship that helper. Requires Chrome / Edge 152 or newer.
 4. Never reintroduce a custom rail, marks layer, history hydration, fetch hijacking, IntersectionObserver wrapping, `?message=` refresh, React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
 
 ## Scope Control
@@ -136,7 +136,7 @@ Before migrating any reference code or close derivative implementation, first do
 
 Default preference: re-implement the smallest needed behavior in this project using the reference only as a guide.
 
-GPT Navigator Helper has no clear source license. Never copy, modify, package, or commit its source, fonts, or assets. Mention the original repository only as a separately installed companion.
+GPT Navigator Helper has no clear source license. Never copy, modify, package, or commit its source, fonts, or assets. Prefer the Chrome Web Store listing as the install path and mention the original GitHub repository only as source and issue tracker. It is a separately installed companion, not part of Yada.
 
 ## UI Standards
 
@@ -146,9 +146,9 @@ Render `预览模式圆点 | 复制全部 | 提示词` in the header actions wit
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.0.0 is a major rewrite on the dedicated test branch `codex/gpt-native-navigation-v3`. Do not modify or push main unless the user explicitly asks. Never force push.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.0.0 is a major rewrite on the dedicated test branch `codex/gpt-native-navigation-v3`; 3.0.1 is the active-conversation preview refresh patch on the same branch. Do not modify or push main unless the user explicitly asks. Never force push.
 
-3.0.0 代码开发完成，但正式进入 main 前，仍需 MacBook 使用 GPT Navigator Helper 原版完成真实长对话验收。
+3.0.1 代码开发完成，但正式进入 main 前，仍需 MacBook 使用 GPT Navigator Helper 原版完成真实长对话验收。需要 Chrome / Edge 152 或更高。首选从 Chrome 应用商店安装 Helper，不要把 Helper 源码拷进 Yada。
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 
