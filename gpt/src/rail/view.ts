@@ -67,14 +67,14 @@ export class RailView {
     this.marks.addEventListener("click", event => {
       const button = (event.target as Element).closest<HTMLButtonElement>("button");
       const turn = button && this.turns[Number(button.dataset.index)];
-      if (turn) onJump(turn.turnContainerId);
+      if (turn) onJump(turn.userMessageId);
     });
     this.marks.addEventListener("focusin", event => { const button = (event.target as HTMLElement).closest("button"); if (button) this.hover(Number(button.dataset.index)); });
     this.marks.addEventListener("focusout", () => this.clearHover());
     this.themeDispose = observeYadaTheme(theme => this.host.setAttribute("data-yada-theme", theme));
   }
   setEntries(turns: readonly RailEntry[]): void {
-    const changed = turns.length !== this.turns.length || turns.some((turn, index) => turn.turnContainerId !== this.turns[index]?.turnContainerId);
+    const changed = turns.length !== this.turns.length || turns.some((turn, index) => turn.userMessageId !== this.turns[index]?.userMessageId);
     this.turns = turns;
     if (!changed) { if (this.hovered >= 0) this.showPreview(); return; }
     this.clearHover(); this.active = -1;
@@ -92,9 +92,16 @@ export class RailView {
     this.host.hidden = hidden || !this.turns.length;
     if (hidden) this.clearHover();
   }
+  private hydrateTitle = "";
+  private jumpMessage = "";
+  setHydrateTitle(title: string): void {
+    this.hydrateTitle = title;
+    if (!this.jumpMessage) this.host.title = title;
+  }
   setStatus(message: string): void {
     clearTimeout(this.statusTimer);
-    this.host.title = message;
+    this.jumpMessage = message;
+    this.host.title = message || this.hydrateTitle;
     let status = this.host.shadowRoot!.querySelector<HTMLElement>('[role="status"]');
     if (!status) {
       status = document.createElement('div'); status.setAttribute('role', 'status');

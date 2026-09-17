@@ -79,12 +79,19 @@ The accepted route is:
 5. Format Markdown and write it through the Clipboard API with the existing local fallback.
 6. Never report success after copying a DOM-only partial snapshot.
 
+Navigation is API-first:
+
+1. Complete API turns are the only authority for rail count, order, previews, timestamps and stable user message IDs.
+2. Official `data-turn-id-container` skeletons are materialization state only: they show which turns are currently loaded and scrollable.
+3. Native ChatGPT history pagination loads missing skeletons; Yada must not crop complete API entries down to the current skeleton window.
+4. Never reintroduce React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
+
 ## Scope Control
 
 The feature set is limited to:
 
 1. One-click copy of the current ChatGPT conversation as Markdown.
-2. Official turn-skeleton conversation navigation, active-turn tracking, container-ID jumps and Harson/Harson+ChatGPT hover previews.
+2. API-first conversation navigation with official skeleton materialization, native history hydration, container-ID jumps and Harson/Harson+ChatGPT hover previews.
 3. Local-only prompt CRUD and icon-only copying via chrome.storage.local; no search or composer insertion.
 4. Natural light/dark adaptation and existing attachment placeholders.
 
@@ -128,13 +135,13 @@ Default preference: re-implement the smallest needed behavior in this project us
 
 ## UI Standards
 
-Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official side panels reposition it, while visible official conversation navigation hides that same host until it disappears. Prompt modal has its own body-level Shadow DOM host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps and preview text. Official direct-child data-turn-id-container skeletons are authoritative for rail count, order, active turn and navigation. Never reintroduce React private-object scanning or a virtualizer bridge. Prompts only copy through SVG icon controls and never insert into the composer.
+Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official side panels reposition it, while visible official conversation navigation hides that same host until it disappears. Prompt modal has its own body-level Shadow DOM host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps, preview text, rail count and stable message IDs. Official direct-child data-turn-id-container skeletons only report which turns are currently materialized. Never crop complete API entries to the current skeleton window. Never reintroduce React private-object scanning, a virtualizer bridge, or text matching. Prompts only copy through SVG icon controls and never insert into the composer.
 
 ## Stage Discipline
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.2.0 MINOR release, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.2.1 PATCH release, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

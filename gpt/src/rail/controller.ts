@@ -1,5 +1,5 @@
 import { observeOfficialNavigation, readChatGPTOfficialNavigation } from "./officialNavigation";
-import { NativeSkeleton, findScrollRoot, syncActive, type RailEntry } from "./nativeSkeleton";
+import { NativeSkeleton, findScrollRoot, skeletonSignature, syncActive, type RailEntry } from "./nativeSkeleton";
 import { observeRouteChange } from "../utils/route";
 import { isInsideComposer } from "../conversation/composerGuard";
 import { loadCurrentConversationSnapshot } from "../conversation/normalizeConversation";
@@ -9,12 +9,22 @@ import { type ScrollRoot } from "./active";
 import { placeRail } from "./layout";
 import { jumpToTurn } from "./jump";
 import { RailView } from "./view";
+import { HistoryHydrator } from "../history/historyHydrator";
+import {
+  canUseMessageFallback,
+  clearPendingJump,
+  markMessageFallbackUsed,
+  readPendingJump,
+  replaceWithMessageQuery,
+  writePendingJump
+} from "../history/pendingNavigation";
 
 export class RailController {
   private readonly view = new RailView(id => { void this.jump(id); });
   private apiTurns: YadaTurn[] = [];
   private entries: RailEntry[] = [];
   private readonly skeleton = new NativeSkeleton();
+  private readonly hydrator: HistoryHydrator;
   private official = false;
   private officialDispose: () => void;
   private routeDispose: () => void;
@@ -34,7 +44,20 @@ export class RailController {
   private failures = 0;
   private request: AbortController | null = null;
   private jumping: AbortController | null = null;
+  private restoringPending = false;
   constructor() {
+    this.hydrator = new HistoryHydrator({
+      getConversationId: () => this.route,
+      skeletonSignature: () => skeletonSignature(this.skeleton.collect()),
+      materializedCount: () => this.entries.filter(entry => entry.materialized).length,
+      totalCount: () => this.apiTurns.length,
+      isMaterialized: id => this.entries.some(entry => entry.userMessageId === id && entry.materialized),
+      applyBindings: () => { this.refreshAnchors(); },
+      onStatus: (status, title) => {
+        this.view.host.dataset.yadaHistoryStatus = status;
+        this.view.setHydrateTitle(title);
+      }
+    });
     this.resize = new ResizeObserver(() => this.scheduleRefresh());
     this.mutation = new MutationObserver(records => {
       const relevant = records.filter(record => {
@@ -54,9 +77,11 @@ export class RailController {
     this.officialDispose = observeOfficialNavigation(() => this.syncOfficialNavigation());
     this.routeDispose = observeRouteChange(() => this.syncRoute());
     window.addEventListener("resize", this.scheduleRefresh, { passive: true });
-    window.addEventListener("wheel", this.cancelJump, { passive: true });
-    window.addEventListener("touchstart", this.cancelJump, { passive: true });
-    window.addEventListener("keydown", this.cancelJumpOnKey);
+    window.addEventListener("wheel", this.onUserInterrupt, { passive: true });
+    window.addEventListener("touchstart", this.onUserInterrupt, { passive: true });
+    window.addEventListener("pointerdown", this.onUserInterrupt, { passive: true });
+    window.addEventListener("keydown", this.onUserKey);
+    document.addEventListener("visibilitychange", this.onVisibility);
   }
   setPreviewMode(assistant: boolean): void { this.view.setPreviewMode(assistant); }
   syncRoute(): void {
@@ -66,37 +91,77 @@ export class RailController {
     clearTimeout(this.apiTimer); clearTimeout(this.refreshTimer); cancelAnimationFrame(this.raf);
     this.apiTimer = this.refreshTimer = this.raf = 0;
     this.fetching = this.pendingFetch = false; this.failures = 0; this.lastFetch = 0;
-    this.apiTurns = []; this.entries = []; this.skeleton.reset(); this.view.clearHover(); this.view.setEntries([]);
+    this.apiTurns = []; this.entries = []; this.skeleton.reset(); this.hydrator.reset(id);
+    this.view.clearHover(); this.view.setHydrateTitle(""); this.view.setEntries([]);
     this.bindRoot(null);
-    if (id) { this.refreshAnchors(); void this.fetchTurns(); }
+    if (id) { this.refreshAnchors(); void this.fetchTurns(); void this.restorePending(id); }
   }
   dispose(): void {
-    this.disposed = true; this.epoch++; this.request?.abort(); this.cancelJump();
+    this.disposed = true; this.epoch++; this.request?.abort(); this.cancelJump(); this.hydrator.dispose();
     clearTimeout(this.apiTimer); clearTimeout(this.refreshTimer); cancelAnimationFrame(this.raf);
     this.officialDispose(); this.routeDispose(); this.mutation.disconnect(); this.resize.disconnect(); this.bindRoot(null);
     window.removeEventListener("resize", this.scheduleRefresh);
-    window.removeEventListener("wheel", this.cancelJump);
-    window.removeEventListener("touchstart", this.cancelJump);
-    window.removeEventListener("keydown", this.cancelJumpOnKey);
+    window.removeEventListener("wheel", this.onUserInterrupt);
+    window.removeEventListener("touchstart", this.onUserInterrupt);
+    window.removeEventListener("pointerdown", this.onUserInterrupt);
+    window.removeEventListener("keydown", this.onUserKey);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     this.view.dispose();
   }
   private cancelJump = (): void => { this.jumping?.abort(); this.jumping = null; this.view.setStatus(""); };
-  private cancelJumpOnKey = (event: KeyboardEvent): void => {
-    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Escape', ' '].includes(event.key)) this.cancelJump();
+  private onUserInterrupt = (): void => { this.cancelJump(); this.hydrator.pause(); };
+  private onUserKey = (event: KeyboardEvent): void => {
+    if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Escape', ' '].includes(event.key)) this.onUserInterrupt();
   };
-  private async jump(id: string): Promise<void> {
+  private onVisibility = (): void => { if (document.visibilityState === "hidden") this.hydrator.pause(); };
+  private async jump(userMessageId: string): Promise<void> {
     this.cancelJump(); this.view.clearHover();
-    const entry = this.entries.find(entry => entry.turnContainerId === id);
+    const entry = this.entries.find(item => item.userMessageId === userMessageId);
     if (!entry) return;
     const request = new AbortController(); this.jumping = request;
     this.view.setStatus("定位中");
     try {
-      const found = await jumpToTurn(entry, this.entries, request.signal);
+      const found = await jumpToTurn(entry, this.entries, request.signal, {
+        materialize: async (id, signal) => {
+          const ok = await this.hydrator.materialize(id, signal);
+          this.refreshAnchors();
+          return ok ? this.entries.find(item => item.userMessageId === id) ?? null : null;
+        },
+        fallbackRefresh: () => this.useMessageFallback(entry)
+      });
       if (this.jumping !== request) return;
-      if (!request.signal.aborted) this.view.setStatus(found ? "定位成功" : "该轮暂时无法定位");
+      if (found) {
+        clearPendingJump();
+        if (!request.signal.aborted) this.view.setStatus("定位成功");
+      } else if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位");
       else this.view.setStatus("");
     } catch { if (!request.signal.aborted) this.view.setStatus("该轮暂时无法定位"); }
-    // Keep the abort handle until the next jump/input/route change: corrections continue after success.
+  }
+  private useMessageFallback(entry: RailEntry): boolean {
+    const id = this.route;
+    if (!id || this.restoringPending || !canUseMessageFallback(id)) return false;
+    writePendingJump({ conversationId: id, userMessageId: entry.userMessageId, index: entry.index, attempted: true });
+    markMessageFallbackUsed(id);
+    return replaceWithMessageQuery();
+  }
+  private async restorePending(conversationId: string): Promise<void> {
+    const pending = readPendingJump();
+    if (!pending || pending.conversationId !== conversationId) return;
+    this.restoringPending = true;
+    const epoch = this.epoch;
+    for (let i = 0; i < 40 && epoch === this.epoch && !this.disposed; i++) {
+      this.refreshAnchors();
+      const entry = this.entries.find(item => item.userMessageId === pending.userMessageId);
+      if (entry && (entry.materialized || readChatGPTOfficialNavigation().ready)) {
+        await this.jump(pending.userMessageId);
+        clearPendingJump();
+        this.restoringPending = false;
+        return;
+      }
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    clearPendingJump();
+    this.restoringPending = false;
   }
   private syncOfficialNavigation(): boolean {
     const official = readChatGPTOfficialNavigation().ready;
@@ -121,12 +186,12 @@ export class RailController {
       const snapshot = await loadCurrentConversationSnapshot({ conversationId: id, signal: request.signal });
       if (epoch !== this.epoch || this.disposed) return;
       this.failures = 0;
-      // The immutable API model is always rebound from scratch: virtual lists can recycle DOM nodes.
       this.apiTurns = snapshot.turns;
       this.refreshAnchors();
     } catch {
       if (epoch !== this.epoch || this.disposed) return;
       this.failures++;
+      this.view.setHydrateTitle("会话读取失败，等待重新读取完整会话");
       this.view.host.title = "会话读取失败，等待重新读取完整会话";
       if (this.failures <= 3) this.pendingFetch = true;
     } finally {
@@ -145,17 +210,16 @@ export class RailController {
     this.entries = this.skeleton.scan(this.apiTurns);
     this.view.setEntries(this.entries);
     this.bindRoot(findScrollRoot());
-    // Reattach the same host if the application removed it during a layout transition.
     if (!this.view.host.isConnected) document.documentElement.append(this.view.host);
     placeRail(this.view.host, this.root!, this.entries.length);
     this.syncOfficialNavigation();
     this.view.setActive(syncActive(this.entries, this.root!));
+    if (this.apiTurns.length) void this.hydrator.startAuto();
     return this.entries;
   };
   private bindRoot(root: ScrollRoot | null): void {
     if (this.root !== root) {
       this.root?.removeEventListener("scroll", this.onScroll);
-      // Document scrolling dispatches on document, internal containers on the element itself.
       document.removeEventListener("scroll", this.onScroll);
       this.root = root;
       if (root === document.scrollingElement) document.addEventListener("scroll", this.onScroll, { passive: true });

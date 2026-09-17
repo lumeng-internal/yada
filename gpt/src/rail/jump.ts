@@ -20,16 +20,35 @@ export function targetY(element: HTMLElement, root: ScrollRoot): number {
   return Math.max(0, Math.min(root.scrollHeight - root.clientHeight,
     element.getBoundingClientRect().top - viewport(root).top + root.scrollTop - headerHeight(root) - 16));
 }
-/** Resolve immediately after the initial scroll; corrections remain cancellable via signal. */
-export async function jumpToTurn(entry: RailEntry, entries: readonly RailEntry[], signal: AbortSignal): Promise<boolean> {
-  if (signal.aborted) return false;
+
+export type JumpHelpers = {
+  materialize?: (userMessageId: string, signal: AbortSignal) => Promise<RailEntry | null>;
+  fallbackRefresh?: () => boolean;
+};
+
+function usable(button: HTMLButtonElement | undefined): button is HTMLButtonElement {
+  return !!button && !button.disabled && button.getAttribute('aria-disabled') !== 'true';
+}
+
+function clickOfficial(entry: RailEntry, entries: readonly RailEntry[]): boolean {
   const buttons = officialButtons();
-  // Check the complete index sequence before interpreting a coincidental index match.
-  const ordinalIndexed = buttons.length > 1 && buttons.every((button, i) => button.dataset.tocItemIndex === String(i))
-    && buttons.some((button, i) => Number(button.dataset.tocItemIndex) !== entries[i]?.skeletonIndex);
-  const exact = buttons.find(button => button.dataset.tocItemIndex === String(entry.skeletonIndex));
-  const native = ordinalIndexed ? buttons[entry.index] : exact ?? buttons[entry.index];
-  if (native && !native.disabled && native.getAttribute('aria-disabled') !== 'true') { native.click(); return true; }
+  if (!buttons.length) return false;
+  if (buttons.length === entries.length) {
+    const ordinalIndexed = buttons.every((button, i) => button.dataset.tocItemIndex === String(i))
+      && buttons.some((button, i) => Number(button.dataset.tocItemIndex) !== entries[i]?.skeletonIndex);
+    const exact = entry.skeletonIndex == null ? undefined : buttons.find(button => button.dataset.tocItemIndex === String(entry.skeletonIndex));
+    const native = ordinalIndexed ? buttons[entry.index] : exact ?? buttons[entry.index];
+    if (usable(native)) { native.click(); return true; }
+  }
+  if (entry.skeletonIndex != null) {
+    const exact = buttons.find(button => button.dataset.tocItemIndex === String(entry.skeletonIndex));
+    if (usable(exact)) { exact.click(); return true; }
+  }
+  return false;
+}
+
+export async function scrollToSkeleton(entry: RailEntry, signal: AbortSignal): Promise<boolean> {
+  if (signal.aborted || !entry.turnContainerId) return false;
   const element = getTurnEl(entry.turnContainerId);
   if (!element) return false;
   let root = findScrollRoot(element), raf = 0, stopped = false;
@@ -51,7 +70,6 @@ export async function jumpToTurn(entry: RailEntry, entries: readonly RailEntry[]
   const start = performance.now();
   let tweenDone = !duration;
   if (!duration) root.scrollTop = y;
-  // Also watches SPA URL changes in the content script's isolated world.
   const step = (now: number): void => {
     if (stopped) return;
     if (signal.aborted || location.pathname !== route) { cancel(); return; }
@@ -66,7 +84,7 @@ export async function jumpToTurn(entry: RailEntry, entries: readonly RailEntry[]
   raf = requestAnimationFrame(step);
   for (const ms of [200, 600, 1200, 2000]) timers.push(window.setTimeout(() => {
     if (stopped || signal.aborted || location.pathname !== route) { cancel(); return; }
-    const current = getTurnEl(entry.turnContainerId);
+    const current = entry.turnContainerId ? getTurnEl(entry.turnContainerId) : null;
     if (current) {
       root = findScrollRoot(current);
       const next = targetY(current, root);
@@ -80,4 +98,23 @@ export async function jumpToTurn(entry: RailEntry, entries: readonly RailEntry[]
     const timer = window.setTimeout(finish, duration + 40);
     signal.addEventListener('abort', finish, { once: true });
   });
+}
+
+/** Resolve immediately after the initial scroll; corrections remain cancellable via signal. */
+export async function jumpToTurn(entry: RailEntry, entries: readonly RailEntry[], signal: AbortSignal, helpers?: JumpHelpers): Promise<boolean> {
+  if (signal.aborted) return false;
+  if (clickOfficial(entry, entries)) return true;
+  if (entry.materialized && entry.turnContainerId && getTurnEl(entry.turnContainerId)) {
+    return scrollToSkeleton(entry, signal);
+  }
+  if (helpers?.materialize && !entry.materialized) {
+    const next = await helpers.materialize(entry.userMessageId, signal);
+    if (signal.aborted) return false;
+    if (next) {
+      if (clickOfficial(next, entries)) return true;
+      if (next.turnContainerId && getTurnEl(next.turnContainerId)) return scrollToSkeleton(next, signal);
+    }
+  }
+  if (helpers?.fallbackRefresh?.()) return false;
+  return false;
 }
