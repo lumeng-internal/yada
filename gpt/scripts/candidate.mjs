@@ -327,15 +327,19 @@ async function main() {
       20000
     );
 
-    const firstPage = await evaluateFn(cdp, chatTarget, LIST_ITEMS, { archived: false, offset: 0 });
-    const firstPersonal = Array.isArray(firstPage)
-      ? firstPage.find((item) => item && typeof item.id === "string" && !item.gizmo && item.temporary !== true && !["tpp", "flora", "codex"].includes(String(item.origin || "").toLowerCase()))
-      : null;
-    if (firstPersonal?.id) {
-      const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${firstPersonal.id}`);
+    let personalId = null;
+    for (let page = 0; page < 4 && !personalId; page++) {
+      const items = await evaluateFn(cdp, chatTarget, LIST_ITEMS, { archived: false, offset: page * 50 });
+      if (!Array.isArray(items) || !items.length) break;
+      const hit = items.find((item) => item && typeof item.id === "string" && !item.gizmo && item.temporary !== true && !["tpp", "flora", "codex"].includes(String(item.origin || "").toLowerCase()));
+      if (hit) personalId = hit.id;
+    }
+    if (personalId) {
+      const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${personalId}`);
       createdTargetIds.add(liveTarget);
       await cdp.attach(liveTarget);
-      report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: firstPersonal.id, turnCount: 0, userIds: [] });
+      await sleep(8000);
+      report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: personalId, turnCount: 0, userIds: [] });
     }
 
     const samples = await discoverSamples(cdp, chatTarget);
@@ -590,12 +594,13 @@ async function openConversation(cdp, targetId, conversationId) {
   if (!url.includes(needle)) {
     throw new Error(`ChatGPT conversation page did not load: ${url}`);
   }
+  await sleep(8000);
   await waitFor(
     cdp,
     targetId,
     `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length > 0`,
-    "ChatGPT did not render user turns",
-    20000
+    `ChatGPT did not render user turns (${await targetUrl(cdp, targetId)})`,
+    15000
   );
   await waitFor(
     cdp,
