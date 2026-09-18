@@ -70,7 +70,8 @@ const LIST_ITEMS = `async (input) => {
     id: typeof item.id === "string" ? item.id : null,
     updateTime: item.update_time ?? null,
     origin: typeof item.conversation_origin === "string" ? item.conversation_origin : null,
-    temporary: item.is_temporary_chat === true
+    temporary: item.is_temporary_chat === true,
+    gizmo: typeof item.gizmo_id === "string" && item.gizmo_id.length > 0
   }));
 }`;
 
@@ -481,27 +482,30 @@ async function discoverSamples(cdp, targetId) {
   }
 
   const deadline = Date.now() + 30_000;
-  let inspected = 0;
+  const queued = [];
   for (const archived of [false, true]) {
-    for (let page = 0; page < 4 && Date.now() < deadline && inspected < 200; page++) {
-        const items = await evaluateFn(cdp, targetId, LIST_ITEMS, { archived, offset: page * 50 });
+    for (let page = 0; page < 4; page++) {
+      const items = await evaluateFn(cdp, targetId, LIST_ITEMS, { archived, offset: page * 50 });
       if (!Array.isArray(items) || !items.length) break;
-      for (const item of items) {
-        if (Date.now() >= deadline || inspected >= 200) break;
-        inspected += 1;
-        const origin = typeof item.origin === "string" ? item.origin : "";
-        if (["tpp", "flora", "codex"].includes(origin.toLowerCase()) || item.temporary === true) continue;
-        if (typeof item.id !== "string") continue;
-        const summary = await readSummary(cdp, targetId, item.id);
-        if (!summary || summary.isWork || summary.temporary) continue;
-        const type = sampleTypeFor(summary.turnCount);
-        if (type && !found[type]) found[type] = { ...summary, sampleType: type };
-        if (summary.duplicate && !found.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
-        if (found.short && found.medium && found.long && found.duplicate) {
-          writeRegistry(found);
-          return found;
-        }
-      }
+      queued.push(...items);
+    }
+  }
+  queued.sort((a, b) => Number(Boolean(a?.gizmo)) - Number(Boolean(b?.gizmo)));
+  let inspected = 0;
+  for (const item of queued) {
+    if (Date.now() >= deadline || inspected >= 200) break;
+    const origin = typeof item.origin === "string" ? item.origin : "";
+    if (["tpp", "flora", "codex"].includes(origin.toLowerCase()) || item.temporary === true) continue;
+    if (typeof item.id !== "string") continue;
+    inspected += 1;
+    const summary = await readSummary(cdp, targetId, item.id);
+    if (!summary || summary.isWork || summary.temporary) continue;
+    const type = sampleTypeFor(summary.turnCount);
+    if (type && !found[type]) found[type] = { ...summary, sampleType: type };
+    if (summary.duplicate && !found.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
+    if (found.short && found.medium && found.long && found.duplicate) {
+      writeRegistry(found);
+      return found;
     }
   }
   writeRegistry(found);
