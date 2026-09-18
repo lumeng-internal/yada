@@ -355,9 +355,10 @@ async function main() {
       const smokeIds = [...new Set([...(samples.personalIds || []), samples.best?.conversationId, samples.fallback?.conversationId].filter(Boolean))];
       let smokeError = null;
       for (const conversationId of smokeIds) {
-        const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${conversationId}`);
+        const liveTarget = await cdp.createTarget("https://chatgpt.com/");
         createdTargetIds.add(liveTarget);
         await cdp.attach(liveTarget);
+        await sleep(4000);
         try {
           report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId, turnCount: 0, userIds: [] });
           smokeError = null;
@@ -563,46 +564,54 @@ function writeRegistry(found) {
   }, null, 2)}\n`);
 }
 
-async function waitForTargetUrl(cdp, targetId, needle, message, timeoutMs = 20000) {
-  const deadline = Date.now() + timeoutMs;
-  let last = "";
-  while (Date.now() < deadline) {
-    const targets = await cdp.listTargets();
-    const target = targets.find((item) => item.targetId === targetId);
-    last = String(target?.url || "");
-    if (last.includes(needle)) return last;
-    await sleep(200);
-  }
-  throw new Error(`${message}: ${last}`);
+async function targetUrl(cdp, targetId) {
+  const targets = await cdp.listTargets();
+  return String(targets.find((item) => item.targetId === targetId)?.url || "");
 }
 
 async function openConversation(cdp, targetId, conversationId) {
   const dest = `https://chatgpt.com/c/${conversationId}`;
-  await cdp.navigate(targetId, dest);
-  await waitForTargetUrl(cdp, targetId, `/c/${conversationId}`, "ChatGPT conversation page did not load", 20000);
-  await waitFor(
-    cdp,
-    targetId,
-    `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length > 0`,
-    "ChatGPT did not render user turns",
-    30000
-  ).catch(async (error) => {
-    const diag = await evaluateFn(cdp, targetId, `() => ({
-      href: location.href,
-      users: document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length,
-      roles: document.querySelectorAll("[data-message-author-role]").length,
-      marks: document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0,
-      text: (document.body && document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 180)
-    })`).catch(() => null);
-    throw new Error(`${error.message}: ${JSON.stringify(diag)}`);
-  });
-  await waitFor(
-    cdp,
-    targetId,
-    `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length > 0`,
-    "ConversationSync did not fill the rail",
-    30000
-  );
+  const needle = `/c/${conversationId}`;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    let url = await targetUrl(cdp, targetId);
+    if (!url.includes("chatgpt.com")) {
+      await cdp.navigate(targetId, "https://chatgpt.com/");
+      await sleep(3000);
+      url = await targetUrl(cdp, targetId);
+    }
+    if (!url.includes(needle)) {
+      await cdp.evaluate(targetId, `location.assign(${JSON.stringify(dest)})`, { awaitPromise: false }).catch(() => undefined);
+      await sleep(8000);
+      url = await targetUrl(cdp, targetId);
+    }
+    if (!url.includes(needle)) {
+      await cdp.navigate(targetId, dest);
+      await sleep(8000);
+      url = await targetUrl(cdp, targetId);
+    }
+    if (!url.includes(needle)) continue;
+    const users = await evaluateFn(
+      cdp,
+      targetId,
+      `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length`
+    ).catch(() => 0);
+    if (users > 0) {
+      await waitFor(
+        cdp,
+        targetId,
+        `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length > 0`,
+        "ConversationSync did not fill the rail",
+        20000
+      );
+      return;
+    }
+  }
+  const diag = await evaluateFn(cdp, targetId, `() => ({
+    href: location.href,
+    users: document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length,
+    marks: document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0
+  })`).catch(() => null);
+  throw new Error(`ChatGPT did not render user turns: ${JSON.stringify({ url: await targetUrl(cdp, targetId), diag })}`);
 }
 
 async function liveSmoke(cdp, targetId, sample) {
