@@ -1,81 +1,110 @@
-import type { ConversationRepository } from "../core/conversationRepository";
+import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
-import { readAccountContext } from "./account";
-import { HistoryBackfill } from "./historyBackfill";
-import { toQuotaEvents } from "./usageScanner";
-
-const REFRESH_AFTER_ANSWER_MS = 1100;
+import { chatgptApi } from "../conversation/fetchConversation";
+import { readChatAccount, readModelLimits } from "./pageClient";
+import type { QuotaClassification, QuotaUsageEvent } from "./types";
+import { createChromeHistoryStore, readChatHistory } from "./vibebar/historyReader";
+import type { ChatGPTChatTurn } from "./vibebar/types";
 
 export class QuotaTracker {
   private unsubscribe: (() => void) | null = null;
-  private conversationId: string | null = null;
-  private backfill = new HistoryBackfill();
-  private answerTimer = 0;
-  private mutation: MutationObserver | null = null;
+  private ingestQueue: Promise<void> = Promise.resolve();
+  private history = createChromeHistoryStore();
   private disposed = false;
 
-  constructor(private readonly repository: ConversationRepository) {}
+  constructor(private readonly sync: ConversationSync) {}
 
   mount(): void {
-    this.unsubscribe = this.repository.subscribe((snapshot) => {
-      void this.onSnapshot(snapshot);
-    });
-    this.mutation = new MutationObserver(() => this.observeAnswerLifecycle());
-    this.mutation.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-is-streaming"] });
+    this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
     document.addEventListener("visibilitychange", this.onVisibility);
-    void this.backfill.run();
-  }
-
-  setConversationId(conversationId: string | null): void {
-    this.conversationId = conversationId;
+    void this.scanHistory();
   }
 
   async refreshCurrent(): Promise<void> {
-    if (!this.conversationId) return;
-    await this.repository.refresh(this.conversationId, "popup");
+    await this.sync.requestSync("popup");
+    await this.ingestQueue;
   }
 
   dispose(): void {
     this.disposed = true;
     this.unsubscribe?.();
     this.unsubscribe = null;
-    this.mutation?.disconnect();
-    this.mutation = null;
-    window.clearTimeout(this.answerTimer);
     document.removeEventListener("visibilitychange", this.onVisibility);
-    this.backfill.pause();
   }
 
-  private async onSnapshot(snapshot: ConversationSnapshot | null): Promise<void> {
+  private onSnapshot(snapshot: ConversationSnapshot | null): Promise<void> {
+    const work = this.writeLedger(snapshot);
+    this.ingestQueue = this.ingestQueue.then(() => work, () => work);
+    return work;
+  }
+
+  private async writeLedger(snapshot: ConversationSnapshot | null): Promise<void> {
     if (this.disposed || !snapshot) return;
-    this.conversationId = snapshot.conversationId;
-    const account = readAccountContext(snapshot.assistantEvents[0]?.workspaceKind);
-    const events = toQuotaEvents(snapshot.assistantEvents, account.accountKey, "live").map((event) => (
-      account.workspaceKind === "work" || event.workspaceKind === "work"
-        ? { ...event, workspaceKind: "work" as const, accountKey: account.accountKey }
-        : { ...event, accountKey: account.accountKey, workspaceKind: account.workspaceKind === "personal" ? event.workspaceKind === "unknown" ? account.workspaceKind : event.workspaceKind : event.workspaceKind }
-    ));
-    if (!events.length) return;
-    await chrome.runtime.sendMessage({ type: "quota/ingest", events });
+    const account = await readChatAccount();
+    const limits = await readModelLimits();
+    const classification = classifySnapshot(snapshot);
+    const events = snapshot.quotaIsWork
+      ? []
+      : toEvents(snapshot.quotaTurns, account.identity, classification);
+    await chrome.runtime.sendMessage({
+      type: "quota/ingest",
+      events,
+      plan: account.plan,
+      unclassifiedTurns: snapshot.quotaUnclassifiedTurns,
+      workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal",
+      limits,
+      historyComplete: undefined,
+      accountKey: account.identity
+    });
   }
 
-  private observeAnswerLifecycle(): void {
-    if (this.disposed || !this.conversationId) return;
-    const streaming = document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming');
-    if (streaming) {
-      window.clearTimeout(this.answerTimer);
-      this.answerTimer = 0;
-      return;
-    }
-    if (this.answerTimer) return;
-    this.answerTimer = window.setTimeout(() => {
-      this.answerTimer = 0;
-      if (this.conversationId) void this.repository.refresh(this.conversationId, "answer-complete");
-    }, REFRESH_AFTER_ANSWER_MS);
+  private async scanHistory(): Promise<void> {
+    if (this.disposed || document.visibilityState === "hidden") return;
+    const account = await readChatAccount();
+    const result = await readChatHistory({
+      transport: {
+        async request(path, signal) {
+          const response = await chatgptApi(path, { signal });
+          if (response.status === 401 || response.status === 403) throw Object.assign(new Error("login"), { name: "AbortError" });
+          if (!response.ok) throw new Error(`history ${response.status}`);
+          return response.json();
+        }
+      },
+      store: this.history,
+      identity: account.identity,
+      now: Date.now()
+    });
+    if (this.disposed) return;
+    const events = toEvents(result.turns, account.identity, "personal");
+    await chrome.runtime.sendMessage({
+      type: "quota/ingest",
+      events,
+      plan: account.plan,
+      unclassifiedTurns: result.summary.unclassifiedTurns,
+      historyComplete: result.summary.complete,
+      workspaceKind: "personal",
+      accountKey: account.identity
+    });
   }
 
   private readonly onVisibility = (): void => {
-    if (document.visibilityState === "hidden") this.backfill.pause();
-    else void this.backfill.run();
+    if (document.visibilityState === "visible") void this.scanHistory();
   };
+}
+
+function classifySnapshot(snapshot: ConversationSnapshot): QuotaClassification {
+  if (snapshot.quotaIsWork) return "work";
+  if (snapshot.quotaTemporary) return "temporary";
+  if (snapshot.quotaOrigin && snapshot.quotaOrigin !== "chat" && snapshot.quotaOrigin !== "chatgpt") return "unknown";
+  return "personal";
+}
+
+function toEvents(turns: readonly ChatGPTChatTurn[], accountKey: string, classification: QuotaClassification): QuotaUsageEvent[] {
+  return turns.map((turn) => ({
+    id: turn.id,
+    accountKey,
+    createdAt: turn.createdAt,
+    model: turn.model,
+    classification
+  }));
 }

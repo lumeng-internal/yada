@@ -1,14 +1,21 @@
-import type { BackfillStatus, QuotaSnapshot, QuotaUsageEvent, WorkspaceKind } from "../quota/types";
+import type { QuotaSnapshot, QuotaUsageEvent } from "../quota/types";
+import type { ChatGPTChatModelLimit, ChatPlan } from "../quota/vibebar/types";
 
 export type QuotaIngest = {
   type: "quota/ingest";
   events: QuotaUsageEvent[];
+  plan?: ChatPlan;
+  historyComplete?: boolean;
+  unclassifiedTurns?: number;
+  workspaceKind?: QuotaSnapshot["workspaceKind"];
+  limits?: ChatGPTChatModelLimit[];
+  accountKey?: string;
 };
 
 export type QuotaGetState = {
   type: "quota/get-state";
   accountKey?: string;
-  workspaceKind?: WorkspaceKind;
+  plan?: ChatPlan;
 };
 
 export type QuotaRefreshCurrent = {
@@ -16,30 +23,10 @@ export type QuotaRefreshCurrent = {
   conversationId: string;
 };
 
-export type QuotaBackfillStatus = {
-  type: "quota/backfill-status";
-};
-
 export type QuotaStorageChanged = {
   type: "quota/storage-changed";
   snapshot: QuotaSnapshot;
 };
 
-export type QuotaBackfillIngest = {
-  type: "quota/backfill-progress";
-  status: BackfillStatus;
-  scannedCount?: number;
-};
-
-export type QuotaGetStateResponse = {
-  snapshot: QuotaSnapshot;
-};
-
-export type YadaRequest =
-  | QuotaIngest
-  | QuotaGetState
-  | QuotaRefreshCurrent
-  | QuotaBackfillStatus
-  | QuotaBackfillIngest;
-
+export type YadaRequest = QuotaIngest | QuotaGetState | QuotaRefreshCurrent;
 export type YadaEvent = QuotaStorageChanged;

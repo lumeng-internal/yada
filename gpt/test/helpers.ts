@@ -6,6 +6,7 @@ export function message(id: string, role: "user" | "assistant", text: string, ex
     author: { role },
     recipient: "all",
     channel: role === "assistant" ? "final" : undefined,
+    status: role === "assistant" ? "finished_successfully" : undefined,
     content: { content_type: "text", parts: [text] },
     create_time: 1_700_000_000,
     ...extra
@@ -27,7 +28,7 @@ export function linearConversation(count: number, id = "conversation-1"): ApiCon
       children: i === count - 1 ? [] : [`u${i + 1}`],
       message: {
         ...message(`a${i}`, "assistant", `Assistant ${i}`),
-        metadata: { model_slug: i % 3 === 0 ? "gpt-6-pro" : i % 3 === 1 ? "gpt-5.6-sol-pro" : "gpt-5.4" }
+        metadata: { model_slug: i % 3 === 0 ? "gpt-6-pro" : i % 3 === 1 ? "gpt-5-6-pro" : "gpt-5.4" }
       }
     };
   }

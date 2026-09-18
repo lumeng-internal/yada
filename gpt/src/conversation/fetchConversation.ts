@@ -52,10 +52,23 @@ export async function fetchCurrentConversation(conversationId = getConversationI
   return fetchConversation(conversationId, signal);
 }
 
+export async function chatgptApi(path: string, init: RequestInit = {}): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", headers.get("Accept") ?? "application/json");
+  const accessToken = await getAccessToken();
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+    headers.set("X-Authorization", `Bearer ${accessToken}`);
+  }
+  const accountId = getChatGptAccountId();
+  if (accountId && !headers.has("Chatgpt-Account-Id")) {
+    headers.set("Chatgpt-Account-Id", accountId);
+  }
+  return fetch(path, { credentials: "include", cache: "no-store", ...init, headers });
+}
+
 export async function fetchConversation(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {
-  const headers: HeadersInit = {
-    Accept: "application/json"
-  };
+  const headers: HeadersInit = { Accept: "application/json" };
   const accessToken = await getAccessToken();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
@@ -65,7 +78,6 @@ export async function fetchConversation(conversationId: string, signal?: AbortSi
   if (accountId) {
     headers["Chatgpt-Account-Id"] = accountId;
   }
-
   return fetchCompleteConversation(conversationId, headers, signal);
 }
 

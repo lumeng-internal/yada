@@ -1,5 +1,6 @@
 import { calculateQuotaSnapshot } from "./calculator";
 import { EVENT_TTL_MS, LEDGER_KEY, MAX_EVENTS, STATE_KEY, type QuotaLedgerState, type QuotaPersistedState, type QuotaSnapshot, type QuotaUsageEvent } from "./types";
+import type { ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
 
 export type QuotaStorage = {
   get(keys: string[]): Promise<Record<string, unknown>>;
@@ -30,30 +31,38 @@ export class QuotaLedger {
   private queue: Promise<void> = Promise.resolve();
   constructor(private readonly storage: QuotaStorage = createChromeQuotaStorage()) {}
 
-  ingest(events: readonly QuotaUsageEvent[], now = Date.now()): Promise<QuotaSnapshot | null> {
+  ingest(events: readonly QuotaUsageEvent[], extras: {
+    now?: number;
+    plan?: ChatPlan;
+    historyComplete?: boolean;
+    unclassifiedTurns?: number;
+    limits?: readonly ChatGPTChatModelLimit[];
+    workspaceKind?: QuotaSnapshot["workspaceKind"];
+    accountKey?: string;
+  } = {}): Promise<QuotaSnapshot | null> {
     return this.serialize(async () => {
       const { ledger, state } = await this.read();
       const byId = new Map(ledger.events.map((event) => [`${event.accountKey}:${event.id}`, event]));
       for (const event of events) {
-        const key = `${event.accountKey}:${event.id}`;
-        if (!byId.has(key)) byId.set(key, event);
+        byId.set(`${event.accountKey}:${event.id}`, event);
       }
-      ledger.events = prune([...byId.values()], now);
-      const accountKey = events[0]?.accountKey;
-      if (accountKey) {
-        state.liveStartedAt[accountKey] ??= now;
-        state.lastLiveAt[accountKey] = now;
-      }
+      ledger.events = prune([...byId.values()], extras.now ?? Date.now());
+      const accountKey = extras.accountKey ?? events[0]?.accountKey ?? state.accountKey;
+      if (extras.plan !== undefined) state.plan = extras.plan;
+      if (extras.historyComplete !== undefined) state.historyComplete = extras.historyComplete;
+      if (extras.unclassifiedTurns !== undefined) state.unclassifiedTurns = extras.unclassifiedTurns;
+      if (accountKey) state.accountKey = accountKey;
       const snapshot = accountKey
         ? calculateQuotaSnapshot({
           accountKey,
-          workspaceKind: events[0]?.workspaceKind ?? "unknown",
+          plan: state.plan,
+          workspaceKind: extras.workspaceKind ?? "personal",
           events: ledger.events,
-          now,
-          liveStartedAt: state.liveStartedAt[accountKey],
-          lastLiveAt: state.lastLiveAt[accountKey],
-          writeError: state.writeError,
-          backfillStatus: "idle"
+          limits: extras.limits,
+          historyComplete: state.historyComplete,
+          unclassifiedTurns: state.unclassifiedTurns,
+          now: extras.now,
+          writeError: state.writeError
         })
         : null;
       if (snapshot) state.lastSnapshot = snapshot;
@@ -62,17 +71,28 @@ export class QuotaLedger {
     });
   }
 
-  async getSnapshot(accountKey: string, workspaceKind: QuotaSnapshot["workspaceKind"], backfillStatus: QuotaSnapshot["backfillStatus"] = "idle", now = Date.now()): Promise<QuotaSnapshot> {
+  async getSnapshot(
+    accountKey: string,
+    plan: ChatPlan,
+    extras: {
+      workspaceKind?: QuotaSnapshot["workspaceKind"];
+      historyComplete?: boolean;
+      unclassifiedTurns?: number;
+      limits?: readonly ChatGPTChatModelLimit[];
+      now?: number;
+    } = {}
+  ): Promise<QuotaSnapshot> {
     const { ledger, state } = await this.read();
     return calculateQuotaSnapshot({
       accountKey,
-      workspaceKind,
+      plan: plan ?? state.plan,
+      workspaceKind: extras.workspaceKind ?? "personal",
       events: ledger.events,
-      now,
-      liveStartedAt: state.liveStartedAt[accountKey],
-      lastLiveAt: state.lastLiveAt[accountKey],
-      writeError: state.writeError,
-      backfillStatus
+      limits: extras.limits,
+      historyComplete: extras.historyComplete ?? state.historyComplete,
+      unclassifiedTurns: extras.unclassifiedTurns ?? state.unclassifiedTurns,
+      now: extras.now,
+      writeError: state.writeError
     });
   }
 
@@ -107,28 +127,30 @@ export class QuotaLedger {
 
 export function prune(events: QuotaUsageEvent[], now: number): QuotaUsageEvent[] {
   const kept = events
-    .filter((event) => now - event.occurredAt <= EVENT_TTL_MS)
-    .sort((a, b) => a.occurredAt - b.occurredAt);
+    .filter((event) => now - event.createdAt <= EVENT_TTL_MS)
+    .sort((a, b) => a.createdAt - b.createdAt);
   return kept.length > MAX_EVENTS ? kept.slice(kept.length - MAX_EVENTS) : kept;
 }
 
 function parseLedger(value: unknown): QuotaLedgerState {
-  if (!value || typeof value !== "object") return { version: 1, events: [] };
+  if (!value || typeof value !== "object") return { version: 2, events: [] };
   const record = value as QuotaLedgerState;
-  if (record.version !== 1 || !Array.isArray(record.events)) return { version: 1, events: [] };
+  if (record.version !== 2 || !Array.isArray(record.events)) return { version: 2, events: [] };
   return {
-    version: 1,
-    events: record.events.filter((event) => event && typeof event.id === "string" && typeof event.accountKey === "string")
+    version: 2,
+    events: record.events.filter((event) => event && typeof event.id === "string" && typeof event.accountKey === "string" && typeof event.model === "string")
   };
 }
 
 function parseState(value: unknown): QuotaPersistedState {
-  if (!value || typeof value !== "object") return { version: 1, liveStartedAt: {}, lastLiveAt: {} };
+  if (!value || typeof value !== "object") return { version: 2, plan: null, historyComplete: false, unclassifiedTurns: 0 };
   const record = value as QuotaPersistedState;
   return {
-    version: 1,
-    liveStartedAt: record.liveStartedAt ?? {},
-    lastLiveAt: record.lastLiveAt ?? {},
+    version: 2,
+    accountKey: record.accountKey,
+    plan: record.plan === "pro" || record.plan === "prolite" ? record.plan : null,
+    historyComplete: record.historyComplete === true,
+    unclassifiedTurns: record.unclassifiedTurns ?? 0,
     writeError: record.writeError,
     lastSnapshot: record.lastSnapshot
   };

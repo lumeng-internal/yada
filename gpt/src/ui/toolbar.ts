@@ -1,7 +1,6 @@
-import type { ConversationRepository } from "../core/conversationRepository";
+import type { ConversationSync } from "../core/conversationSync";
 import { PromptPanel } from "../prompts/panel";
 import { PREVIEW_KEY } from "../prompts/storage";
-import { loadCurrentConversationSnapshot } from "../conversation/normalizeConversation";
 import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
@@ -23,7 +22,7 @@ export class YadaToolbar {
   private previewAssistant = false;
   constructor(
     private readonly onPreviewMode: (assistant: boolean) => void = () => {},
-    private readonly repository: ConversationRepository | null = null
+    private readonly sync: ConversationSync | null = null
   ) {}
 
   closePanels(): void { this.prompts?.close(); }
@@ -210,12 +209,14 @@ export class YadaToolbar {
 
     try {
       const id = getConversationIdFromUrl();
-      const cached = id ? this.repository?.getSnapshot(id) : this.repository?.getSnapshot();
-      const snapshot = cached
-        ?? (this.repository && id ? await this.repository.load(id) : null)
-        ?? (this.repository ? null : await loadCurrentConversationSnapshot());
+      if (id && this.sync && this.sync.getActiveConversationId() !== id) this.sync.setActiveConversation(id);
+      let snapshot = this.sync?.getSnapshot() ?? null;
+      if (!snapshot && this.sync) {
+        await this.sync.requestSync("copy");
+        snapshot = this.sync.getSnapshot();
+      }
       if (!snapshot) throw new Error("No conversation snapshot");
-      const turns = "activeTurns" in snapshot ? snapshot.activeTurns : snapshot.turns;
+      const turns = snapshot.activeTurns;
       const markdown = formatTurnsAsMarkdown(turns);
       if (!markdown) {
         this.setCopyState("empty", "没有可复制内容");

@@ -14,15 +14,11 @@ function walk(dir: string): string[] {
 describe("privacy boundary", () => {
   it("does not persist conversation bodies on quota events", () => {
     const events: QuotaUsageEvent[] = [{
-      id: "a1",
+      id: "chat-a1",
       accountKey: "account",
-      conversationId: "c1",
-      occurredAt: Date.now(),
-      observedAt: Date.now(),
-      timeSource: "message",
+      createdAt: Date.now(),
       model: "gpt-6-pro",
-      source: "live",
-      workspaceKind: "personal"
+      classification: "personal"
     }];
     expect(JSON.stringify(prune(events, Date.now()))).not.toMatch(/userMarkdown|assistantMarkdown|请总结/);
   });

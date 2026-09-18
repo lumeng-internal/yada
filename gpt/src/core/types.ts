@@ -1,29 +1,21 @@
 import type { YadaTurn } from "../conversation/types";
+import type { ChatGPTChatTurn } from "../quota/vibebar/types";
 
 export type WorkspaceKind = "personal" | "work" | "unknown";
-
-export type AssistantUsageEventCandidate = {
-  assistantMessageId: string;
-  conversationId: string;
-  createdAt: number | null;
-  observedAt: number;
-  modelSlug: string | null;
-  status: "final" | "unknown";
-  workspaceKind: WorkspaceKind;
-};
 
 export type ConversationSnapshot = {
   conversationId: string;
   revision: number;
   capturedAt: number;
   activeTurns: YadaTurn[];
-  assistantEvents: AssistantUsageEventCandidate[];
+  quotaTurns: ChatGPTChatTurn[];
+  quotaIsWork: boolean;
+  quotaUnclassifiedTurns: number;
+  quotaOrigin: string | null;
+  quotaTemporary: boolean;
   title?: string;
 };
 
-export type ConversationLoadOptions = {
-  signal?: AbortSignal;
-  force?: boolean;
-};
+export type ConversationListener = (snapshot: ConversationSnapshot | null) => void | Promise<void>;
 
-export type ConversationListener = (snapshot: ConversationSnapshot | null) => void;
+export type ReadConversation = (conversationId: string, signal?: AbortSignal) => Promise<ConversationSnapshot>;

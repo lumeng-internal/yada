@@ -1,110 +1,95 @@
-import { DAY_MS, QUOTA_RULES, WEEK_MS } from "./rules";
-import type { QuotaCoverage, QuotaMetric, QuotaPersistedState, QuotaSnapshot, QuotaUsageEvent } from "./types";
+import { allowances } from "./vibebar/allowances";
+import { proBuckets } from "./vibebar/conversationParser";
+import type { ChatGPTChatModelLimit, ChatGPTChatTurn, ChatPlan } from "./vibebar/types";
+import type { QuotaCoverage, QuotaMetric, QuotaSnapshot, QuotaUsageEvent } from "./types";
 
 export function calculateQuotaSnapshot(input: {
   accountKey: string;
+  plan: ChatPlan;
   workspaceKind: QuotaSnapshot["workspaceKind"];
   events: readonly QuotaUsageEvent[];
+  limits?: readonly ChatGPTChatModelLimit[];
+  historyComplete: boolean;
+  unclassifiedTurns: number;
   now?: number;
-  liveStartedAt?: number;
-  lastLiveAt?: number;
   writeError?: string;
-  backfillStatus: QuotaSnapshot["backfillStatus"];
 }): QuotaSnapshot {
   const now = input.now ?? Date.now();
-  const personal = input.events.filter((event) =>
-    event.accountKey === input.accountKey && event.workspaceKind === "personal"
+  const countable = input.events.filter((event) =>
+    event.accountKey === input.accountKey
+    && (event.classification === "personal" || event.classification === "temporary")
   );
-  const unknownModelCount = personal.filter((event) => event.model === "unknown").length;
-  const gpt6 = personal.filter((event) => event.model === "gpt-6-pro");
-  const sol = personal.filter((event) => event.model === "gpt-5.6-sol-pro");
-  const usedObservedTime = personal.some((event) => event.timeSource === "observed");
-  const degraded = Boolean(input.writeError)
-    || unknownModelCount > 0
-    || usedObservedTime
-    || input.backfillStatus === "error"
-    || input.workspaceKind === "unknown";
-
-  const gpt6ProWeekly = metric(QUOTA_RULES.gpt6ProWeekly, gpt6, now, WEEK_MS, coverageFor(input, now, WEEK_MS, degraded));
-  const solProDaily = metric(QUOTA_RULES.solProDaily, sol, now, DAY_MS, coverageFor(input, now, DAY_MS, degraded));
-  const combinedEvents = personal.filter((event) => event.model === "gpt-6-pro" || event.model === "gpt-5.6-sol-pro");
-  const combinedDaily = metric(QUOTA_RULES.combinedDaily, combinedEvents, now, DAY_MS, coverageFor(input, now, DAY_MS, degraded));
-
-  const coverages = [gpt6ProWeekly.coverage, solProDaily.coverage, combinedDaily.coverage];
-  const coverageLabel = coverages.includes("degraded") || coverages.includes("partial")
-    ? coverages.includes("degraded") ? "数据不完整" : "历史估算"
-    : "完整";
-  const ratios = [gpt6ProWeekly, solProDaily, combinedDaily]
-    .filter((item) => item.coverage === "complete-local")
-    .map((item) => item.remainingRatio);
-  const tightestRemainingPercent = ratios.length ? Math.round(Math.min(...ratios) * 100) : null;
-
+  const turns: ChatGPTChatTurn[] = countable.map((event) => ({
+    id: event.id,
+    createdAt: event.createdAt,
+    model: event.model
+  }));
+  const allowanceList = allowances(input.plan);
+  const buckets = proBuckets(allowanceList, turns, input.limits ?? [], input.historyComplete && !input.writeError, now)
+    .map((bucket) => toMetric(bucket, input.limits ?? []));
+  const gpt6ProWeekly = buckets.find((bucket) => bucket.id === "gpt6_pro_weekly") ?? null;
+  const solProDaily = buckets.find((bucket) => bucket.id === "sol_pro_daily") ?? null;
+  const combinedDaily = buckets.find((bucket) => bucket.id === "pro_daily") ?? buckets.find((bucket) => bucket.id === "pro_weekly") ?? null;
+  const coverages = buckets.map((bucket) => bucket.coverage);
+  const coverageLabel: QuotaSnapshot["coverageLabel"] = input.plan == null || coverages.includes("degraded")
+    ? "数据不完整"
+    : coverages.includes("partial") || !input.historyComplete
+      ? "历史估算"
+      : "完整";
+  const ratios = buckets
+    .map((bucket) => bucket.remainingRatio)
+    .filter((value): value is number => value != null);
+  const fallbackModel = (input.limits ?? []).map((limit) => limit.fallbackModel).find((value): value is string => !!value) ?? null;
   return {
     accountKey: input.accountKey,
+    plan: input.plan,
     workspaceKind: input.workspaceKind,
     updatedAt: now,
-    gpt6ProWeekly,
-    solProDaily,
+    gpt6ProWeekly: gpt6ProWeekly ?? (input.plan === "prolite" ? combinedDaily : null),
+    solProDaily: solProDaily ?? (input.plan === "prolite" ? combinedDaily : null),
     combinedDaily,
-    unknownModelCount,
-    recordedCount: personal.length,
-    ruleId: QUOTA_RULES.id,
-    ruleDate: QUOTA_RULES.effectiveFrom,
-    backfillStatus: input.backfillStatus,
+    buckets,
+    unclassifiedTurns: input.unclassifiedTurns,
+    recordedCount: countable.length,
+    historyComplete: input.historyComplete,
     coverageLabel,
-    tightestRemainingPercent,
-    personalProEligible: input.workspaceKind === "personal"
+    tightestRemainingPercent: ratios.length ? Math.round(Math.min(...ratios) * 100) : null,
+    personalProEligible: input.workspaceKind !== "work" && input.plan != null,
+    serverLimits: [...(input.limits ?? [])],
+    fallbackModel,
+    updatedLabel: "刚刚更新"
   };
 }
 
-export function coverageFromState(
-  state: QuotaPersistedState | undefined
-): Pick<QuotaPersistedState, "liveStartedAt" | "lastLiveAt" | "writeError"> {
-  return {
-    liveStartedAt: state?.liveStartedAt ?? {},
-    lastLiveAt: state?.lastLiveAt ?? {},
-    writeError: state?.writeError
-  };
-}
-
-function coverageFor(
-  input: {
-    liveStartedAt?: number;
-    lastLiveAt?: number;
-    writeError?: string;
-    backfillStatus: QuotaSnapshot["backfillStatus"];
-    workspaceKind: QuotaSnapshot["workspaceKind"];
-  },
-  now: number,
-  windowMs: number,
-  degraded: boolean
-): QuotaCoverage {
-  if (degraded) return "degraded";
-  if (!input.liveStartedAt || now - input.liveStartedAt < windowMs) return "partial";
-  if (input.backfillStatus === "running" || input.backfillStatus === "paused") return "partial";
-  if (input.lastLiveAt && now - input.lastLiveAt > windowMs) return "partial";
-  return "complete-local";
-}
-
-function metric(
-  limit: number,
-  events: readonly QuotaUsageEvent[],
-  now: number,
-  windowMs: number,
-  coverage: QuotaCoverage
+function toMetric(
+  bucket: ReturnType<typeof proBuckets>[number],
+  limits: readonly ChatGPTChatModelLimit[]
 ): QuotaMetric {
-  const inWindow = events
-    .filter((event) => event.occurredAt > now - windowMs)
-    .sort((a, b) => a.occurredAt - b.occurredAt);
-  const used = inWindow.length;
-  const estimatedRemaining = Math.max(0, limit - used);
-  const oldest = inWindow[0];
+  const remaining = bucket.quantity.remaining;
+  const limit = bucket.quantity.limit ?? 0;
+  const used = bucket.quantity.used ?? 0;
+  const exhausted = remaining === 0 && bucket.quantity.used === limit && !bucket.hasRollingReset;
+  const coverage: QuotaCoverage = exhausted
+    ? "complete-local"
+    : bucket.quantity.coverageComplete
+      ? "complete-local"
+      : "partial";
+  const serverResetAt = exhausted ? bucket.resetAt : null;
+  const fallbackModel = exhausted
+    ? limits.find((limitItem) => bucket.id.includes("gpt6") ? limitItem.model === "gpt-6-pro" : limitItem.model === "gpt-5-6-pro")?.fallbackModel ?? limits[0]?.fallbackModel ?? null
+    : null;
   return {
+    id: bucket.id,
+    title: bucket.title,
+    group: bucket.groupTitle,
     limit,
     used,
-    estimatedRemaining,
-    remainingRatio: limit <= 0 ? 0 : estimatedRemaining / limit,
-    nextReleaseAt: oldest ? oldest.occurredAt + windowMs : null,
-    coverage
+    estimatedRemaining: remaining,
+    remainingRatio: remaining == null || limit <= 0 ? null : remaining / limit,
+    nextReleaseAt: bucket.hasRollingReset ? bucket.resetAt : null,
+    serverResetAt,
+    coverage,
+    exhausted,
+    fallbackModel
   };
 }

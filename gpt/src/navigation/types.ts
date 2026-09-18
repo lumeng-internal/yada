@@ -6,7 +6,7 @@ export type NavigationStatus =
   | "unresolved"
   | "failed";
 
-export type NavigationPath = "direct" | "official" | "virtual";
+export type NavigationPath = "direct" | "virtual";
 
 export type NavigationResult = {
   ok: boolean;

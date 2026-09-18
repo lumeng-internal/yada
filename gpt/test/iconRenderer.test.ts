@@ -1,9 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { remainingToRatio, renderQuotaIcons, ringGeometry } from "../src/quota/iconRenderer";
 import { snapshotTitle, snapshotToRings } from "../src/quota/iconState";
 import { calculateQuotaSnapshot } from "../src/quota/calculator";
-import { QUOTA_RULES } from "../src/quota/rules";
-import type { QuotaUsageEvent } from "../src/quota/types";
 
 describe("icon renderer", () => {
   it("generates 16/32/48/128 image data with remaining mapped to ring fill", () => {
@@ -19,15 +17,15 @@ describe("icon renderer", () => {
   it("uses ? when coverage is incomplete and never says official remaining", () => {
     const snapshot = calculateQuotaSnapshot({
       accountKey: "a",
+      plan: "pro",
       workspaceKind: "personal",
       events: [],
-      backfillStatus: "running"
+      historyComplete: false,
+      unclassifiedTurns: 0
     });
     const rings = snapshotToRings(snapshot);
     expect(rings.center).toBe("?");
     const title = snapshotTitle(snapshot);
-    expect(title).toContain("预计剩余");
     expect(title).not.toMatch(/官方/);
-    expect(QUOTA_RULES.id).toContain("2026-09-18");
   });
 });

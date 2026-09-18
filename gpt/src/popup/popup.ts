@@ -27,7 +27,7 @@ function renderLoading(root: HTMLElement, manual: boolean): void {
 function render(root: HTMLElement, snapshot: QuotaSnapshot): void {
   root.replaceChildren();
   const header = el("div", "header");
-  header.append(el("h1", "", "Pro 模型额度"), el("time", "", "刚刚更新"));
+  header.append(el("h1", "", "Pro 模型额度"), el("time", "", snapshot.updatedLabel));
   root.append(header);
 
   const rings = el("div", "rings");
@@ -45,17 +45,27 @@ function render(root: HTMLElement, snapshot: QuotaSnapshot): void {
   rings.append(canvas);
   root.append(rings);
 
-  root.append(metricBlock("GPT-6 Pro · 本周", snapshot.gpt6ProWeekly, snapshot.coverageLabel, snapshot.recordedCount, "#ff375f"));
-  root.append(metricBlock("GPT-5.6 Sol Pro · 今日", snapshot.solProDaily, snapshot.coverageLabel, null, "#9cd326"));
-  root.append(metricBlock("两个 Pro · 今日合计", snapshot.combinedDaily, snapshot.coverageLabel, null, "#1ad6d0"));
+  if (!snapshot.plan) {
+    root.append(el("p", "warn", "未确认 ChatGPT 套餐，不猜测额度桶。"));
+  } else if (snapshot.plan === "prolite") {
+    root.append(metricBlock("两个 Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
+  } else {
+    root.append(metricBlock("GPT-6 Pro · 过去 7 天估算", snapshot.gpt6ProWeekly, snapshot));
+    root.append(metricBlock("GPT-5.6 Sol Pro · 过去 24 小时估算", snapshot.solProDaily, snapshot));
+    root.append(metricBlock("两个 Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
+  }
 
-  root.append(el("p", "rule", `规则日期：${snapshot.ruleDate}`));
+  root.append(el("p", "note", "预计剩余"));
+  root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
   root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
+  root.append(el("p", "note", snapshot.historyComplete ? "历史同步完整" : "历史同步不完整"));
+  root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
+  root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
+  if (snapshot.fallbackModel) {
+    root.append(el("p", "note", `当前 fallback 模型：${snapshot.fallbackModel}`));
+  }
   if (!snapshot.personalProEligible) {
     root.append(el("p", "warn", "当前工作区不计入个人 Pro Chat 额度"));
-  }
-  if (snapshot.unknownModelCount > 0) {
-    root.append(el("p", "warn", `有 ${snapshot.unknownModelCount} 次模型未识别`));
   }
 
   const button = document.createElement("button");
@@ -65,32 +75,36 @@ function render(root: HTMLElement, snapshot: QuotaSnapshot): void {
   root.append(button);
 }
 
-function metricBlock(title: string, metric: QuotaMetric, coverageLabel: string, recorded: number | null, color: string): HTMLElement {
+function metricBlock(title: string, metric: QuotaMetric | null, snapshot: QuotaSnapshot): HTMLElement {
   const wrap = el("section", "metric");
   wrap.append(el("div", "metric-title", title));
+  if (!metric) {
+    wrap.append(el("p", "note", "当前套餐无此桶"));
+    return wrap;
+  }
   const row = el("div", "metric-row");
-  const remaining = metric.coverage === "complete-local"
-    ? `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`
-    : `预计剩余不超过 ${metric.estimatedRemaining} / ${metric.limit}`;
+  const remaining = metric.estimatedRemaining == null
+    ? `已记录 ${metric.used} / ${metric.limit}`
+    : `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
   row.append(document.createTextNode(remaining));
-  const percent = metric.coverage === "complete-local" ? `${Math.round(metric.remainingRatio * 100)}%` : "?";
+  const percent = metric.remainingRatio == null ? "?" : `${Math.round(metric.remainingRatio * 100)}%`;
   row.append(el("span", "", percent));
   wrap.append(row);
   const bar = el("div", "bar");
   const fill = document.createElement("span");
-  fill.style.width = `${remainingToRatio(metric.estimatedRemaining, metric.limit) * 100}%`;
-  fill.style.background = color;
+  fill.style.width = `${remainingToRatio(metric.estimatedRemaining ?? 0, metric.limit) * 100}%`;
+  fill.style.background = metric.id.includes("gpt6") ? "#ff375f" : metric.id.includes("sol") ? "#9cd326" : "#1ad6d0";
   bar.append(fill);
   wrap.append(bar);
-  if (recorded != null) wrap.append(el("p", "note", `已记录 ${recorded}`));
-  wrap.append(el("p", "note", coverageText(coverageLabel)));
+  if (metric.nextReleaseAt) wrap.append(el("p", "note", `下一次释放 ${formatTime(metric.nextReleaseAt)}`));
+  if (metric.serverResetAt) wrap.append(el("p", "note", `服务端真实恢复时间 ${formatTime(metric.serverResetAt)}`));
+  if (metric.exhausted) wrap.append(el("p", "warn", "该模型已耗尽"));
+  wrap.append(el("p", "note", snapshot.coverageLabel === "完整" ? "统计完整" : snapshot.historyComplete ? "历史估算" : "历史同步不完整"));
   return wrap;
 }
 
-function coverageText(label: string): string {
-  if (label === "完整") return "统计完整";
-  if (label === "历史估算") return "历史估算";
-  return "数据不完整";
+function formatTime(value: number): string {
+  return new Date(value).toLocaleString();
 }
 
 function el(tag: string, className = "", text = ""): HTMLElement {

@@ -1,30 +1,29 @@
-import type { ConversationRepository } from "../core/conversationRepository";
+import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
 import type { NavigatorController } from "../navigation/navigatorController";
-import { OfficialNavSuppressor } from "../navigation/officialNavSuppressor";
 import { findScrollRoot, readVisibleUserMessageId, type ScrollRoot } from "./active";
 import { placeRail } from "./layout";
 import { RailView } from "./view";
 
 export class YadaRailController {
   private readonly view: RailView;
-  private readonly suppressor = new OfficialNavSuppressor();
   private unsubscribe: (() => void) | null = null;
   private snapshot: ConversationSnapshot | null = null;
   private root: ScrollRoot | null = null;
   private disposed = false;
   private raf = 0;
   private jumping = false;
+  private jumpGeneration = 0;
 
   constructor(
-    private readonly repository: ConversationRepository,
+    private readonly sync: ConversationSync,
     private readonly navigator: NavigatorController
   ) {
     this.view = new RailView((id) => { void this.jump(id); });
   }
 
   mount(): void {
-    this.unsubscribe = this.repository.subscribe((snapshot) => this.onSnapshot(snapshot));
+    this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
     window.addEventListener("resize", this.onLayout, { passive: true });
     window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
     this.root = findScrollRoot();
@@ -39,7 +38,6 @@ export class YadaRailController {
     this.snapshot = null;
     this.view.setTurns([]);
     this.view.clearHover();
-    this.suppressor.disable();
   }
 
   dispose(): void {
@@ -50,7 +48,6 @@ export class YadaRailController {
     window.removeEventListener("resize", this.onLayout);
     window.removeEventListener("scroll", this.onScroll, true);
     this.root?.removeEventListener("scroll", this.onScroll);
-    this.suppressor.dispose();
     this.view.dispose();
   }
 
@@ -60,20 +57,19 @@ export class YadaRailController {
     const turns = snapshot?.activeTurns ?? [];
     this.view.setTurns(turns);
     if (turns.length) {
-      this.suppressor.enable();
       this.layout();
       this.syncActive();
-    } else {
-      this.suppressor.disable();
     }
   }
 
   private async jump(turnId: string): Promise<void> {
-    if (this.jumping) this.navigator.cancel();
+    const generation = ++this.jumpGeneration;
+    this.navigator.cancel();
     this.jumping = true;
     this.view.setStatus("定位中");
     try {
       const result = await this.navigator.navigateTo(turnId);
+      if (generation !== this.jumpGeneration) return;
       if (result.status === "cancelled") {
         this.view.setStatus("");
         return;
@@ -85,7 +81,7 @@ export class YadaRailController {
       this.view.setStatus("");
       this.syncActive();
     } finally {
-      this.jumping = false;
+      if (generation === this.jumpGeneration) this.jumping = false;
     }
   }
 

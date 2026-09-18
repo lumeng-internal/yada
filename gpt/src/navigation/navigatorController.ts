@@ -1,4 +1,4 @@
-import type { ConversationRepository } from "../core/conversationRepository";
+import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
 import type { YadaTurn } from "../conversation/types";
 import { NavigationPort } from "./navigationPort";
@@ -9,16 +9,16 @@ export class NavigatorController {
   private snapshot: ConversationSnapshot | null = null;
   private unsubscribe: (() => void) | null = null;
 
-  constructor(private readonly repository: ConversationRepository) {}
+  constructor(private readonly sync: ConversationSync) {}
 
   mount(): void {
-    this.unsubscribe = this.repository.subscribe((snapshot) => {
+    this.unsubscribe = this.sync.subscribe((snapshot) => {
       this.snapshot = snapshot;
     });
   }
 
   async navigateTo(turnId: string, signal?: AbortSignal): Promise<NavigationResult> {
-    const snapshot = this.snapshot ?? this.repository.getSnapshot();
+    const snapshot = this.snapshot ?? this.sync.getSnapshot();
     if (!snapshot) return { ok: false, status: "failed" };
     return this.port.navigateTo(turnId, snapshot.activeTurns, snapshot.conversationId, { signal });
   }

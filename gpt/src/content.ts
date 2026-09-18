@@ -1,4 +1,4 @@
-import { ConversationRepository } from "./core/conversationRepository";
+import { ConversationSync } from "./core/conversationSync";
 import { NavigatorController } from "./navigation/navigatorController";
 import { isChatGptConversationPage, isChatGptPage, getConversationIdFromUrl } from "./platform/chatgptAdapter";
 import { QuotaTracker } from "./quota/tracker";
@@ -7,7 +7,7 @@ import { YadaToolbar } from "./ui/toolbar";
 import { observeRouteChange } from "./utils/route";
 
 class ChatGptYadaApp {
-  private readonly repository = new ConversationRepository();
+  private readonly sync = new ConversationSync();
   private navigator: NavigatorController | null = null;
   private rail: YadaRailController | null = null;
   private toolbar: YadaToolbar | null = null;
@@ -16,13 +16,14 @@ class ChatGptYadaApp {
   private messageDispose: (() => void) | null = null;
 
   mount(): void {
-    this.navigator = new NavigatorController(this.repository);
+    this.sync.mountPageObserver();
+    this.navigator = new NavigatorController(this.sync);
     this.navigator.mount();
-    this.rail = new YadaRailController(this.repository, this.navigator);
+    this.rail = new YadaRailController(this.sync, this.navigator);
     this.rail.mount();
-    this.quota = new QuotaTracker(this.repository);
+    this.quota = new QuotaTracker(this.sync);
     this.quota.mount();
-    this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.repository);
+    this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.sync);
     this.toolbar.mount();
     this.syncPageState();
     this.routeDispose = observeRouteChange(() => {
@@ -31,8 +32,16 @@ class ChatGptYadaApp {
       this.navigator?.cancel();
       this.syncPageState();
     });
-    const onMessage = (message: { type?: string; conversationId?: string }): void => {
-      if (message?.type === "quota/refresh-current") void this.quota?.refreshCurrent();
+    const onMessage = (
+      message: { type?: string; conversationId?: string },
+      _sender: chrome.runtime.MessageSender,
+      sendResponse: (response?: unknown) => void
+    ): boolean => {
+      if (message?.type !== "quota/refresh-current") return false;
+      void this.quota?.refreshCurrent()
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) => sendResponse({ error: String(error) }));
+      return true;
     };
     chrome.runtime.onMessage.addListener(onMessage);
     this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
@@ -51,7 +60,7 @@ class ChatGptYadaApp {
     this.navigator = null;
     this.toolbar?.dispose();
     this.toolbar = null;
-    this.repository.dispose();
+    this.sync.dispose();
   };
 
   private syncPageState(): void {
@@ -59,9 +68,7 @@ class ChatGptYadaApp {
     this.toolbar?.setVisible(isChatGptPage());
     const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector<HTMLButtonElement>("[data-copy-all]");
     if (copy) copy.hidden = !isChatGptConversationPage();
-    const id = getConversationIdFromUrl();
-    this.quota?.setConversationId(id);
-    this.repository.setActiveConversation(id);
+    this.sync.setActiveConversation(getConversationIdFromUrl());
   }
 }
 

@@ -1,46 +1,50 @@
-export type ProModelKind = "gpt-6-pro" | "gpt-5.6-sol-pro" | "other" | "unknown";
-export type WorkspaceKind = "personal" | "work" | "unknown";
-export type QuotaTimeSource = "message" | "observed";
-export type QuotaEventSource = "live" | "history";
+import type { ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
+
 export type QuotaCoverage = "partial" | "complete-local" | "degraded";
+
+export type QuotaClassification = "personal" | "work" | "unknown" | "temporary";
 
 export type QuotaUsageEvent = {
   id: string;
   accountKey: string;
-  conversationId: string;
-  occurredAt: number;
-  observedAt: number;
-  timeSource: QuotaTimeSource;
-  model: ProModelKind;
-  source: QuotaEventSource;
-  workspaceKind: WorkspaceKind;
-  modelSlug?: string;
+  createdAt: number;
+  model: string;
+  classification: QuotaClassification;
 };
 
 export type QuotaMetric = {
+  id: string;
+  title: string;
+  group: string;
   limit: number;
   used: number;
-  estimatedRemaining: number;
-  remainingRatio: number;
+  estimatedRemaining: number | null;
+  remainingRatio: number | null;
   nextReleaseAt: number | null;
+  serverResetAt: number | null;
   coverage: QuotaCoverage;
+  exhausted: boolean;
+  fallbackModel: string | null;
 };
 
 export type QuotaSnapshot = {
   accountKey: string;
-  workspaceKind: WorkspaceKind;
+  plan: ChatPlan;
+  workspaceKind: "personal" | "work" | "unknown";
   updatedAt: number;
-  gpt6ProWeekly: QuotaMetric;
-  solProDaily: QuotaMetric;
-  combinedDaily: QuotaMetric;
-  unknownModelCount: number;
+  gpt6ProWeekly: QuotaMetric | null;
+  solProDaily: QuotaMetric | null;
+  combinedDaily: QuotaMetric | null;
+  buckets: QuotaMetric[];
+  unclassifiedTurns: number;
   recordedCount: number;
-  ruleId: string;
-  ruleDate: string;
-  backfillStatus: BackfillStatus;
+  historyComplete: boolean;
   coverageLabel: "完整" | "历史估算" | "数据不完整";
   tightestRemainingPercent: number | null;
   personalProEligible: boolean;
+  serverLimits: ChatGPTChatModelLimit[];
+  fallbackModel: string | null;
+  updatedLabel: string;
 };
 
 export type BackfillStatus =
@@ -49,33 +53,25 @@ export type BackfillStatus =
   | "paused"
   | "complete"
   | "unavailable"
-  | "error";
+  | "error"
+  | "incomplete";
 
 export type QuotaLedgerState = {
-  version: 1;
+  version: 2;
   events: QuotaUsageEvent[];
 };
 
 export type QuotaPersistedState = {
-  version: 1;
-  liveStartedAt: Record<string, number>;
-  lastLiveAt: Record<string, number>;
-  writeError?: string;
+  version: 2;
+  accountKey?: string;
+  plan: ChatPlan;
+  historyComplete: boolean;
+  unclassifiedTurns: number;
   lastSnapshot?: QuotaSnapshot;
+  writeError?: string;
 };
 
-export type QuotaBackfillState = {
-  version: 1;
-  status: BackfillStatus;
-  cutoffAt: number;
-  scanned: Record<string, number>;
-  cursorOffset: number;
-  updatedAt: number;
-  error?: string;
-};
-
-export const LEDGER_KEY = "chatgpt-yada:quota-ledger:v1";
-export const STATE_KEY = "chatgpt-yada:quota-state:v1";
-export const BACKFILL_KEY = "chatgpt-yada:quota-backfill:v1";
+export const LEDGER_KEY = "chatgpt-yada:quota-ledger:v2";
+export const STATE_KEY = "chatgpt-yada:quota-state:v2";
 export const MAX_EVENTS = 5000;
 export const EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1000;

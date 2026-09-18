@@ -1,7 +1,7 @@
 import { QuotaLedger } from "../quota/ledger";
 import { applyQuotaIcon, nextAlarmAt } from "../quota/iconState";
 import { calculateQuotaSnapshot } from "../quota/calculator";
-import { BACKFILL_KEY, type BackfillStatus, type QuotaBackfillState, type QuotaSnapshot, type WorkspaceKind } from "../quota/types";
+import { STATE_KEY, type QuotaSnapshot } from "../quota/types";
 import type { QuotaGetState, QuotaIngest, YadaRequest } from "../shared/messages";
 
 const ALARM_NAME = "chatgpt-yada-quota-window";
@@ -11,9 +11,7 @@ chrome.runtime.onInstalled.addListener(() => { void restore(); });
 chrome.runtime.onStartup.addListener(() => { void restore(); });
 chrome.storage.onChanged.addListener((changes, area) => {
   if (area !== "local") return;
-  if (changes["chatgpt-yada:quota-ledger:v1"] || changes["chatgpt-yada:quota-state:v1"] || changes[BACKFILL_KEY]) {
-    void restore();
-  }
+  if (changes["chatgpt-yada:quota-ledger:v2"] || changes[STATE_KEY]) void restore();
 });
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) void restore();
@@ -32,33 +30,33 @@ async function handle(message: YadaRequest): Promise<unknown> {
     if (tabId != null) await chrome.tabs.sendMessage(tabId, message);
     return getState({ type: "quota/get-state" });
   }
-  if (message.type === "quota/backfill-status") {
-    const backfill = await readBackfill();
-    return { status: backfill.status, scannedCount: Object.keys(backfill.scanned).length };
-  }
-  if (message.type === "quota/backfill-progress") return getState({ type: "quota/get-state" });
   return { error: "unknown-message" };
 }
 
 async function ingest(message: QuotaIngest): Promise<{ snapshot: QuotaSnapshot | null }> {
-  const snapshot = await ledger.ingest(message.events);
+  const snapshot = await ledger.ingest(message.events, {
+    plan: message.plan,
+    historyComplete: message.historyComplete,
+    unclassifiedTurns: message.unclassifiedTurns,
+    limits: message.limits,
+    workspaceKind: message.workspaceKind,
+    accountKey: message.accountKey
+  });
   if (snapshot) await publish(snapshot);
   return { snapshot };
 }
 
 async function getState(message: QuotaGetState): Promise<{ snapshot: QuotaSnapshot }> {
   const restored = await ledger.restore();
-  const accountKey = message.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "account-unknown:unknown";
-  const workspaceKind: WorkspaceKind = message.workspaceKind ?? restored.state.lastSnapshot?.workspaceKind ?? "unknown";
-  const backfill = await readBackfill();
+  const accountKey = message.accountKey ?? restored.state.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "chat-unknown";
   const snapshot = calculateQuotaSnapshot({
     accountKey,
-    workspaceKind,
+    plan: message.plan ?? restored.state.plan,
+    workspaceKind: restored.state.lastSnapshot?.workspaceKind ?? "personal",
     events: restored.ledger.events,
-    liveStartedAt: restored.state.liveStartedAt[accountKey],
-    lastLiveAt: restored.state.lastLiveAt[accountKey],
-    writeError: restored.state.writeError,
-    backfillStatus: backfill.status
+    historyComplete: restored.state.historyComplete,
+    unclassifiedTurns: restored.state.unclassifiedTurns,
+    writeError: restored.state.writeError
   });
   await publish(snapshot);
   return { snapshot };
@@ -67,16 +65,14 @@ async function getState(message: QuotaGetState): Promise<{ snapshot: QuotaSnapsh
 async function restore(): Promise<void> {
   const restored = await ledger.restore();
   const last = restored.state.lastSnapshot;
-  const accountKey = last?.accountKey ?? Object.keys(restored.state.liveStartedAt)[0] ?? "account-unknown:unknown";
-  const backfill = await readBackfill();
   const snapshot = calculateQuotaSnapshot({
-    accountKey,
-    workspaceKind: last?.workspaceKind ?? "unknown",
+    accountKey: last?.accountKey ?? restored.state.accountKey ?? "chat-unknown",
+    plan: restored.state.plan,
+    workspaceKind: last?.workspaceKind ?? "personal",
     events: restored.ledger.events,
-    liveStartedAt: restored.state.liveStartedAt[accountKey],
-    lastLiveAt: restored.state.lastLiveAt[accountKey],
-    writeError: restored.state.writeError,
-    backfillStatus: backfill.status
+    historyComplete: restored.state.historyComplete,
+    unclassifiedTurns: restored.state.unclassifiedTurns,
+    writeError: restored.state.writeError
   });
   await publish(snapshot);
 }
@@ -90,13 +86,4 @@ async function publish(snapshot: QuotaSnapshot): Promise<void> {
   } catch {
     // popup may be closed
   }
-}
-
-async function readBackfill(): Promise<QuotaBackfillState> {
-  const data = await chrome.storage.local.get(BACKFILL_KEY);
-  const value = data[BACKFILL_KEY] as QuotaBackfillState | undefined;
-  if (!value || value.version !== 1) {
-    return { version: 1, status: "idle" as BackfillStatus, cutoffAt: 0, scanned: {}, cursorOffset: 0, updatedAt: 0 };
-  }
-  return value;
 }
