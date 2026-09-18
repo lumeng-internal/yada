@@ -561,7 +561,13 @@ function writeRegistry(found) {
 }
 
 async function openConversation(cdp, targetId, conversationId) {
-  await cdp.navigate(targetId, `https://chatgpt.com/c/${conversationId}`);
+  const dest = `https://chatgpt.com/c/${conversationId}`;
+  const href = await evaluateFn(cdp, targetId, `() => location.href`).catch(() => "");
+  if (!String(href).includes("chatgpt.com")) {
+    await cdp.navigate(targetId, "https://chatgpt.com/");
+    await waitFor(cdp, targetId, `() => location.hostname.includes("chatgpt.com") && document.readyState === "complete"`, "ChatGPT home did not load", 20000);
+  }
+  await cdp.evaluate(targetId, `location.assign(${JSON.stringify(dest)})`, { awaitPromise: false }).catch(() => undefined);
   await waitFor(
     cdp,
     targetId,
@@ -576,18 +582,18 @@ async function openConversation(cdp, targetId, conversationId) {
     "Yada rail did not mount",
     20000
   );
-  const users = await waitFor(
+  await waitFor(
     cdp,
     targetId,
-    `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length`,
+    `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length > 0`,
     "ChatGPT did not render user turns",
     30000
-  ).catch(() => 0);
+  );
   await waitFor(
     cdp,
     targetId,
     `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length > 0`,
-    `ConversationSync did not fill the rail (page users=${users})`,
+    "ConversationSync did not fill the rail",
     30000
   );
 }
