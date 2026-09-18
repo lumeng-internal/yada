@@ -301,6 +301,10 @@ async function main() {
     report.fixture = "running";
     const fixtures = await runLocalFixtures(cdp, createdTargetIds);
     report.fixture = { ok: true, checks: fixtures.checks.length };
+    for (const id of [...createdTargetIds]) {
+      await cdp.closeTarget(id).catch(() => undefined);
+      createdTargetIds.delete(id);
+    }
 
     const extensions = await loadYada(cdp, distChrome);
     extensionId = extensions.id;
@@ -309,6 +313,7 @@ async function main() {
     if (extensions.name !== "ChatGPT Yada" || extensions.version !== "4.0.0") {
       throw new Error(`Yada identity mismatch: ${extensions.name} ${extensions.version}`);
     }
+    await sleep(2000);
 
     const chatTarget = await cdp.createTarget("https://chatgpt.com/");
     createdTargetIds.add(chatTarget);
@@ -601,6 +606,13 @@ async function openConversation(cdp, targetId, conversationId) {
     await sleep(250);
   }
   if (users < 1) throw new Error(`ChatGPT did not render user turns (${lastUrl})`);
+  await waitFor(
+    cdp,
+    targetId,
+    `() => Boolean(document.getElementById("chatgpt-yada-rail-host"))`,
+    "Yada content script did not mount",
+    20000
+  );
   await waitFor(
     cdp,
     targetId,
