@@ -1,4 +1,5 @@
-import { SENTINEL_TEST_ID } from "./shared";
+import { officialButtons, uniqueOfficialCount } from "../nativePreview/map";
+import { DOM_COALESCE_MS, SENTINEL_TEST_ID } from "./shared";
 
 const EXPOSE_STYLES: Array<{ property: string; value: string; priority: string }> = [
   { property: "position", value: "sticky", priority: "important" },
@@ -25,6 +26,93 @@ let exposed: ExposedSentinel | null = null;
 export function paginationSentinels(root: ParentNode = document): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(`[data-testid="${SENTINEL_TEST_ID}"], [data-testid*="${SENTINEL_TEST_ID}"]`)]
     .filter(node => node.isConnected);
+}
+
+export function uniquePaginationSentinel(root: ParentNode = document): HTMLElement | null {
+  const sentinels = paginationSentinels(root);
+  return sentinels.length === 1 ? sentinels[0] : null;
+}
+
+export interface NativeDomSnapshot {
+  sentinelCount: number;
+  sentinels: HTMLElement[];
+  officialCount: number;
+  officialButtons: HTMLElement[];
+}
+
+const WATCHED_ATTRS = ["data-testid", "data-toc-item-index", "data-toc-active"] as const;
+
+export function readNativeDomSnapshot(root: ParentNode = document): NativeDomSnapshot {
+  const sentinels = paginationSentinels(root);
+  return {
+    sentinelCount: sentinels.length,
+    sentinels,
+    officialCount: uniqueOfficialCount(root),
+    officialButtons: officialButtons(root)
+  };
+}
+
+function mutationMatters(records: MutationRecord[]): boolean {
+  for (const record of records) {
+    if (record.type === "attributes") return true;
+    if (record.type === "childList") return true;
+  }
+  return false;
+}
+
+export class NativeDomCoordinator {
+  private observer: MutationObserver | null = null;
+  private coalesceTimer = 0;
+  private readonly listeners = new Set<(snapshot: NativeDomSnapshot) => void>();
+  private last: NativeDomSnapshot | null = null;
+
+  start(): void {
+    if (this.observer || typeof MutationObserver === "undefined") return;
+    const root = document.documentElement;
+    if (!root) return;
+    this.observer = new MutationObserver(records => {
+      if (!mutationMatters(records)) return;
+      if (this.coalesceTimer) return;
+      this.coalesceTimer = window.setTimeout(() => {
+        this.coalesceTimer = 0;
+        this.emit();
+      }, DOM_COALESCE_MS);
+    });
+    this.observer.observe(root, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: [...WATCHED_ATTRS]
+    });
+    this.emit();
+  }
+
+  stop(): void {
+    this.observer?.disconnect();
+    this.observer = null;
+    if (this.coalesceTimer) {
+      window.clearTimeout(this.coalesceTimer);
+      this.coalesceTimer = 0;
+    }
+    this.listeners.clear();
+    this.last = null;
+  }
+
+  snapshot(): NativeDomSnapshot {
+    return this.last ?? readNativeDomSnapshot();
+  }
+
+  subscribe(listener: (snapshot: NativeDomSnapshot) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
+  private emit(): void {
+    this.last = readNativeDomSnapshot();
+    for (const listener of this.listeners) listener(this.last);
+  }
 }
 
 export function conversationScrollContainer(from: Element | null = paginationSentinels()[0] ?? null): HTMLElement | null {

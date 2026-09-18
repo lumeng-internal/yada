@@ -1,24 +1,30 @@
-import { officialButtons } from "../nativePreview/map";
+import { uniqueOfficialCount } from "../nativePreview/map";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import {
   captureReadAnchor,
   conversationScrollContainer,
   exposePaginationSentinel,
-  paginationSentinels,
+  NativeDomCoordinator,
   readAnchorOffset,
   restorePaginationSentinel,
+  uniquePaginationSentinel,
+  type NativeDomSnapshot,
   type ReadAnchor
 } from "./dom";
 import { currentConversationId, isMessageDeepLink } from "./history";
 import {
+  historySessionKey,
   MAX_ACTIVE_MS,
   MAX_EXTRA_PAGES,
   MAX_RESUMES,
   MIN_USER_TURNS,
   MIN_VIEWPORT_WIDTH,
   MISSING_ANCHOR_FRAMES,
+  NATIVE_NAV_WAIT_MS,
   PREPARE_RENEW_MS,
   READ_DRIFT_PX,
+  SENTINEL_REPLACE_MS,
+  SENTINEL_WAIT_MS,
   STALLED_ROUNDS,
   USER_IDLE_MS,
   YADA_CONTENT_SOURCE,
@@ -78,6 +84,18 @@ export function visibleUserTurns(root: ParentNode = document): number {
   return root.querySelectorAll('[data-message-author-role="user"]').length;
 }
 
+export function targetUserTurns(expectedTurns: number, capturedPrompts: number): number {
+  if (expectedTurns > 0) return expectedTurns;
+  if (capturedPrompts > 0) return capturedPrompts;
+  return 0;
+}
+
+export function officialNavComplete(expectedTurns: number, capturedPrompts: number, officialCount: number): boolean {
+  const target = targetUserTurns(expectedTurns, capturedPrompts);
+  if (target < MIN_USER_TURNS || officialCount <= 0) return false;
+  return officialCount === target;
+}
+
 export function getPrepareBlockReason(ctx: PrepareContext): PrepareBlockReason | null {
   if (!ctx.conversationId) return null;
   if (ctx.deepLink) return "页面结构暂不兼容";
@@ -93,14 +111,9 @@ export function getPrepareBlockReason(ctx: PrepareContext): PrepareBlockReason |
   return null;
 }
 
-function officialNavComplete(expectedTurns: number, officialCount: number, userTurns: number): boolean {
-  if (officialCount <= 0) return false;
-  if (expectedTurns >= MIN_USER_TURNS && officialCount === expectedTurns) return true;
-  return userTurns >= MIN_USER_TURNS && officialCount === userTurns;
-}
-
 export class NativeBootstrapController {
   private history = emptyHistoryState();
+  private historyKey = "";
   private expectedTurns = 0;
   private conversationId: string | null = null;
   private disposed = false;
@@ -108,6 +121,8 @@ export class NativeBootstrapController {
   private paused = false;
   private ready = false;
   private incomplete = false;
+  private waitingDom = false;
+  private waitingNative = false;
   private reason: PrepareBlockReason | null = null;
   private resumes = 0;
   private extraPages = 0;
@@ -120,8 +135,11 @@ export class NativeBootstrapController {
   private anchor: ReadAnchor | null = null;
   private loopToken = 0;
   private stalledRounds = 0;
+  private readonly dom = new NativeDomCoordinator();
 
   constructor(private readonly onStatus: (status: PrepareStatus) => void = () => {}) {
+    this.dom.start();
+    this.dom.subscribe(this.onDom);
     window.addEventListener("message", this.onMessage);
     window.addEventListener("wheel", this.onUserIntent, { capture: true, passive: true });
     window.addEventListener("touchstart", this.onUserIntent, { capture: true, passive: true });
@@ -138,18 +156,24 @@ export class NativeBootstrapController {
   setExpectedTurns(turns: number): void {
     this.expectedTurns = Math.max(0, Math.floor(turns));
     this.publishStatus();
-    if (!this.running && !this.paused) this.maybeStart();
+    if (this.waitingNative && this.isSuccess()) {
+      this.waitingNative = false;
+      this.finishReady();
+      return;
+    }
+    if (!this.running && !this.paused && !this.waitingNative) this.maybeStart();
   }
 
   syncRoute(): void {
     const id = currentConversationId();
-    this.resetSession(id);
+    if (id !== this.conversationId) this.resetSession(id);
     if (id) this.maybeStart();
   }
 
   dispose(): void {
     this.disposed = true;
     this.stopWork("hidden");
+    this.dom.stop();
     window.removeEventListener("message", this.onMessage);
     window.removeEventListener("wheel", this.onUserIntent, true);
     window.removeEventListener("touchstart", this.onUserIntent, true);
@@ -162,6 +186,7 @@ export class NativeBootstrapController {
     this.stopWork("hidden");
     this.conversationId = id;
     this.history = emptyHistoryState(id ?? "");
+    this.historyKey = "";
     this.expectedTurns = 0;
     this.resumes = 0;
     this.extraPages = 0;
@@ -190,25 +215,20 @@ export class NativeBootstrapController {
       customNav: hasLegacyCustomNav(),
       expectedTurns: this.expectedTurns,
       capturedPrompts: this.history.prompts,
-      officialCount: officialButtons().length,
+      officialCount: uniqueOfficialCount(),
       history: this.history
     };
   }
 
   private maybeStart(): void {
-    if (this.disposed || this.running || this.ready) return;
+    if (this.disposed || this.running || this.ready || this.waitingDom || this.waitingNative) return;
     const ctx = this.context();
     if (!ctx.conversationId) {
       this.publishStatus();
       return;
     }
-    const navComplete = officialNavComplete(this.expectedTurns, ctx.officialCount, visibleUserTurns());
-    if (navComplete && this.history.boundary === "complete" && !this.history.issue) {
+    if (this.isSuccess()) {
       this.finishReady();
-      return;
-    }
-    if (navComplete) {
-      this.publishStatus();
       return;
     }
     const blocked = getPrepareBlockReason(ctx);
@@ -220,10 +240,8 @@ export class NativeBootstrapController {
       this.publishStatus();
       return;
     }
-    if (this.history.boundary === "complete" && !officialNavComplete(this.expectedTurns, ctx.officialCount, visibleUserTurns())) {
-      this.reason = "历史完整但 ChatGPT 未显示官方导航";
-      this.incomplete = true;
-      this.publishStatus();
+    if (this.history.boundary === "complete") {
+      this.beginWaitingNative();
       return;
     }
     if (this.history.boundary !== "more" && this.history.pages > 0 && this.history.boundary !== "unknown") {
@@ -240,13 +258,79 @@ export class NativeBootstrapController {
       this.publishStatus();
       return;
     }
-    if (paginationSentinels().length !== 1 && this.history.boundary === "more") {
-      this.reason = "页面结构暂不兼容";
-      this.incomplete = true;
-      this.publishStatus();
+    if (!uniquePaginationSentinel() && this.history.boundary === "more") {
+      this.beginWaitingDom();
       return;
     }
     void this.runLoop();
+  }
+
+  private beginWaitingDom(): void {
+    if (this.waitingDom || this.disposed) return;
+    this.waitingDom = true;
+    this.incomplete = false;
+    this.reason = null;
+    this.publishStatus();
+    const token = this.loopToken;
+    void this.waitForDom(SENTINEL_WAIT_MS, snap => snap.sentinelCount === 1, token).then(found => {
+      if (this.disposed || token !== this.loopToken || !this.waitingDom) return;
+      this.waitingDom = false;
+      if (found) {
+        this.maybeStart();
+        return;
+      }
+      this.fail("页面结构暂不兼容");
+    });
+  }
+
+  private beginWaitingNative(): void {
+    if (this.waitingNative || this.disposed) return;
+    if (this.isSuccess()) {
+      this.finishReady();
+      return;
+    }
+    this.waitingNative = true;
+    this.incomplete = false;
+    this.reason = null;
+    restorePaginationSentinel();
+    this.setBoost(false);
+    this.publishStatus();
+    const token = this.loopToken;
+    void this.waitForDom(NATIVE_NAV_WAIT_MS, () => this.isSuccess(), token).then(found => {
+      if (this.disposed || token !== this.loopToken || !this.waitingNative) return;
+      this.waitingNative = false;
+      if (found || this.isSuccess()) {
+        this.finishReady();
+        return;
+      }
+      this.fail("历史完整但 ChatGPT 未显示官方导航");
+    });
+  }
+
+  private waitForDom(timeoutMs: number, ready: (snapshot: NativeDomSnapshot) => boolean, token: number): Promise<boolean> {
+    if (ready(this.dom.snapshot())) return Promise.resolve(true);
+    return new Promise(resolve => {
+      const started = Date.now();
+      const stop = this.dom.subscribe(snapshot => {
+        if (this.disposed || token !== this.loopToken) {
+          cleanup();
+          resolve(false);
+          return;
+        }
+        if (ready(snapshot)) {
+          cleanup();
+          resolve(true);
+        }
+      });
+      const timer = window.setTimeout(() => {
+        cleanup();
+        resolve(ready(this.dom.snapshot()));
+      }, Math.max(0, timeoutMs - (Date.now() - started)));
+      const cleanup = (): void => {
+        stop();
+        window.clearTimeout(timer);
+      };
+    });
   }
 
   private async runLoop(): Promise<void> {
@@ -287,31 +371,39 @@ export class NativeBootstrapController {
           return;
         }
         if (this.history.boundary === "complete") {
-          this.fail("历史完整但 ChatGPT 未显示官方导航");
+          this.accountActiveTime();
+          this.running = false;
+          this.stopWatch();
+          this.setBoost(false);
+          restorePaginationSentinel();
+          this.beginWaitingNative();
           return;
         }
         if (this.history.pages > 0 && this.history.boundary !== "more") {
           this.fail("页面结构暂不兼容");
           return;
         }
-        if (paginationSentinels().length !== 1) {
-          await waitForPageCommit(80);
-          if (paginationSentinels().length !== 1) {
-            this.stalledRounds += 1;
-            if (this.stalledRounds >= STALLED_ROUNDS) {
-              this.fail("页面结构暂不兼容");
-              return;
-            }
-            continue;
+        const sentinelReady = uniquePaginationSentinel() ?? await this.waitForUniqueSentinel(token, SENTINEL_REPLACE_MS);
+        if (!this.running || token !== this.loopToken) return;
+        if (!sentinelReady) {
+          this.stalledRounds += 1;
+          if (this.stalledRounds >= STALLED_ROUNDS) {
+            this.fail("页面结构暂不兼容");
+            return;
           }
+          continue;
         }
 
         const pagesBefore = this.history.pages;
         const revisionBefore = this.history.revision;
         const sentinel = exposePaginationSentinel();
         if (!sentinel) {
-          this.fail("页面结构暂不兼容");
-          return;
+          this.stalledRounds += 1;
+          if (this.stalledRounds >= STALLED_ROUNDS) {
+            this.fail("页面结构暂不兼容");
+            return;
+          }
+          continue;
         }
         const requested = await this.waitForOlderRequest(token);
         restorePaginationSentinel(sentinel);
@@ -342,6 +434,18 @@ export class NativeBootstrapController {
           this.finishReady();
           return;
         }
+        const boundary = this.history.boundary as HistoryState["boundary"];
+        if (boundary === "complete") {
+          this.accountActiveTime();
+          this.running = false;
+          this.stopWatch();
+          this.setBoost(false);
+          restorePaginationSentinel();
+          this.beginWaitingNative();
+          return;
+        }
+        await this.waitForUniqueSentinel(token, SENTINEL_REPLACE_MS);
+        if (!this.running || token !== this.loopToken) return;
       }
     } finally {
       restorePaginationSentinel();
@@ -350,6 +454,13 @@ export class NativeBootstrapController {
       this.setBoost(this.running);
       this.publishStatus();
     }
+  }
+
+  private waitForUniqueSentinel(token: number, timeoutMs: number): Promise<HTMLElement | null> {
+    const current = uniquePaginationSentinel();
+    if (current) return Promise.resolve(current);
+    return this.waitForDom(timeoutMs, snap => snap.sentinelCount === 1, token)
+      .then(found => found ? uniquePaginationSentinel() : null);
   }
 
   private waitForOlderRequest(token: number): Promise<boolean> {
@@ -439,14 +550,17 @@ export class NativeBootstrapController {
   }
 
   private interrupt(reason: PrepareBlockReason): void {
+    if (this.waitingNative) return;
     if (!this.running && this.paused) {
       this.reason = reason;
       this.publishStatus();
+      if (reason === "用户操作已暂停") this.scheduleResume();
       return;
     }
     this.accountActiveTime();
     this.running = false;
     this.paused = true;
+    this.waitingDom = false;
     this.loopToken += 1;
     restorePaginationSentinel();
     this.stopWatch();
@@ -461,7 +575,9 @@ export class NativeBootstrapController {
     window.clearTimeout(this.idleTimer);
     this.idleTimer = window.setTimeout(() => {
       this.idleTimer = 0;
-      if (this.disposed || this.running || this.ready) return;
+      if (this.disposed || this.running || this.ready || this.waitingNative) return;
+      if (document.visibilityState !== "visible") return;
+      if (isGeneratingResponse()) return;
       if (this.resumes >= MAX_RESUMES) {
         this.reason = "用户操作已暂停";
         this.incomplete = true;
@@ -470,6 +586,8 @@ export class NativeBootstrapController {
       }
       this.resumes += 1;
       this.paused = false;
+      this.incomplete = false;
+      this.reason = null;
       this.maybeStart();
     }, USER_IDLE_MS);
   }
@@ -478,10 +596,14 @@ export class NativeBootstrapController {
     this.accountActiveTime();
     this.running = false;
     this.paused = false;
+    this.waitingDom = false;
+    this.waitingNative = false;
     this.loopToken += 1;
     restorePaginationSentinel();
     this.stopWatch();
     this.setBoost(false);
+    window.clearTimeout(this.idleTimer);
+    this.idleTimer = 0;
     this.reason = reason;
     this.incomplete = true;
     this.ready = false;
@@ -492,6 +614,8 @@ export class NativeBootstrapController {
     this.accountActiveTime();
     this.running = false;
     this.paused = false;
+    this.waitingDom = false;
+    this.waitingNative = false;
     this.ready = true;
     this.incomplete = false;
     this.reason = null;
@@ -499,13 +623,15 @@ export class NativeBootstrapController {
     restorePaginationSentinel();
     this.stopWatch();
     this.setBoost(false);
+    window.clearTimeout(this.idleTimer);
+    this.idleTimer = 0;
     this.publishStatus();
   }
 
   private isSuccess(): boolean {
     if (this.history.boundary !== "complete") return false;
     if (this.history.issue) return false;
-    return officialNavComplete(this.expectedTurns, officialButtons().length, visibleUserTurns());
+    return officialNavComplete(this.expectedTurns, this.history.prompts, uniqueOfficialCount());
   }
 
   private budgetExceeded(): boolean {
@@ -529,6 +655,8 @@ export class NativeBootstrapController {
   private stopWork(kind: PrepareStatus["kind"]): void {
     this.running = false;
     this.paused = false;
+    this.waitingDom = false;
+    this.waitingNative = false;
     this.loopToken += 1;
     restorePaginationSentinel();
     this.stopWatch();
@@ -540,6 +668,17 @@ export class NativeBootstrapController {
       this.incomplete = false;
       this.reason = null;
     }
+  }
+
+  private abandonLoop(): void {
+    this.running = false;
+    this.paused = false;
+    this.waitingDom = false;
+    this.waitingNative = false;
+    this.loopToken += 1;
+    restorePaginationSentinel();
+    this.stopWatch();
+    this.setBoost(false);
   }
 
   private setBoost(active: boolean): void {
@@ -564,18 +703,44 @@ export class NativeBootstrapController {
     this.renewTimer = window.setTimeout(renew, PREPARE_RENEW_MS);
   }
 
+  private onDom = (snapshot: NativeDomSnapshot): void => {
+    if (this.disposed) return;
+    if (this.waitingNative && officialNavComplete(this.expectedTurns, this.history.prompts, snapshot.officialCount) && this.history.boundary === "complete" && !this.history.issue) {
+      this.waitingNative = false;
+      this.finishReady();
+    }
+  };
+
   private onMessage = (event: MessageEvent): void => {
     if (event.origin !== location.origin) return;
     const data = event.data as { source?: string; type?: string; state?: HistoryState } | null;
     if (!data || data.source !== YADA_PAGE_SOURCE || data.type !== "history-state" || !data.state) return;
     if (this.conversationId && data.state.conversationId !== this.conversationId) return;
+    const nextKey = historySessionKey(data.state);
+    const keyChanged = Boolean(this.historyKey) && nextKey !== this.historyKey && data.state.conversationId === this.conversationId;
     this.history = data.state;
-    if (!this.running && !this.paused && !this.ready) this.maybeStart();
+    if (keyChanged) {
+      this.abandonLoop();
+      this.ready = false;
+      this.incomplete = false;
+      this.reason = null;
+      this.historyKey = nextKey;
+      this.maybeStart();
+      return;
+    }
+    this.historyKey = nextKey;
+    if (this.waitingNative && this.isSuccess()) {
+      this.waitingNative = false;
+      this.finishReady();
+      return;
+    }
+    if (!this.running && !this.paused && !this.ready && !this.waitingNative) this.maybeStart();
     else this.publishStatus();
   };
 
   private onUserIntent = (): void => {
-    if (!this.running && !this.paused) return;
+    if (this.waitingNative) return;
+    if (!this.running && !this.paused && !this.waitingDom) return;
     this.interrupt("用户操作已暂停");
   };
 
@@ -591,7 +756,7 @@ export class NativeBootstrapController {
 
   private onVisibility = (): void => {
     if (document.visibilityState !== "visible") {
-      if (this.running) this.interrupt("用户操作已暂停");
+      if (this.running || this.waitingDom) this.interrupt("用户操作已暂停");
       return;
     }
     if (this.paused) this.scheduleResume();
@@ -604,13 +769,13 @@ export class NativeBootstrapController {
       this.onStatus({ kind: "hidden" });
       return;
     }
-    const current = officialButtons().length || this.history.prompts;
+    const current = uniqueOfficialCount() || this.history.prompts;
     const total = Math.max(this.expectedTurns, this.history.prompts, current);
     if (this.ready) {
       this.onStatus({ kind: "ready", current: total, total });
       return;
     }
-    if (this.running) {
+    if (this.running || this.waitingDom || this.waitingNative) {
       this.onStatus({ kind: "preparing", current, total });
       return;
     }

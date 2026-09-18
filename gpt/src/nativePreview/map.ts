@@ -22,6 +22,26 @@ export function officialButtons(root: ParentNode = document): HTMLElement[] {
   return [...root.querySelectorAll<HTMLElement>(OFFICIAL_BUTTON_SELECTOR)].filter(isOfficialNavItem);
 }
 
+export function uniqueOfficialCount(root: ParentNode = document): number {
+  const keys = new Set<string>();
+  let extras = 0;
+  for (const button of officialButtons(root)) {
+    const attr = button.getAttribute("data-toc-item-index");
+    if (attr != null && attr.trim() !== "" && Number.isInteger(Number(attr))) {
+      keys.add(`i:${Number(attr)}`);
+      continue;
+    }
+    const text = `${button.getAttribute("aria-label") ?? ""} ${button.getAttribute("aria-description") ?? ""}`;
+    const prompt = text.match(/Prompt\s+(\d+)/i);
+    if (prompt) {
+      keys.add(`i:${Number(prompt[1]) - 1}`);
+      continue;
+    }
+    extras += 1;
+  }
+  return keys.size + extras;
+}
+
 export function closestOfficialButton(target: EventTarget | null): HTMLElement | null {
   const node = target instanceof Element ? target : target instanceof Node ? target.parentElement : null;
   const found = node?.closest<HTMLElement>(OFFICIAL_BUTTON_SELECTOR);

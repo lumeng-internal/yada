@@ -11,6 +11,8 @@ import {
   emptyHistoryState,
   MAX_MESSAGE_IDS,
   TARGET_NUM_TURNS,
+  type CaptureContext,
+  type CaptureKind,
   type ConversationApiMatch,
   type HistoryIssue,
   type HistoryPayload,
@@ -234,8 +236,12 @@ function messageRole(message: { author?: { role?: string } }): string {
 export class HistoryTracker {
   private readonly ids = new Set<string>();
   private readonly seenCursors = new Set<string>();
+  private readonly active = new Map<number, CaptureContext>();
   private currentNode: string | null = null;
   private promptCount = 0;
+  private nextRequestId = 0;
+  private latestInitialId = 0;
+  private routeGeneration = 0;
   private snapshot: HistoryState = emptyHistoryState();
 
   snapshotState(): HistoryState {
@@ -245,52 +251,124 @@ export class HistoryTracker {
   reset(conversationId = ""): void {
     this.ids.clear();
     this.seenCursors.clear();
+    this.active.clear();
     this.currentNode = null;
     this.promptCount = 0;
+    this.latestInitialId = 0;
     this.snapshot = emptyHistoryState(conversationId);
+    this.snapshot.generation = this.routeGeneration;
+    this.syncPending();
   }
 
-  beginRequest(conversationId: string, boosted: boolean): HistoryState {
-    if (this.snapshot.conversationId !== conversationId) this.reset(conversationId);
-    this.snapshot.pending += 1;
-    this.snapshot.boosted = this.snapshot.boosted || boosted;
+  notifyRoute(conversationId: string): HistoryState {
+    this.routeGeneration += 1;
+    this.reset(conversationId);
     this.snapshot.revision += 1;
     return this.snapshotState();
   }
 
-  endRequest(): HistoryState {
-    this.snapshot.pending = Math.max(0, this.snapshot.pending - 1);
+  matchesContext(ctx: CaptureContext): boolean {
+    return ctx.conversationId === this.snapshot.conversationId
+      && ctx.routeGeneration === this.snapshot.generation;
+  }
+
+  isStale(ctx: CaptureContext): boolean {
+    if (!this.matchesContext(ctx)) return true;
+    if (ctx.kind === "initial") return ctx.requestId !== this.latestInitialId;
+    return ctx.initialVersion !== this.snapshot.initialVersion;
+  }
+
+  isValidRequest(ctx: CaptureContext): boolean {
+    return !this.isStale(ctx);
+  }
+
+  beginRequest(input: {
+    conversationId: string;
+    kind: CaptureKind;
+    before: string | null;
+    boosted?: boolean;
+  }): CaptureContext {
+    if (!this.snapshot.conversationId) {
+      if (this.routeGeneration === 0) this.routeGeneration = 1;
+      this.snapshot.conversationId = input.conversationId;
+      this.snapshot.generation = this.routeGeneration;
+    }
+    const ctx: CaptureContext = {
+      requestId: ++this.nextRequestId,
+      conversationId: input.conversationId,
+      routeGeneration: this.snapshot.generation,
+      initialVersion: this.snapshot.initialVersion,
+      kind: input.kind,
+      before: input.before
+    };
+    if (this.matchesContext(ctx) && ctx.kind === "initial") this.latestInitialId = ctx.requestId;
+    this.active.set(ctx.requestId, ctx);
+    this.snapshot.boosted = this.snapshot.boosted || Boolean(input.boosted);
     this.snapshot.revision += 1;
+    this.syncPending();
+    return ctx;
+  }
+
+  endRequest(requestId: number): HistoryState {
+    this.active.delete(requestId);
+    this.snapshot.revision += 1;
+    this.syncPending();
     return this.snapshotState();
   }
 
-  markIssue(issue: HistoryIssue): HistoryState {
+  markIssue(issue: HistoryIssue, ctx?: CaptureContext): HistoryState {
+    if (ctx && this.isStale(ctx)) return this.snapshotState();
     this.snapshot.issue = issue;
     this.snapshot.revision += 1;
     return this.snapshotState();
   }
 
   applyInitial(conversationId: string, payload: HistoryPayload): HistoryState {
+    if (this.snapshot.conversationId !== conversationId) this.notifyRoute(conversationId);
+    const ctx = this.beginRequest({ conversationId, kind: "initial", before: null });
+    const state = this.applyInitialFrom(ctx, payload);
+    this.endRequest(ctx.requestId);
+    return state;
+  }
+
+  applyOlder(payload: HistoryPayload, requestedBefore: string | null): HistoryState {
+    return this.applyOlderFrom({
+      requestId: ++this.nextRequestId,
+      conversationId: this.snapshot.conversationId,
+      routeGeneration: this.snapshot.generation,
+      initialVersion: this.snapshot.initialVersion,
+      kind: "older",
+      before: requestedBefore
+    }, payload, false);
+  }
+
+  applyInitialFrom(ctx: CaptureContext, payload: HistoryPayload): HistoryState {
+    if (!this.matchesContext(ctx) || ctx.kind !== "initial" || ctx.requestId !== this.latestInitialId) {
+      return this.snapshotState();
+    }
     this.ids.clear();
     this.seenCursors.clear();
     this.promptCount = 0;
-    this.snapshot.conversationId = conversationId;
-    this.snapshot.generation += 1;
+    this.snapshot.conversationId = ctx.conversationId;
     this.snapshot.initialVersion += 1;
     this.snapshot.pages = 0;
     this.snapshot.issue = null;
     this.snapshot.boundary = "unknown";
     this.snapshot.cursor = null;
     this.currentNode = typeof payload.current_node === "string" ? payload.current_node : null;
+    this.syncPending();
     return this.commitPage(payload, "initial");
   }
 
-  applyOlder(payload: HistoryPayload, requestedBefore: string | null): HistoryState {
-    if (this.snapshot.pages < 1) {
-      return this.markIssue("unlinked");
+  applyOlderFrom(ctx: CaptureContext, payload: HistoryPayload, silentStale = true): HistoryState {
+    if (!this.matchesContext(ctx) || ctx.initialVersion !== this.snapshot.initialVersion) {
+      return this.snapshotState();
     }
-    if (!requestedBefore || requestedBefore !== this.snapshot.cursor) {
-      return this.fail("unlinked");
+    if (this.snapshot.pages < 1) {
+      return silentStale ? this.snapshotState() : this.markIssue("unlinked");
+    }
+    if (!ctx.before || ctx.before !== this.snapshot.cursor) {
+      return silentStale ? this.snapshotState() : this.fail("unlinked");
     }
     const nextNode = typeof payload.current_node === "string" ? payload.current_node : null;
     if (this.currentNode && nextNode && nextNode !== this.currentNode) {
@@ -310,6 +388,7 @@ export class HistoryTracker {
       this.snapshot.issue = null;
       this.snapshot.revision += 1;
       this.syncCounts();
+      this.syncPending();
       return this.snapshotState();
     }
     if (previous !== true || !nextCursor) {
@@ -321,13 +400,14 @@ export class HistoryTracker {
       this.syncCounts();
       return this.snapshotState();
     }
-    this.seenCursors.add(this.snapshot.cursor ?? requestedBefore);
+    this.seenCursors.add(this.snapshot.cursor ?? ctx.before);
     this.snapshot.cursor = nextCursor;
     this.snapshot.pages += 1;
     this.snapshot.boundary = "more";
     this.snapshot.issue = null;
     this.snapshot.revision += 1;
     this.syncCounts();
+    this.syncPending();
     return this.snapshotState();
   }
 
@@ -387,5 +467,13 @@ export class HistoryTracker {
   private syncCounts(): void {
     this.snapshot.messages = this.ids.size;
     this.snapshot.prompts = this.promptCount;
+  }
+
+  private syncPending(): void {
+    let pending = 0;
+    for (const ctx of this.active.values()) {
+      if (this.isValidRequest(ctx)) pending += 1;
+    }
+    this.snapshot.pending = pending;
   }
 }

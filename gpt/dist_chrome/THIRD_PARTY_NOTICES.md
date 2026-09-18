@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 3.1.0
+# Third-party notices — ChatGPT Yada 3.1.1
 
 ## Intake and scope
 
@@ -11,14 +11,14 @@ Fixed commit: b637ccef982703cd20486db9e9211eda9b25a1aa (MIT).
 canxin121/chatgpt-web-performance-fix — https://github.com/canxin121/chatgpt-web-performance-fix
 Fixed commit: c4b12ddd87220ab8d2a14001da46aba5e773f5c7 (MIT).
 
-Transplanted or adapted into `src/nativeBootstrap/history.ts` and `src/nativeBootstrap/page.ts`:
+Transplanted or adapted into `src/nativeBootstrap/history.ts`, `src/nativeBootstrap/page.ts`, and isolated `src/nativeBootstrap/dom.ts`:
 
 - `matchConversationApiUrl` conversation API URL classification, limited to current-session `/backend-api/conversations/{id}` and `/messages`
 - `rewriteGetRequest` GET Request/init preservation (`headers`, `credentials`, `cache`, `signal`, `mode`, `redirect`, `referrer`, `integrity`, caller `init` overlay)
 - `num_turns` handling that never lowers an already large page
 - double `requestAnimationFrame` + `setTimeout(0)` page-commit wait
 - capture timeout watchdog
-- pagination sentinel delayed appearance / late `data-testid` / detached-then-connected / replacement boundaries used by `src/nativeBootstrap/dom.ts`
+- MutationObserver coalescing for pagination sentinel delayed appearance, late `data-testid`, detached-then-connected, and sentinel replacement
 
 Not transplanted: IntersectionObserver wrapping, response body rewriting, local micro-pages, Worker JSON parse, or the userscript UI.
 

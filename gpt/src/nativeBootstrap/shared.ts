@@ -15,6 +15,10 @@ export const MIN_VIEWPORT_WIDTH = 1024;
 export const READ_DRIFT_PX = 8;
 export const MISSING_ANCHOR_FRAMES = 3;
 export const STALLED_ROUNDS = 2;
+export const SENTINEL_WAIT_MS = 3_000;
+export const SENTINEL_REPLACE_MS = 1_000;
+export const NATIVE_NAV_WAIT_MS = 2_500;
+export const DOM_COALESCE_MS = 80;
 export const SENTINEL_TEST_ID = "conversation-pagination-sentinel";
 
 export const YADA_PAGE_SOURCE = "chatgpt-yada-page";
@@ -42,6 +46,17 @@ export interface HistoryState {
   cursor: string | null;
   issue: HistoryIssue;
   boosted: boolean;
+}
+
+export type CaptureKind = "initial" | "older";
+
+export interface CaptureContext {
+  requestId: number;
+  conversationId: string;
+  routeGeneration: number;
+  initialVersion: number;
+  kind: CaptureKind;
+  before: string | null;
 }
 
 export type ConversationApiKind = "paginated-initial" | "paginated-messages";
@@ -83,6 +98,10 @@ export interface ContentToPageMessage {
   type: "prepare-boost" | "request-state";
   conversationId: string;
   active?: boolean;
+}
+
+export function historySessionKey(state: Pick<HistoryState, "conversationId" | "generation" | "initialVersion">): string {
+  return `${state.conversationId}:${state.generation}:${state.initialVersion}`;
 }
 
 export function emptyHistoryState(conversationId = ""): HistoryState {

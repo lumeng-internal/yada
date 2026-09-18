@@ -1,9 +1,10 @@
-import { NativeBootstrapController, getPrepareBlockReason, isGeneratingResponse } from '../src/nativeBootstrap/controller';
+import { NativeBootstrapController, getPrepareBlockReason, isGeneratingResponse, officialNavComplete } from '../src/nativeBootstrap/controller';
 import {
   exposePaginationSentinel,
   paginationSentinels,
   restoreOwnedStyles,
-  restorePaginationSentinel
+  restorePaginationSentinel,
+  uniquePaginationSentinel
 } from '../src/nativeBootstrap/dom';
 import {
   HistoryTracker,
@@ -14,18 +15,33 @@ import {
 } from '../src/nativeBootstrap/history';
 import {
   MAX_ACTIVE_MS,
+  MAX_CAPTURE_MS,
   MAX_EXTRA_PAGES,
+  NATIVE_NAV_WAIT_MS,
   PREPARE_TTL_MS,
+  SENTINEL_WAIT_MS,
   TARGET_NUM_TURNS,
   USER_IDLE_MS,
   YADA_CONTENT_SOURCE,
+  YADA_PAGE_SOURCE,
   type HistoryState
 } from '../src/nativeBootstrap/shared';
-import { closestOfficialButton, isOfficialNavItem, officialButtons } from '../src/nativePreview/map';
+import { closestOfficialButton, isOfficialNavItem, officialButtons, uniqueOfficialCount } from '../src/nativePreview/map';
 
 const fixtureTotals = new Map<string, number>();
+const deferredParts = new Map<string, { promise: Promise<Response>; resolve: (response: Response) => void }>();
+let lastStreamCancel = false;
+let lastStreamPulls = 0;
 type Assert = (value: unknown, message: string) => void;
 type Pass = (message: string) => void;
+type FixtureOptions = {
+  delaySentinelMs?: number;
+  omitSentinel?: boolean;
+  delayNavMs?: number;
+  navTurns?: number;
+  userTurns?: number;
+  replaceSentinel?: boolean;
+};
 
 export async function nativeBootstrapChecks(assert: Assert, pass: Pass): Promise<void> {
   const wait = (ms = 80): Promise<void> => new Promise(resolve => setTimeout(resolve, ms));
@@ -54,6 +70,13 @@ export async function nativeBootstrapChecks(assert: Assert, pass: Pass): Promise
   const page = await import('../src/nativeBootstrap/page');
   page.installNativeBootstrapPage()();
   const nativeFetch = window.fetch;
+  const pageStates: HistoryState[] = [];
+  const onPageState = (event: MessageEvent): void => {
+    if (event.origin !== location.origin) return;
+    const data = event.data as { source?: string; type?: string; state?: HistoryState } | null;
+    if (data?.source === YADA_PAGE_SOURCE && data.type === 'history-state' && data.state) pageStates.push(data.state);
+  };
+  window.addEventListener('message', onPageState);
   try {
 
   document.querySelectorAll('[data-toc-item-index], [data-toc-active]').forEach(node => {
@@ -78,15 +101,37 @@ export async function nativeBootstrapChecks(assert: Assert, pass: Pass): Promise
       maxOlderInflight = Math.max(maxOlderInflight, olderInflight);
     }
     const done = (): void => { if (isOlder) olderInflight = Math.max(0, olderInflight - 1); };
+    for (const [part, deferred] of deferredParts) {
+      if (url.includes(part)) {
+        lastInnerPromise = deferred.promise.finally(done);
+        return lastInnerPromise;
+      }
+    }
     if (method !== 'GET' || (init?.headers && headerValue(init.headers, 'accept').includes('text/event-stream')) || headerValue(input instanceof Request ? input.headers : undefined, 'accept').includes('text/event-stream')) {
       lastInnerResponse = new Response('ok');
       lastInnerPromise = Promise.resolve(lastInnerResponse).finally(done);
       return lastInnerPromise;
     }
     const parsed = new URL(url, location.href);
-    const payload = pagePayload(parsed.pathname.split('/')[3] ?? conversationId, parsed.searchParams.get('before'), Number(parsed.searchParams.get('num_turns') || '5'));
+    const id = parsed.pathname.split('/')[3] ?? conversationId;
+    if (id === 'bootstrap-huge') {
+      lastInnerResponse = oversizedStreamResponse();
+      lastInnerPromise = Promise.resolve(lastInnerResponse).finally(done);
+      return lastInnerPromise;
+    }
+    if (id === 'bootstrap-timeout') {
+      lastInnerResponse = hangingStreamResponse();
+      lastInnerPromise = Promise.resolve(lastInnerResponse).finally(done);
+      return lastInnerPromise;
+    }
+    if (id === 'bootstrap-stream') {
+      lastInnerResponse = smallStreamResponse({ messages: [{ id: 'u0', author: { role: 'user' } }], page_info: { has_previous_page: false } });
+      lastInnerPromise = Promise.resolve(lastInnerResponse).finally(done);
+      return lastInnerPromise;
+    }
+    const payload = pagePayload(id, parsed.searchParams.get('before'), Number(parsed.searchParams.get('num_turns') || '5'));
     lastInnerResponse = new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
-    const delay = (url.includes('bootstrap-drift') || url.includes('bootstrap-interrupt')) && isOlder ? 4000 : 0;
+    const delay = (url.includes('bootstrap-drift') || url.includes('bootstrap-interrupt') || url.includes('idle-debounce') || url.includes('idle-hidden') || url.includes('idle-generating')) && isOlder ? 4000 : 0;
     lastInnerPromise = wait(delay).then(() => lastInnerResponse!).finally(done);
     return lastInnerPromise;
   };
@@ -201,7 +246,42 @@ export async function nativeBootstrapChecks(assert: Assert, pass: Pass): Promise
   const outOfOrder = unordered.applyOlder({ messages: [{ id: 'u9', author: { role: 'user' } }], page_info: { has_previous_page: false } }, 'wrong');
   assert(outOfOrder.issue === 'unlinked' && outOfOrder.boundary !== 'complete', 'out-of-order page was marked complete');
   assert(boostConversationUrl(`${origin}/backend-api/conversations/${conversationId}?num_turns=5`, origin, { kind: 'paginated-initial', conversationId }, false).href.includes(`num_turns=${TARGET_NUM_TURNS}`), 'boost helper did not raise initial turns');
+
+  const raceA = new HistoryTracker();
+  const lateA = raceA.beginRequest({ conversationId: 'A', kind: 'initial', before: null });
+  raceA.notifyRoute('B');
+  const liveB = raceA.beginRequest({ conversationId: 'B', kind: 'initial', before: null });
+  raceA.applyInitialFrom(lateA, { messages: [{ id: 'old', author: { role: 'user' } }], page_info: { has_previous_page: false } });
+  assert(raceA.snapshotState().conversationId === 'B' && raceA.snapshotState().prompts === 0, 'late conversation A overwrote B');
+  raceA.applyInitialFrom(liveB, { messages: Array.from({ length: 6 }, (_, i) => ({ id: `b${i}`, author: { role: 'user' } })), page_info: { has_previous_page: false } });
+  assert(raceA.snapshotState().prompts === 6 && raceA.snapshotState().conversationId === 'B', 'current conversation B was not applied');
+
+  const inverted = new HistoryTracker();
+  inverted.notifyRoute('inv');
+  const firstInitial = inverted.beginRequest({ conversationId: 'inv', kind: 'initial', before: null });
+  const secondInitial = inverted.beginRequest({ conversationId: 'inv', kind: 'initial', before: null });
+  inverted.applyInitialFrom(firstInitial, { messages: [{ id: 'old-1', author: { role: 'user' } }], page_info: { has_previous_page: false } });
+  assert(inverted.snapshotState().pages === 0 && inverted.snapshotState().initialVersion === 0, 'earlier initial response won the race');
+  inverted.applyInitialFrom(secondInitial, { messages: [{ id: 'new-1', author: { role: 'user' } }, { id: 'new-2', author: { role: 'user' } }], page_info: { has_previous_page: false } });
+  assert(inverted.snapshotState().initialVersion === 1 && inverted.snapshotState().prompts === 2, 'latest initial response did not establish the chain');
+
+  const relink = new HistoryTracker();
+  relink.applyInitial('relink', { messages: [{ id: 'u0', author: { role: 'user' } }], page_info: { has_previous_page: true, start_cursor: 'c1' } });
+  const olderOnV1 = relink.beginRequest({ conversationId: 'relink', kind: 'older', before: 'c1' });
+  const revalidate = relink.beginRequest({ conversationId: 'relink', kind: 'initial', before: null });
+  const afterRevalidate = relink.applyInitialFrom(revalidate, { messages: [{ id: 'fresh', author: { role: 'user' } }], page_info: { has_previous_page: true, start_cursor: 'n1' } });
+  const staleOlder = relink.applyOlderFrom(olderOnV1, { messages: [{ id: 'stale', author: { role: 'user' } }], page_info: { has_previous_page: false } });
+  assert(afterRevalidate.initialVersion === 2 && staleOlder.issue !== 'unlinked' && staleOlder.cursor === 'n1' && staleOlder.prompts === 1, 'background revalidation marked the new chain unlinked or applied the old page');
+
+  const pendingRace = new HistoryTracker();
+  const oldPending = pendingRace.beginRequest({ conversationId: 'P1', kind: 'initial', before: null });
+  pendingRace.notifyRoute('P2');
+  pendingRace.beginRequest({ conversationId: 'P2', kind: 'initial', before: null });
+  assert(pendingRace.snapshotState().pending === 1, 'new session pending was not 1 after route change');
+  const afterOldEnd = pendingRace.endRequest(oldPending.requestId);
+  assert(afterOldEnd.pending === 1 && afterOldEnd.conversationId === 'P2', 'old request finally reduced the new session pending');
   pass('history chain links initial+older pages, completes on has_previous_page=false, and rejects duplicate/empty/branch/unordered pages');
+  pass('late A/B, inverted initials, stale older, and old pending cannot corrupt the current chain');
 
   history.replaceState({}, '', '/c/bootstrap-18');
   const fixture18 = await mountConversationFixture('bootstrap-18', 18);
@@ -341,10 +421,35 @@ export async function nativeBootstrapChecks(assert: Assert, pass: Pass): Promise
   assert(!isOfficialNavItem(ordinary) && closestOfficialButton(ordinary) == null, 'ordinary button was treated as official navigation');
   prompt.remove();
   ordinary.remove();
+  assert(!officialNavComplete(100, 5, 5), '5 official buttons and 5 user DOM cannot prove a 100-turn conversation ready');
+  assert(officialNavComplete(0, 100, 100), 'history.prompts must be the target when expectedTurns is unknown');
+  assert(!officialNavComplete(0, 0, 5), 'unknown complete API and history capture cannot ready from visible DOM');
+  const dupNav = document.createElement('div');
+  for (let i = 0; i < 2; i++) {
+    const button = document.createElement('button');
+    button.setAttribute('data-toc-item-index', '0');
+    dupNav.append(button);
+  }
+  document.body.append(dupNav);
+  assert(officialButtons(dupNav).length === 2 && uniqueOfficialCount(dupNav) === 1, 'duplicate official buttons were not de-duplicated');
+  dupNav.remove();
+  pass('official completeness uses expectedTurns, then history.prompts, never visible user DOM alone');
+
+  await raceTimingChecks(assert, pass, {
+    origin,
+    page,
+    captured,
+    pageStates,
+    wait,
+    until,
+    mountConversationFixture
+  });
   } finally {
+    window.removeEventListener('message', onPageState);
     page.installNativeBootstrapPage()();
     window.matchMedia = nativeMatchMedia;
     Object.assign(globalThis, { fetch: nativeFetch });
+    deferredParts.clear();
     history.replaceState({}, '', '/c/fixture-1');
   }
 }
@@ -405,16 +510,74 @@ function pagePayload(conversationId: string, before: string | null, rawTurns: nu
   };
 }
 
-async function mountConversationFixture(id: string, totalTurns: number) {
-  fixtureTotals.set(id, totalTurns);
-  const scroller = document.createElement('div');
-  scroller.style.cssText = 'height:360px;overflow:auto;position:relative';
+function makeSentinel(): HTMLElement {
   const sentinel = document.createElement('div');
   sentinel.setAttribute('data-testid', 'conversation-pagination-sentinel');
   sentinel.style.cssText = 'height:1px';
-  scroller.append(sentinel);
+  return sentinel;
+}
+
+function deferPart(part: string): (response: Response) => void {
+  let resolve!: (response: Response) => void;
+  const promise = new Promise<Response>(done => { resolve = done; });
+  deferredParts.set(part, { promise, resolve });
+  return (response: Response) => {
+    deferredParts.get(part)?.resolve(response);
+    deferredParts.delete(part);
+  };
+}
+
+function jsonResponse(payload: unknown): Response {
+  return new Response(JSON.stringify(payload), { headers: { 'content-type': 'application/json' } });
+}
+
+function smallStreamResponse(payload: unknown): Response {
+  const bytes = new TextEncoder().encode(JSON.stringify(payload));
+  return new Response(new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(bytes);
+      controller.close();
+    }
+  }), { headers: { 'content-type': 'application/json' } });
+}
+
+function oversizedStreamResponse(): Response {
+  lastStreamCancel = false;
+  lastStreamPulls = 0;
+  const chunk = new Uint8Array(2 * 1024 * 1024);
+  return new Response(new ReadableStream<Uint8Array>({
+    pull(controller) {
+      lastStreamPulls += 1;
+      controller.enqueue(chunk);
+      if (lastStreamPulls > 20) controller.close();
+    },
+    cancel() {
+      lastStreamCancel = true;
+    }
+  }), { headers: { 'content-type': 'application/json' } });
+}
+
+function hangingStreamResponse(): Response {
+  lastStreamCancel = false;
+  return new Response(new ReadableStream<Uint8Array>({
+    pull() {
+      return new Promise(() => undefined);
+    },
+    cancel() {
+      lastStreamCancel = true;
+    }
+  }), { headers: { 'content-type': 'application/json' } });
+}
+
+async function mountConversationFixture(id: string, totalTurns: number, options: FixtureOptions = {}) {
+  fixtureTotals.set(id, totalTurns);
+  const scroller = document.createElement('div');
+  scroller.style.cssText = 'height:360px;overflow:auto;position:relative';
+  let sentinel = makeSentinel();
+  if (!options.omitSentinel && !options.delaySentinelMs) scroller.append(sentinel);
   const nav = document.createElement('div');
-  const visibleFrom = Math.max(0, totalTurns - 5);
+  const visibleCount = options.userTurns ?? Math.min(5, totalTurns);
+  const visibleFrom = Math.max(0, totalTurns - visibleCount);
   for (let i = visibleFrom; i < totalTurns; i++) {
     const user = document.createElement('article');
     user.setAttribute('data-message-author-role', 'user');
@@ -438,7 +601,8 @@ async function mountConversationFixture(id: string, totalTurns: number) {
 
   const renderNav = (): void => {
     nav.replaceChildren();
-    for (let i = 0; i < totalTurns; i++) {
+    const count = options.navTurns ?? totalTurns;
+    for (let i = 0; i < count; i++) {
       const button = document.createElement('button');
       button.setAttribute('data-toc-item-index', String(i));
       button.textContent = '—';
@@ -451,7 +615,10 @@ async function mountConversationFixture(id: string, totalTurns: number) {
     page_info?: { has_previous_page?: boolean; start_cursor?: string };
   };
   let cursor = initial.page_info?.has_previous_page ? initial.page_info.start_cursor ?? '' : '';
-  if (!cursor) renderNav();
+  if (!cursor) {
+    if (options.delayNavMs) window.setTimeout(renderNav, options.delayNavMs);
+    else renderNav();
+  }
 
   let inflight = false;
   const observer = new IntersectionObserver(entries => {
@@ -461,15 +628,35 @@ async function mountConversationFixture(id: string, totalTurns: number) {
     void fetch(`/backend-api/conversations/${id}/messages?before=${before}&num_turns=5`).then(async response => {
       const data = await response.json() as { page_info?: { has_previous_page?: boolean; start_cursor?: string } };
       cursor = data.page_info?.has_previous_page ? data.page_info.start_cursor ?? '' : '';
-      if (!cursor) renderNav();
+      if (!cursor) {
+        if (options.delayNavMs) window.setTimeout(renderNav, options.delayNavMs);
+        else renderNav();
+        return;
+      }
+      if (options.replaceSentinel !== false) {
+        const next = makeSentinel();
+        if (sentinel.isConnected) sentinel.replaceWith(next);
+        else scroller.prepend(next);
+        sentinel = next;
+        observer.disconnect();
+        observer.observe(sentinel);
+      }
     }).finally(() => { inflight = false; });
   }, { root: scroller, rootMargin: '80px 0px 0px' });
-  if (cursor) observer.observe(sentinel);
+
+  const attachSentinel = (): void => {
+    if (!sentinel.isConnected) scroller.prepend(sentinel);
+    if (cursor) observer.observe(sentinel);
+  };
+  if (options.delaySentinelMs) window.setTimeout(attachSentinel, options.delaySentinelMs);
+  else if (!options.omitSentinel && cursor) observer.observe(sentinel);
 
   return {
     scroller,
-    sentinel,
+    get sentinel() { return sentinel; },
     nav,
+    attachSentinel,
+    renderNav,
     get scrollWrites() { return scrollWrites; },
     cleanup() {
       observer.disconnect();
@@ -478,4 +665,285 @@ async function mountConversationFixture(id: string, totalTurns: number) {
       nav.remove();
     }
   };
+}
+
+async function raceTimingChecks(
+  assert: Assert,
+  pass: Pass,
+  ctx: {
+    origin: string;
+    page: typeof import('../src/nativeBootstrap/page');
+    captured: Array<{ url: string }>;
+    pageStates: HistoryState[];
+    wait: (ms?: number) => Promise<void>;
+    until: (fn: () => boolean, message: string, rounds?: number, step?: number) => Promise<void>;
+    mountConversationFixture: typeof mountConversationFixture;
+  }
+): Promise<void> {
+  const { origin, page, captured, pageStates, wait, until, mountConversationFixture } = ctx;
+
+  history.replaceState({}, '', '/c/delay-sentinel');
+  const delayHost = await mountConversationFixture('delay-sentinel', 120, { delaySentinelMs: 1000 });
+  const delayKinds: string[] = [];
+  const delay = new NativeBootstrapController(status => { delayKinds.push(status.kind); if (status.reason) delayKinds.push(status.reason); });
+  delay.syncRoute();
+  delay.setExpectedTurns(120);
+  await wait(200);
+  assert(!delayKinds.includes('页面结构暂不兼容'), 'missing sentinel was treated as incompatible before 3s');
+  assert(!uniquePaginationSentinel(), 'delayed sentinel appeared too early');
+  await until(() => Boolean(uniquePaginationSentinel()), 'sentinel did not appear after 1s', 40, 50);
+  await until(() => delayKinds.includes('preparing') || delayHost.nav.querySelectorAll('button').length === 120, 'delayed sentinel did not start loading');
+  delay.dispose();
+  delayHost.cleanup();
+  pass('API-first delayed sentinel still starts loading');
+
+  history.replaceState({}, '', '/c/late-attr');
+  const lateHost = await mountConversationFixture('late-attr', 120, { omitSentinel: true });
+  const bare = document.createElement('div');
+  lateHost.scroller.prepend(bare);
+  const lateKinds: string[] = [];
+  const late = new NativeBootstrapController(status => { lateKinds.push(status.kind); });
+  late.syncRoute();
+  late.setExpectedTurns(120);
+  window.setTimeout(() => bare.setAttribute('data-testid', 'conversation-pagination-sentinel'), 500);
+  await until(() => Boolean(uniquePaginationSentinel()), 'late data-testid was not recognized', 40, 50);
+  await until(() => lateKinds.includes('preparing') || lateHost.nav.querySelectorAll('button').length > 0, 'late data-testid did not allow prepare');
+  late.dispose();
+  lateHost.cleanup();
+  pass('element inserted before data-testid is still recognized');
+
+  history.replaceState({}, '', '/c/detached-sentinel');
+  const detachedHost = await mountConversationFixture('detached-sentinel', 120, { omitSentinel: true });
+  const detachedNode = makeSentinel();
+  const detachedKinds: string[] = [];
+  const detached = new NativeBootstrapController(status => { detachedKinds.push(status.kind); });
+  detached.syncRoute();
+  detached.setExpectedTurns(120);
+  await wait(120);
+  assert(!uniquePaginationSentinel(), 'detached sentinel was treated as connected');
+  detachedHost.scroller.prepend(detachedNode);
+  await until(() => Boolean(uniquePaginationSentinel()), 'attached sentinel was not recognized');
+  await until(() => detachedKinds.includes('preparing') || detachedHost.nav.querySelectorAll('button').length > 0, 'detached-then-attached sentinel did not continue');
+  detached.dispose();
+  detachedHost.cleanup();
+  pass('detached sentinel is recognized after it joins the document');
+
+  history.replaceState({}, '', '/c/replace-sentinel');
+  const replaceHost = await mountConversationFixture('replace-sentinel', 250, { replaceSentinel: true });
+  const replaceCtrl = new NativeBootstrapController();
+  replaceCtrl.syncRoute();
+  replaceCtrl.setExpectedTurns(250);
+  await until(() => replaceHost.nav.querySelectorAll('button').length === 250, 'replaced sentinels stopped pagination', 200, 50);
+  replaceCtrl.dispose();
+  replaceHost.cleanup();
+  pass('sentinel replacement after each page still continues');
+
+  history.replaceState({}, '', '/c/missing-sentinel');
+  const missingHost = await mountConversationFixture('missing-sentinel', 120, { omitSentinel: true });
+  const missingReasons: string[] = [];
+  const missing = new NativeBootstrapController(status => { if (status.reason) missingReasons.push(status.reason); });
+  missing.syncRoute();
+  missing.setExpectedTurns(120);
+  await until(() => missingReasons.includes('页面结构暂不兼容'), 'missing sentinel did not time out as incompatible', Math.ceil(SENTINEL_WAIT_MS / 50) + 20, 50);
+  missing.dispose();
+  missingHost.cleanup();
+  pass('sentinel missing for 3s is incompatible');
+
+  history.replaceState({}, '', '/c/delay-nav');
+  const delayNavHost = await mountConversationFixture('delay-nav', 18, { delayNavMs: 1500 });
+  const delayNavKinds: string[] = [];
+  const delayNav = new NativeBootstrapController(status => { delayNavKinds.push(status.kind); });
+  delayNav.syncRoute();
+  delayNav.setExpectedTurns(18);
+  await wait(200);
+  assert(!delayNavKinds.includes('ready'), 'official nav ready before it existed');
+  await until(() => delayNavKinds.includes('ready'), 'official nav appearing after 1.5s did not become ready', 80, 50);
+  delayNav.dispose();
+  delayNavHost.cleanup();
+  pass('complete history waits for delayed official navigation');
+
+  history.replaceState({}, '', '/c/no-nav');
+  const noNavHost = await mountConversationFixture('no-nav', 18, { delayNavMs: 10_000 });
+  const noNavReasons: string[] = [];
+  const noNav = new NativeBootstrapController(status => { if (status.reason) noNavReasons.push(status.reason); });
+  noNav.syncRoute();
+  noNav.setExpectedTurns(18);
+  await until(() => noNavReasons.includes('历史完整但 ChatGPT 未显示官方导航'), 'missing official nav did not time out', Math.ceil(NATIVE_NAV_WAIT_MS / 50) + 20, 50);
+  noNav.dispose();
+  noNavHost.cleanup();
+  pass('official navigation missing for 2.5s stays incomplete');
+
+  history.replaceState({}, '', '/c/partial-nav');
+  const partialHost = await mountConversationFixture('partial-nav', 100, { navTurns: 5, userTurns: 5 });
+  const partialKinds: string[] = [];
+  const partial = new NativeBootstrapController(status => { partialKinds.push(status.kind); });
+  partial.syncRoute();
+  partial.setExpectedTurns(100);
+  await wait(400);
+  assert(!partialKinds.includes('ready'), '5 user DOM and 5 official buttons were treated as a complete 100-turn conversation');
+  await until(() => partialKinds.includes('incomplete') || partialKinds.includes('preparing'), 'partial official nav should wait, not ready');
+  partial.dispose();
+  partialHost.cleanup();
+  pass('known 100-turn API does not ready from 5 visible user/official nodes');
+
+  history.replaceState({}, '', '/c/prompts-target');
+  const promptsHost = await mountConversationFixture('prompts-target', 100);
+  const promptKinds: string[] = [];
+  const promptsCtrl = new NativeBootstrapController(status => { promptKinds.push(status.kind); });
+  promptsCtrl.syncRoute();
+  await until(() => promptKinds.includes('ready') && promptsHost.nav.querySelectorAll('button').length === 100, 'history.prompts was not used as the official nav target');
+  promptsCtrl.dispose();
+  promptsHost.cleanup();
+  pass('when expectedTurns is unknown, history.prompts is the official nav target');
+
+  history.replaceState({}, '', '/c/race-a');
+  pageStates.length = 0;
+  const releaseA = deferPart('conversations/race-a?');
+  const fetchA = fetch(`${origin}/backend-api/conversations/race-a?num_turns=5`);
+  history.pushState({}, '', '/c/race-b');
+  const fetchB = fetch(`${origin}/backend-api/conversations/race-b?num_turns=5`);
+  await fetchB;
+  releaseA(jsonResponse({
+    messages: Array.from({ length: 8 }, (_, i) => ({ id: `a${i}`, author: { role: 'user' } })),
+    page_info: { has_previous_page: false }
+  }));
+  await fetchA;
+  await until(() => pageStates.some(state => state.conversationId === 'race-b' && state.pages > 0), 'conversation B never captured');
+  assert(!pageStates.some(state => state.conversationId === 'race-b' && state.prompts === 8), 'late conversation A overwrote B through the page hook');
+  pass('late conversation A response cannot overwrite B');
+
+  history.replaceState({}, '', '/c/invert');
+  pageStates.length = 0;
+  const releaseFirst = deferPart('conversations/invert?num_turns=100&order=1');
+  const releaseSecond = deferPart('conversations/invert?num_turns=100&order=2');
+  const invertFirst = fetch(`${origin}/backend-api/conversations/invert?num_turns=5&order=1`);
+  const invertSecond = fetch(`${origin}/backend-api/conversations/invert?num_turns=5&order=2`);
+  releaseSecond(jsonResponse({
+    messages: [{ id: 'second-u', author: { role: 'user' } }, { id: 'second-a', author: { role: 'assistant' } }],
+    page_info: { has_previous_page: false }
+  }));
+  await invertSecond;
+  await until(() => pageStates.some(state => state.conversationId === 'invert' && state.initialVersion === 1), 'latest initial was not applied');
+  releaseFirst(jsonResponse({
+    messages: [{ id: 'first-u', author: { role: 'user' } }],
+    page_info: { has_previous_page: false }
+  }));
+  await invertFirst;
+  await wait(80);
+  const invertLast = [...pageStates].reverse().find(state => state.conversationId === 'invert' && state.pages > 0);
+  assert(invertLast?.prompts === 1 && invertLast.initialVersion === 1, 'earlier initial response overwrote the latest chain');
+  pass('only the latest valid initial response establishes a new initialVersion');
+
+  history.replaceState({}, '', '/c/bootstrap-huge');
+  pageStates.length = 0;
+  lastStreamCancel = false;
+  const huge = await fetch(`${origin}/backend-api/conversations/bootstrap-huge`);
+  await until(() => pageStates.some(state => state.conversationId === 'bootstrap-huge' && state.issue === 'capture-unavailable'), '16MiB stream did not stop capture');
+  assert(lastStreamPulls >= 8 && lastStreamPulls < 20, `16MiB stream was not stopped during read: ${lastStreamPulls} pulls`);
+  const hugeReader = huge.body?.getReader();
+  assert(hugeReader, 'original oversized Response lost its body');
+  const hugeChunk = await hugeReader!.read();
+  assert(!hugeChunk.done && (hugeChunk.value?.byteLength ?? 0) > 0, 'original Response could not be read after clone cancelled');
+  await hugeReader!.cancel();
+  pass('clone read stops at 16MiB without content-length; original Response remains readable');
+
+  history.replaceState({}, '', '/c/bootstrap-stream');
+  const streamed = await fetch(`${origin}/backend-api/conversations/bootstrap-stream`);
+  const streamedJson = await streamed.json() as { messages?: unknown[] };
+  assert(Array.isArray(streamedJson.messages), 'original streamed Response was not readable after clone capture');
+  pass('original Response remains readable after streaming clone capture');
+
+  history.replaceState({}, '', '/c/bootstrap-timeout');
+  pageStates.length = 0;
+  lastStreamCancel = false;
+  void fetch(`${origin}/backend-api/conversations/bootstrap-timeout`);
+  await until(() => pageStates.some(state => state.conversationId === 'bootstrap-timeout' && state.issue === 'capture-unavailable'), 'timed-out capture did not stop the session', Math.ceil(MAX_CAPTURE_MS / 50) + 20, 50);
+  await wait(80);
+  const stats = page.nativeBootstrapCaptureStats();
+  assert(stats.readers === 0 && stats.captures === 0, `timed-out capture left a reader behind readers=${stats.readers} captures=${stats.captures} cancelled=${lastStreamCancel}`);
+  pass('capture timeout stops the current session and releases the reader');
+
+  history.replaceState({}, '', '/c/cancel-reader');
+  pageStates.length = 0;
+  lastStreamCancel = false;
+  const releaseHang = deferPart('conversations/cancel-reader');
+  void fetch(`${origin}/backend-api/conversations/cancel-reader?num_turns=5`);
+  await wait(40);
+  history.pushState({}, '', '/c/after-cancel');
+  releaseHang(hangingStreamResponse());
+  await wait(80);
+  const afterCancel = page.nativeBootstrapCaptureStats();
+  assert(afterCancel.captures === 0, 'route change left the previous clone reader active');
+  pass('route change cancels the previous clone reader');
+
+  history.replaceState({}, '', '/c/idle-debounce');
+  const idleHost = await mountConversationFixture('idle-debounce', 180);
+  let idlePreparing = 0;
+  let idlePaused = false;
+  const idle = new NativeBootstrapController(status => {
+    if (status.kind === 'preparing') idlePreparing += 1;
+    if (status.reason === '用户操作已暂停') idlePaused = true;
+  });
+  idle.syncRoute();
+  idle.setExpectedTurns(180);
+  await until(() => idlePreparing > 0, 'idle debounce fixture never entered preparing');
+  const preparingBeforePause = idlePreparing;
+  idleHost.scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -40 }));
+  await until(() => idlePaused, 'first wheel did not pause prepare');
+  const started = Date.now();
+  while (Date.now() - started < 5_000) {
+    idleHost.scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -40 }));
+    await wait(500);
+    assert(idlePreparing === preparingBeforePause, 'prepare resumed while the user was still scrolling');
+  }
+  await until(() => idlePreparing > preparingBeforePause, 'prepare did not resume 2.5s after the last user action', 80, 50);
+  idle.dispose();
+  idleHost.cleanup();
+  pass('continuous scrolling never resumes; resume happens only after 2.5s of quiet');
+
+  history.replaceState({}, '', '/c/idle-hidden');
+  const hiddenHost = await mountConversationFixture('idle-hidden', 180);
+  let hiddenPreparing = 0;
+  let hiddenPaused = false;
+  const hidden = new NativeBootstrapController(status => {
+    if (status.kind === 'preparing') hiddenPreparing += 1;
+    if (status.reason === '用户操作已暂停') hiddenPaused = true;
+  });
+  hidden.syncRoute();
+  hidden.setExpectedTurns(180);
+  await until(() => hiddenPreparing > 0, 'hidden-idle fixture never entered preparing');
+  const hiddenBefore = hiddenPreparing;
+  hiddenHost.scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -40 }));
+  await until(() => hiddenPaused, 'hidden-idle fixture did not pause');
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
+  document.dispatchEvent(new Event('visibilitychange'));
+  await wait(USER_IDLE_MS + 200);
+  assert(hiddenPreparing === hiddenBefore, 'hidden page resumed after the idle timer');
+  delete (document as Document & { visibilityState?: string }).visibilityState;
+  hidden.dispose();
+  hiddenHost.cleanup();
+
+  history.replaceState({}, '', '/c/idle-generating');
+  const generatingHost = await mountConversationFixture('idle-generating', 180);
+  let generatingPreparing = 0;
+  let generatingPaused = false;
+  const generating = new NativeBootstrapController(status => {
+    if (status.kind === 'preparing') generatingPreparing += 1;
+    if (status.reason === '用户操作已暂停') generatingPaused = true;
+  });
+  generating.syncRoute();
+  generating.setExpectedTurns(180);
+  await until(() => generatingPreparing > 0, 'generating-idle fixture never entered preparing');
+  const generatingBefore = generatingPreparing;
+  generatingHost.scroller.dispatchEvent(new WheelEvent('wheel', { bubbles: true, deltaY: -40 }));
+  await until(() => generatingPaused, 'generating-idle fixture did not pause');
+  const stop = document.createElement('button');
+  stop.setAttribute('data-testid', 'stop-button');
+  document.body.append(stop);
+  await wait(USER_IDLE_MS + 200);
+  assert(generatingPreparing === generatingBefore, 'generating response resumed after the idle timer');
+  stop.remove();
+  generating.dispose();
+  generatingHost.cleanup();
+  pass('hidden or generating pages do not resume when the idle timer fires');
 }

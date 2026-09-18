@@ -83,7 +83,7 @@ Official navigation is owned by ChatGPT:
 
 1. Complete API turns are the only authority for preview text and timestamps.
 2. ChatGPT official TOC buttons own jumping, page scrolling and final positioning.
-3. Yada 3.1.0 prepares official navigation itself: a MAIN-world `native-bootstrap-page.js` may enlarge the current conversation's history GET, and isolated `NativeBootstrapController` may temporarily expose ChatGPT's pagination sentinel. Do not restore a custom rail, marks layer, click-to-jump, scroll positioning, or position correction.
+3. Yada 3.1.1 prepares official navigation itself: a MAIN-world `native-bootstrap-page.js` may enlarge the current conversation's history GET, and isolated `NativeBootstrapController` may wait for delayed/replaced sentinels and official navigation. Do not restore a custom rail, marks layer, click-to-jump, scroll positioning, or position correction.
 4. Never reintroduce `?message=` refresh, React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
 5. Do not wrap `IntersectionObserver`. Do not assign `scrollTop` or call `scrollIntoView`.
 
@@ -158,7 +158,7 @@ Render `预览模式圆点 | 导航状态 | 复制全部 | 提示词` in the hea
 
 Every stage must include a self-check before completion.
 
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.1.0 is the single-extension official-navigator bootstrap on the dedicated test branch `codex/gpt-native-navigation-v3`. Do not modify or push main unless the user explicitly asks. Never force push.
+Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. 3.1.1 is the hardened official-navigator bootstrap on the dedicated test branch `codex/gpt-native-navigation-v3`. Do not modify or push main unless the user explicitly asks. Never force push.
 
 During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
 

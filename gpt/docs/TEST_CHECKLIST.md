@@ -1,6 +1,6 @@
-# ChatGPT Yada v3.1.0 测试清单
+# ChatGPT Yada v3.1.1 测试清单
 
-ChatGPT Yada 3.1.0 是单一扩展。正式进入 main 前，仍需 MacBook 在真实 ChatGPT 长对话上验收。需要 Chrome / Edge 152 或更高。用户不再单独安装 GPT Navigator Helper。
+ChatGPT Yada 3.1.1 是单一扩展。正式进入 main 前，仍需 MacBook 在真实 ChatGPT 长对话上验收。需要 Chrome / Edge 152 或更高。用户不再单独安装 GPT Navigator Helper。
 
 ## Mac mini 本地验证
 
@@ -11,7 +11,7 @@ ChatGPT Yada 3.1.0 是单一扩展。正式进入 main 前，仍需 MacBook 在�
 - [x] `npm run verify:features` 连续五次通过。
 - [x] `npm run build`：严格 TypeScript、Vite 与 `native-bootstrap-page.js`。
 - [x] `git diff --check`。
-- [x] package、lock、manifest、dist manifest、ZIP manifest 均为 3.1.0；ZIP/dist 文件名集合和文件内容逐一相同。
+- [x] package、lock、manifest、dist manifest、ZIP manifest 均为 3.1.1；ZIP/dist 文件名集合和文件内容逐一相同。
 - [x] `dist_chrome` 与 ZIP 都包含 `native-bootstrap-page.js`，不包含 `src/history`、`src/rail` 或自定义导航代码。
 - [x] 所有修改限定 gpt/；claude/、gemini/ 与 a4bc0c56908df1e2643e1adb76c897f119891df2 一致。
 
@@ -29,6 +29,24 @@ ChatGPT Yada 3.1.0 是单一扩展。正式进入 main 前，仍需 MacBook 在�
 - [x] 重复 cursor 停止。
 - [x] 空页、重复消息、分支变化和乱序响应不会误判完整。
 - [x] 原始 fetch Promise 和原始 Response 不被替换。
+- [x] 接口先返回、sentinel 1 秒后出现仍能开始加载。
+- [x] 元素先插入、500ms 后补 data-testid 仍能识别。
+- [x] sentinel detached 后接入页面仍能识别。
+- [x] 每一页 sentinel 被替换后仍能继续。
+- [x] sentinel 3 秒内未出现才判不兼容。
+- [x] 历史完整后官方导航 1.5 秒出现仍 ready。
+- [x] 官方导航 2.5 秒仍不出现才显示未完整。
+- [x] API 已知 100 轮时，5 个 User DOM + 5 个官方按钮不能误判 ready。
+- [x] expectedTurns 未知时以 history.prompts 为目标。
+- [x] 对话 A 慢请求在切换到 B 后不能覆盖 B。
+- [x] 两条初始请求倒序返回时只有最新有效结果生效。
+- [x] 旧 initialVersion 的 older 响应静默丢弃，不标记新链 unlinked。
+- [x] 旧请求 finally 不得减少新会话 pending。
+- [x] 无 content-length 的响应超过 16 MiB 时读取过程中停止；原始 Response 仍可读。
+- [x] 读取超时后当前会话明确停止，不留下 reader。
+- [x] 路由切换后 clone reader 被取消。
+- [x] 用户每 500ms 滚动持续 5 秒期间绝不恢复；最后一次操作后 2.5 秒才恢复。
+- [x] 页面隐藏或正在生成回答时，timer 到期也不恢复。
 - [x] 18 轮对话刷新后，自动加载并让官方导航出现。
 - [x] 150 轮 fixture 经过多页加载后官方导航完整。
 - [x] 每次只有一个分页请求。
@@ -51,13 +69,13 @@ ChatGPT Yada 3.1.0 是单一扩展。正式进入 main 前，仍需 MacBook 在�
 
 ## MacBook 真实页面仍需复验
 
-先按 `docs/OFFICIAL_NAVIGATION_SETUP.md` 安装 Yada 3.1.0，并禁用其他导航插件。需要 Chrome / Edge 152 或更高。不要再安装 GPT Navigator Helper。
+先按 `docs/OFFICIAL_NAVIGATION_SETUP.md` 安装 Yada 3.1.1，并禁用其他导航插件。需要 Chrome / Edge 152 或更高。不要再安装 GPT Navigator Helper。
 
 - [ ] 约 18 轮真实对话：停在底部刷新，等待官方导航出现，点击官方刻度跳转，悬停查看 Harson / ChatGPT / 时间预览。
 - [ ] 同一篇约 18 轮对话继续发送新消息，不刷新页面，悬停新增官方刻度应出现新轮次预览。
 - [ ] 100+ 轮真实对话：停在底部刷新，不要手动往上滚，等待 Yada 自动加载更早记录，确认官方导航完整出现后再跳转。
 - [ ] 100+ 轮对话继续新增消息后，新刻度悬停预览更新；已能映射的旧刻度不反复打转。
-- [ ] 滚动、点按或键盘操作应立即停止自动准备；停手约 2.5 秒后可以有限恢复。
+- [ ] 滚动、点按或键盘操作应立即停止自动准备；持续滚动期间不应恢复，停手约 2.5 秒后可以有限恢复。
 - [ ] 官方导航尚未出现时，复制全部和提示词仍可用，页面无报错，也没有 Yada 自己的导航条。
 - [ ] 灰绿模式、Harson/ChatGPT 绿色标题、2/5 行展开、User 本地轮次时间与缺失时间。
 - [ ] 提示词既有数据、三个纯图标、完整复制/对勾、编辑/删除、新增；确认不写入输入框。

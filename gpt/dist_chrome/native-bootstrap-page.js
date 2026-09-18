@@ -191,8 +191,12 @@
   var HistoryTracker = class {
     ids = /* @__PURE__ */ new Set();
     seenCursors = /* @__PURE__ */ new Set();
+    active = /* @__PURE__ */ new Map();
     currentNode = null;
     promptCount = 0;
+    nextRequestId = 0;
+    latestInitialId = 0;
+    routeGeneration = 0;
     snapshot = emptyHistoryState();
     snapshotState() {
       return { ...this.snapshot };
@@ -200,47 +204,107 @@
     reset(conversationId = "") {
       this.ids.clear();
       this.seenCursors.clear();
+      this.active.clear();
       this.currentNode = null;
       this.promptCount = 0;
+      this.latestInitialId = 0;
       this.snapshot = emptyHistoryState(conversationId);
+      this.snapshot.generation = this.routeGeneration;
+      this.syncPending();
     }
-    beginRequest(conversationId, boosted) {
-      if (this.snapshot.conversationId !== conversationId) this.reset(conversationId);
-      this.snapshot.pending += 1;
-      this.snapshot.boosted = this.snapshot.boosted || boosted;
+    notifyRoute(conversationId) {
+      this.routeGeneration += 1;
+      this.reset(conversationId);
       this.snapshot.revision += 1;
       return this.snapshotState();
     }
-    endRequest() {
-      this.snapshot.pending = Math.max(0, this.snapshot.pending - 1);
+    matchesContext(ctx) {
+      return ctx.conversationId === this.snapshot.conversationId && ctx.routeGeneration === this.snapshot.generation;
+    }
+    isStale(ctx) {
+      if (!this.matchesContext(ctx)) return true;
+      if (ctx.kind === "initial") return ctx.requestId !== this.latestInitialId;
+      return ctx.initialVersion !== this.snapshot.initialVersion;
+    }
+    isValidRequest(ctx) {
+      return !this.isStale(ctx);
+    }
+    beginRequest(input) {
+      if (!this.snapshot.conversationId) {
+        if (this.routeGeneration === 0) this.routeGeneration = 1;
+        this.snapshot.conversationId = input.conversationId;
+        this.snapshot.generation = this.routeGeneration;
+      }
+      const ctx = {
+        requestId: ++this.nextRequestId,
+        conversationId: input.conversationId,
+        routeGeneration: this.snapshot.generation,
+        initialVersion: this.snapshot.initialVersion,
+        kind: input.kind,
+        before: input.before
+      };
+      if (this.matchesContext(ctx) && ctx.kind === "initial") this.latestInitialId = ctx.requestId;
+      this.active.set(ctx.requestId, ctx);
+      this.snapshot.boosted = this.snapshot.boosted || Boolean(input.boosted);
       this.snapshot.revision += 1;
+      this.syncPending();
+      return ctx;
+    }
+    endRequest(requestId) {
+      this.active.delete(requestId);
+      this.snapshot.revision += 1;
+      this.syncPending();
       return this.snapshotState();
     }
-    markIssue(issue) {
+    markIssue(issue, ctx) {
+      if (ctx && this.isStale(ctx)) return this.snapshotState();
       this.snapshot.issue = issue;
       this.snapshot.revision += 1;
       return this.snapshotState();
     }
     applyInitial(conversationId, payload) {
+      if (this.snapshot.conversationId !== conversationId) this.notifyRoute(conversationId);
+      const ctx = this.beginRequest({ conversationId, kind: "initial", before: null });
+      const state = this.applyInitialFrom(ctx, payload);
+      this.endRequest(ctx.requestId);
+      return state;
+    }
+    applyOlder(payload, requestedBefore) {
+      return this.applyOlderFrom({
+        requestId: ++this.nextRequestId,
+        conversationId: this.snapshot.conversationId,
+        routeGeneration: this.snapshot.generation,
+        initialVersion: this.snapshot.initialVersion,
+        kind: "older",
+        before: requestedBefore
+      }, payload, false);
+    }
+    applyInitialFrom(ctx, payload) {
+      if (!this.matchesContext(ctx) || ctx.kind !== "initial" || ctx.requestId !== this.latestInitialId) {
+        return this.snapshotState();
+      }
       this.ids.clear();
       this.seenCursors.clear();
       this.promptCount = 0;
-      this.snapshot.conversationId = conversationId;
-      this.snapshot.generation += 1;
+      this.snapshot.conversationId = ctx.conversationId;
       this.snapshot.initialVersion += 1;
       this.snapshot.pages = 0;
       this.snapshot.issue = null;
       this.snapshot.boundary = "unknown";
       this.snapshot.cursor = null;
       this.currentNode = typeof payload.current_node === "string" ? payload.current_node : null;
+      this.syncPending();
       return this.commitPage(payload, "initial");
     }
-    applyOlder(payload, requestedBefore) {
-      if (this.snapshot.pages < 1) {
-        return this.markIssue("unlinked");
+    applyOlderFrom(ctx, payload, silentStale = true) {
+      if (!this.matchesContext(ctx) || ctx.initialVersion !== this.snapshot.initialVersion) {
+        return this.snapshotState();
       }
-      if (!requestedBefore || requestedBefore !== this.snapshot.cursor) {
-        return this.fail("unlinked");
+      if (this.snapshot.pages < 1) {
+        return silentStale ? this.snapshotState() : this.markIssue("unlinked");
+      }
+      if (!ctx.before || ctx.before !== this.snapshot.cursor) {
+        return silentStale ? this.snapshotState() : this.fail("unlinked");
       }
       const nextNode = typeof payload.current_node === "string" ? payload.current_node : null;
       if (this.currentNode && nextNode && nextNode !== this.currentNode) {
@@ -258,6 +322,7 @@
         this.snapshot.issue = null;
         this.snapshot.revision += 1;
         this.syncCounts();
+        this.syncPending();
         return this.snapshotState();
       }
       if (previous !== true || !nextCursor) {
@@ -269,13 +334,14 @@
         this.syncCounts();
         return this.snapshotState();
       }
-      this.seenCursors.add(this.snapshot.cursor ?? requestedBefore);
+      this.seenCursors.add(this.snapshot.cursor ?? ctx.before);
       this.snapshot.cursor = nextCursor;
       this.snapshot.pages += 1;
       this.snapshot.boundary = "more";
       this.snapshot.issue = null;
       this.snapshot.revision += 1;
       this.syncCounts();
+      this.syncPending();
       return this.snapshotState();
     }
     commitPage(payload, kind) {
@@ -332,6 +398,13 @@
       this.snapshot.messages = this.ids.size;
       this.snapshot.prompts = this.promptCount;
     }
+    syncPending() {
+      let pending = 0;
+      for (const ctx of this.active.values()) {
+        if (this.isValidRequest(ctx)) pending += 1;
+      }
+      this.snapshot.pending = pending;
+    }
   };
 
   // src/nativeBootstrap/page.ts
@@ -339,7 +412,8 @@
   var readers = 0;
   var boostUntil = 0;
   var boostConversationId = "";
-  var captureControllers = /* @__PURE__ */ new Set();
+  var routeConversationId = currentConversationId() ?? "";
+  var captures = /* @__PURE__ */ new Map();
   function publish(state) {
     window.postMessage({ source: YADA_PAGE_SOURCE, type: "history-state", state }, location.origin);
   }
@@ -349,78 +423,189 @@
   function isPrepareBoostActive(conversationId = currentConversationId()) {
     return typeof conversationId === "string" && boostActive(conversationId);
   }
-  function cancelCaptures() {
-    for (const controller of captureControllers) controller.abort();
-    captureControllers.clear();
+  function nativeBootstrapCaptureStats() {
+    return { readers, captures: captures.size };
   }
-  async function captureResponse(tracker, promise, matchKind, conversationId, requestedBefore, boosted) {
-    let response;
+  function cancelHandle(handle) {
     try {
-      response = await promise;
+      handle.controller.abort();
     } catch {
-      publish(tracker.markIssue("http-error"));
-      return;
     }
-    if (!response.ok) {
-      publish(tracker.markIssue("http-error"));
-      return;
+    if (handle.reader) {
+      void handle.reader.cancel().catch(() => void 0);
+      handle.reader = null;
     }
-    if (readers >= MAX_CLONE_READERS) {
-      publish(tracker.markIssue("capture-unavailable"));
-      return;
+  }
+  function cancelCaptures(predicate) {
+    for (const [requestId, handle] of captures) {
+      if (predicate && !predicate(handle.ctx)) continue;
+      cancelHandle(handle);
+      captures.delete(requestId);
     }
-    const contentType = response.headers.get("content-type") ?? "";
-    if (!contentType.toLowerCase().includes("application/json")) {
-      publish(tracker.markIssue("capture-unavailable"));
-      return;
+  }
+  function cancelStaleCaptures(tracker) {
+    cancelCaptures((ctx) => tracker.isStale(ctx));
+  }
+  async function readCloneLimited(clone, handle, signal) {
+    const body = clone.body;
+    if (!body) throw new Error("missing-body");
+    const reader = body.getReader();
+    handle.reader = reader;
+    const chunks = [];
+    let total = 0;
+    const abortRead = () => {
+      void reader.cancel().catch(() => void 0);
+      handle.reader = null;
+    };
+    if (signal.aborted) {
+      abortRead();
+      throw new DOMException("Aborted", "AbortError");
     }
-    const declared = Number(response.headers.get("content-length"));
-    if (Number.isFinite(declared) && declared > MAX_CAPTURE_BYTES) {
-      publish(tracker.markIssue("capture-unavailable"));
-      return;
-    }
-    readers += 1;
-    const controller = new AbortController();
-    captureControllers.add(controller);
-    const timer = window.setTimeout(() => controller.abort(), MAX_CAPTURE_MS);
+    signal.addEventListener("abort", abortRead, { once: true });
     try {
-      const clone = response.clone();
-      const buffer = await Promise.race([
-        clone.arrayBuffer(),
-        new Promise((_, reject) => {
-          controller.signal.addEventListener("abort", () => reject(new DOMException("Aborted", "AbortError")), { once: true });
-          if (controller.signal.aborted) reject(new DOMException("Aborted", "AbortError"));
-        })
-      ]);
-      if (buffer.byteLength > MAX_CAPTURE_BYTES) {
-        publish(tracker.markIssue("capture-unavailable"));
+      while (true) {
+        if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (!value?.byteLength) continue;
+        total += value.byteLength;
+        if (total > MAX_CAPTURE_BYTES) {
+          chunks.length = 0;
+          abortRead();
+          throw new Error("limit");
+        }
+        chunks.push(value);
+      }
+      const bytes = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        bytes.set(chunk, offset);
+        offset += chunk.byteLength;
+      }
+      return bytes;
+    } finally {
+      signal.removeEventListener("abort", abortRead);
+      if (handle.reader === reader) handle.reader = null;
+      try {
+        reader.releaseLock();
+      } catch {
+      }
+    }
+  }
+  async function captureResponse(tracker, promise, ctx, boosted) {
+    const handle = { ctx, controller: new AbortController(), reader: null };
+    captures.set(ctx.requestId, handle);
+    let timedOut = false;
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      handle.controller.abort();
+    }, MAX_CAPTURE_MS);
+    try {
+      let response;
+      try {
+        response = await promise;
+      } catch {
+        if (!tracker.isStale(ctx)) publish(tracker.markIssue("http-error", ctx));
         return;
       }
-      const payload = JSON.parse(new TextDecoder().decode(buffer));
-      const slim = {
-        current_node: typeof payload.current_node === "string" ? payload.current_node : null,
-        page_info: payload.page_info,
-        messages: Array.isArray(payload.messages) ? payload.messages.map((message) => ({
-          id: typeof message?.id === "string" ? message.id : void 0,
-          author: { role: message?.author?.role }
-        })) : void 0
-      };
-      const state = matchKind === "paginated-initial" ? tracker.applyInitial(conversationId, slim) : tracker.applyOlder(slim, requestedBefore);
-      state.boosted = state.boosted || boosted;
-      publish(state);
-    } catch {
-      if (!controller.signal.aborted) publish(tracker.markIssue("capture-unavailable"));
+      if (tracker.isStale(ctx)) return;
+      if (!response.ok) {
+        publish(tracker.markIssue("http-error", ctx));
+        return;
+      }
+      if (readers >= MAX_CLONE_READERS) {
+        publish(tracker.markIssue("capture-unavailable", ctx));
+        return;
+      }
+      const contentType = response.headers.get("content-type") ?? "";
+      if (!contentType.toLowerCase().includes("application/json")) {
+        publish(tracker.markIssue("capture-unavailable", ctx));
+        return;
+      }
+      const declared = Number(response.headers.get("content-length"));
+      if (Number.isFinite(declared) && declared > MAX_CAPTURE_BYTES) {
+        publish(tracker.markIssue("capture-unavailable", ctx));
+        return;
+      }
+      readers += 1;
+      try {
+        const clone = response.clone();
+        const bytes = await readCloneLimited(clone, handle, handle.controller.signal);
+        if (tracker.isStale(ctx)) return;
+        const payload = JSON.parse(new TextDecoder().decode(bytes));
+        const slim = {
+          current_node: typeof payload.current_node === "string" ? payload.current_node : null,
+          page_info: payload.page_info,
+          messages: Array.isArray(payload.messages) ? payload.messages.map((message) => ({
+            id: typeof message?.id === "string" ? message.id : void 0,
+            author: { role: message?.author?.role }
+          })) : void 0
+        };
+        const state = ctx.kind === "initial" ? tracker.applyInitialFrom(ctx, slim) : tracker.applyOlderFrom(ctx, slim);
+        state.boosted = state.boosted || boosted;
+        publish(state);
+        cancelStaleCaptures(tracker);
+      } catch (error) {
+        if (tracker.isStale(ctx)) return;
+        const limited = error instanceof Error && error.message === "limit";
+        if (limited || timedOut) {
+          publish(tracker.markIssue("capture-unavailable", ctx));
+          return;
+        }
+        const aborted = handle.controller.signal.aborted || error instanceof DOMException && error.name === "AbortError";
+        if (aborted) return;
+        publish(tracker.markIssue("capture-unavailable", ctx));
+      } finally {
+        readers = Math.max(0, readers - 1);
+      }
     } finally {
       window.clearTimeout(timer);
-      captureControllers.delete(controller);
-      readers = Math.max(0, readers - 1);
+      if (captures.get(ctx.requestId) === handle) captures.delete(ctx.requestId);
+      handle.reader = null;
     }
+  }
+  function installRouteWatch(onChange) {
+    const nativePush = history.pushState.bind(history);
+    const nativeReplace = history.replaceState.bind(history);
+    const notify = () => {
+      const next = currentConversationId() ?? "";
+      if (next === routeConversationId) return;
+      routeConversationId = next;
+      onChange(next);
+    };
+    history.pushState = function chatgptYadaPushState(...args) {
+      nativePush(...args);
+      notify();
+    };
+    history.replaceState = function chatgptYadaReplaceState(...args) {
+      nativeReplace(...args);
+      notify();
+    };
+    window.addEventListener("popstate", notify);
+    window.addEventListener("pageshow", notify);
+    return () => {
+      history.pushState = nativePush;
+      history.replaceState = nativeReplace;
+      window.removeEventListener("popstate", notify);
+      window.removeEventListener("pageshow", notify);
+    };
   }
   function installNativeBootstrapPage() {
     const globalState = globalThis;
     if (globalState[FLAG]) return globalState[FLAG].dispose;
     const tracker = new HistoryTracker();
     const nativeFetch = window.fetch;
+    routeConversationId = currentConversationId() ?? "";
+    if (routeConversationId) tracker.notifyRoute(routeConversationId);
+    const onRoute = (conversationId) => {
+      cancelCaptures();
+      publish(tracker.notifyRoute(conversationId));
+      if (boostConversationId && boostConversationId !== conversationId) {
+        boostUntil = 0;
+        boostConversationId = "";
+      }
+    };
+    const disposeRoute = installRouteWatch(onRoute);
     const onMessage = (event) => {
       if (event.origin !== location.origin) return;
       const data = event.data;
@@ -448,10 +633,16 @@
       const rewritten = boostConversationUrl(url.href, location.href, match, olderBoost);
       const [nextInput, nextInit] = rewritten.href === url.href ? [input, init] : rewriteGetRequest(input, init, rewritten.href);
       const requestedBefore = match.kind === "paginated-messages" ? url.searchParams.get("before") : null;
-      publish(tracker.beginRequest(conversationId, rewritten.boosted));
+      const ctx = tracker.beginRequest({
+        conversationId,
+        kind: match.kind === "paginated-initial" ? "initial" : "older",
+        before: requestedBefore,
+        boosted: rewritten.boosted
+      });
+      publish(tracker.snapshotState());
       const promise = nativeFetch.call(window, nextInput, nextInit);
-      void promise.finally(() => publish(tracker.endRequest()));
-      void captureResponse(tracker, promise, match.kind, conversationId, requestedBefore, rewritten.boosted);
+      void promise.finally(() => publish(tracker.endRequest(ctx.requestId)));
+      void captureResponse(tracker, promise, ctx, rewritten.boosted);
       return promise;
     };
     window.addEventListener("message", onMessage);
@@ -459,9 +650,11 @@
       if (globalState[FLAG]?.dispose !== dispose) return;
       window.removeEventListener("message", onMessage);
       window.fetch = nativeFetch;
+      disposeRoute();
       cancelCaptures();
       boostUntil = 0;
       boostConversationId = "";
+      readers = 0;
       tracker.reset();
       delete globalState[FLAG];
     };

@@ -1,5 +1,11 @@
 # Changelog
 
+## v3.1.1 - 2026-09-18
+
+- 版本类型：PATCH
+- 变更说明：收口 sentinel 延迟/替换、官方导航等待、请求世代和用户 2.5 秒恢复时序。
+- 构建产物：ChatGPT-Yada-v3.1.1-dist_chrome.zip
+
 ## v3.1.0 - 2026-09-18
 
 - 版本类型：MINOR
