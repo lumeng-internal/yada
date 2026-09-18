@@ -70,25 +70,55 @@ function buildConversationMappingFromMessages(messages: ApiConversationMessage[]
   return { id, mapping, current_node: current || parent };
 }
 
+function isRateLimited(error: unknown): boolean {
+  return error instanceof Error && /API failed: 429\b/.test(error.message);
+}
+
+async function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortError();
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    const onAbort = (): void => {
+      clearTimeout(timer);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export async function fetchCompleteConversation(id: string, headers: HeadersInit, signal?: AbortSignal): Promise<ApiConversation> {
   const request = async (url: string): Promise<ConversationResponse> => {
-    const controller = new AbortController();
-    const abort = (): void => controller.abort();
-    signal?.addEventListener('abort', abort, { once: true });
-    if (signal?.aborted) controller.abort();
-    const timer = setTimeout(abort, 10000);
-    try {
-      if (signal?.aborted || controller.signal.aborted) throw abortError();
-      const response = await fetch(url, { credentials: 'include', cache: 'no-store', headers, signal: controller.signal });
-      if (signal?.aborted || controller.signal.aborted) throw abortError();
-      if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
-      const data = await response.json();
-      if (!data || typeof data !== 'object') throw new Error('Conversation API returned an empty response');
-      return data as ConversationResponse;
-    } catch (error) {
-      if (signal?.aborted || controller.signal.aborted || isAbortError(error)) throw abortError();
-      throw error;
-    } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
+    const once = async (): Promise<Response> => {
+      const controller = new AbortController();
+      const abort = (): void => controller.abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) controller.abort();
+      const timer = setTimeout(abort, 10000);
+      try {
+        if (signal?.aborted || controller.signal.aborted) throw abortError();
+        const response = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
+        if (signal?.aborted || controller.signal.aborted) throw abortError();
+        return response;
+      } catch (error) {
+        if (signal?.aborted || controller.signal.aborted || isAbortError(error)) throw abortError();
+        throw error;
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      }
+    };
+    let response = await once();
+    if (response.status === 429) {
+      await wait(1000, signal);
+      response = await once();
+    }
+    if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+    const data = await response.json();
+    if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
+    return data as ConversationResponse;
   };
   const complete = (raw: ConversationResponse): ApiConversation => {
     const data = unwrap(raw);
@@ -120,10 +150,16 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
     }
     if (isCompleteConversationMapping(first)) return complete(first);
     throw new Error('Paginated conversation API returned no messages');
-  } catch (error) { lastError = error; if (signal?.aborted) throw error; }
+  } catch (error) {
+    lastError = error;
+    if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
+  }
   try {
     return complete(await request(`${base}?include_full_conversation=true`));
-  } catch (error) { lastError = error; if (signal?.aborted) throw error; }
+  } catch (error) {
+    lastError = error;
+    if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
+  }
   for (const url of [base, `${base}?offset=0&limit=100000`]) {
     try { return complete(await request(url)); }
     catch (error) { lastError = error; if (signal?.aborted) throw error; }

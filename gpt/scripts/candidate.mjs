@@ -351,10 +351,19 @@ async function main() {
       report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
       report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
       report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
-    } else if (samples.best?.conversationId) {
-      report.live.smoke = await liveSmoke(cdp, chatTarget, samples.best);
-    } else if (samples.fallback?.conversationId) {
-      report.live.smoke = await liveSmoke(cdp, chatTarget, samples.fallback);
+    } else {
+      const smokeIds = [...new Set([...(samples.personalIds || []), samples.best?.conversationId, samples.fallback?.conversationId].filter(Boolean))];
+      let smokeError = null;
+      for (const conversationId of smokeIds) {
+        try {
+          report.live.smoke = await liveSmoke(cdp, chatTarget, { conversationId, turnCount: 0, userIds: [] });
+          smokeError = null;
+          break;
+        } catch (error) {
+          smokeError = error;
+        }
+      }
+      if (smokeError) throw smokeError;
     }
 
     for (const id of samples.personalIds || []) {
@@ -556,16 +565,30 @@ async function openConversation(cdp, targetId, conversationId) {
   await waitFor(
     cdp,
     targetId,
-    `() => location.pathname.includes(${JSON.stringify(`/c/${conversationId}`)}) && document.getElementById("chatgpt-yada-rail-host")`,
-    "Yada rail did not mount",
-    45000
+    `() => location.pathname.includes(${JSON.stringify(`/c/${conversationId}`)}) && document.readyState === "complete"`,
+    "ChatGPT conversation page did not load",
+    30000
   );
   await waitFor(
     cdp,
     targetId,
+    `() => document.getElementById("chatgpt-yada-rail-host")`,
+    "Yada rail did not mount",
+    20000
+  );
+  const users = await waitFor(
+    cdp,
+    targetId,
+    `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length`,
+    "ChatGPT did not render user turns",
+    30000
+  ).catch(() => 0);
+  await waitFor(
+    cdp,
+    targetId,
     `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length > 0`,
-    "ConversationSync did not fill the rail",
-    45000
+    `ConversationSync did not fill the rail (page users=${users})`,
+    30000
   );
 }
 

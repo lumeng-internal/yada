@@ -82,7 +82,13 @@ export async function fetchConversation(conversationId: string, signal?: AbortSi
 }
 
 async function getAccessToken(): Promise<string | null> {
-  sessionTokenPromise ??= fetchSessionToken();
+  sessionTokenPromise ??= fetchSessionToken().then((token) => {
+    if (!token) sessionTokenPromise = null;
+    return token;
+  }, (error) => {
+    sessionTokenPromise = null;
+    throw error;
+  });
   return sessionTokenPromise;
 }
 
