@@ -99,24 +99,27 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
   let lastError: unknown;
   try {
     const first = unwrap(await request(getPaginatedConversationApiUrl(id)));
-    if (!Array.isArray(first.messages)) throw new Error('Paginated conversation API returned no messages');
-    let messages = mergePaginatedConversationMessages([], first.messages);
-    let cursor = getPaginatedConversationCursor(first);
-    const seen = new Set<string>();
-    let count = 1;
-    while (cursor) {
-      if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-      if (seen.has(cursor) || count >= MAX_PAGES) throw new Error('Conversation pagination stalled');
-      seen.add(cursor);
-      const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
-      if (!Array.isArray(page.messages)) throw new Error('Conversation message page returned no messages');
-      messages = mergePaginatedConversationMessages(page.messages, messages);
-      cursor = getPaginatedConversationCursor(page); count++;
+    if (Array.isArray(first.messages)) {
+      let messages = mergePaginatedConversationMessages([], first.messages);
+      let cursor = getPaginatedConversationCursor(first);
+      const seen = new Set<string>();
+      let count = 1;
+      while (cursor) {
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (seen.has(cursor) || count >= MAX_PAGES) throw new Error('Conversation pagination stalled');
+        seen.add(cursor);
+        const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
+        if (!Array.isArray(page.messages)) throw new Error('Conversation message page returned no messages');
+        messages = mergePaginatedConversationMessages(page.messages, messages);
+        cursor = getPaginatedConversationCursor(page); count++;
+      }
+      if (!messages.length) throw new Error('Paginated conversation is empty');
+      const current = first.current_node ?? first.current_node_id ?? '';
+      const rebuilt = buildConversationMappingFromMessages(messages, id, current);
+      return { ...first, ...rebuilt, messages };
     }
-    if (!messages.length) throw new Error('Paginated conversation is empty');
-    const current = first.current_node ?? first.current_node_id ?? '';
-    const rebuilt = buildConversationMappingFromMessages(messages, id, current);
-    return { ...first, ...rebuilt, messages };
+    if (isCompleteConversationMapping(first)) return complete(first);
+    throw new Error('Paginated conversation API returned no messages');
   } catch (error) { lastError = error; if (signal?.aborted) throw error; }
   try {
     return complete(await request(`${base}?include_full_conversation=true`));
