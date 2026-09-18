@@ -66,7 +66,7 @@ https://github.com/AstroQore/vibe-bar
 Commit: af26391c5bcc074108072af8f2807fc4c47edf21
 License: AGPL-3.0
 
-Behavior/data ideas only (seven-day backfill, local ledger, coverage, estimated remaining). **No source, assets, or UI copied.**
+ChatGPT Chat quota 核心已从 Swift 移植到 `src/quota/vibebar/`。文件对照、版权与修改说明见 `NOTICE.md`。未复制 macOS 应用壳或菜单栏 UI。`gpt/` 因此以 AGPL-3.0 发布。
 
 ## GPT Navigator Helper
 

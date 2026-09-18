@@ -11,15 +11,24 @@ import {
 } from "@/platforms/chatgpt/virtualSearchAdapter";
 import type { YadaTurn } from "../conversation/types";
 import { findTurn, toLunaNavigationTurns, toLunaPrompts } from "./conversationAdapter";
-import { tryOfficialFastPath } from "./officialFastPath";
+import { NAVIGATION_CONFIG } from "./config";
 import type { NavigationResult, NavigateToOptions } from "./types";
+import type { NavigationFingerprintIndex } from "@/navigation/fingerprint/index";
+import type { NavigationSegmentIndex } from "@/navigation/fingerprint/segments";
 
-const PROMPT_TOP_OFFSET_PX = 16;
+const PROMPT_TOP_OFFSET_PX = NAVIGATION_CONFIG.promptTopOffsetPx;
 const ANCHOR_KEY = "chatgpt-yada:nav-anchors:v1";
 const CANCEL_KEYS = new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Space", " "]);
 
+type FingerprintCache = {
+  signature: string;
+  fingerprintIndex: NavigationFingerprintIndex;
+  segmentIndex: NavigationSegmentIndex;
+};
+
 export class NavigationPort {
   private transaction: AbortController | null = null;
+  private fingerprintCache: FingerprintCache | null = null;
   private readonly anchors = createNavigationAnchorStore({
     storage: {
       async read() {
@@ -62,15 +71,6 @@ export class NavigationPort {
       }
       if (controller.signal.aborted) return { ok: false, status: "cancelled" };
 
-      if (tryOfficialFastPath(turn.index, turns.length, conversationId)) {
-        await wait(80);
-        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
-        if (await this.jumpDirect(turn, controller.signal)) {
-          return { ok: true, status: "found", path: "official" };
-        }
-      }
-      if (controller.signal.aborted) return { ok: false, status: "cancelled" };
-
       return await this.jumpVirtual(turn, turns, conversationId, controller.signal);
     } catch (error) {
       if (controller.signal.aborted || isAbortError(error)) return { ok: false, status: "cancelled" };
@@ -90,6 +90,7 @@ export class NavigationPort {
 
   dispose(): void {
     this.cancel();
+    this.fingerprintCache = null;
   }
 
   private async jumpDirect(turn: YadaTurn, signal: AbortSignal): Promise<boolean> {
@@ -117,8 +118,15 @@ export class NavigationPort {
   ): Promise<NavigationResult> {
     const prompts = toLunaPrompts(turns);
     const lunaTurns = toLunaNavigationTurns(turns);
-    const fingerprintIndex = await buildFingerprintIndex(lunaTurns);
-    const segmentIndex = await buildDerivedSegmentIndex(lunaTurns);
+    const signature = `${conversationId}:${turns.map((item) => `${item.userMessageId}:${item.assistantMessageId}`).join("|")}`;
+    if (!this.fingerprintCache || this.fingerprintCache.signature !== signature) {
+      this.fingerprintCache = {
+        signature,
+        fingerprintIndex: await buildFingerprintIndex(lunaTurns),
+        segmentIndex: await buildDerivedSegmentIndex(lunaTurns)
+      };
+    }
+    const { fingerprintIndex, segmentIndex } = this.fingerprintCache;
     const targetPromptId = turn.userMessageId ?? turn.id;
     const container = (): HTMLElement | null => getChatGptScrollContainer();
 
@@ -151,6 +159,7 @@ export class NavigationPort {
         const node = container();
         if (node) node.scrollTop = scrollTop;
       },
+      now: () => Date.now(),
       signal
     });
 

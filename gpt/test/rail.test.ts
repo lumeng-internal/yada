@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { extractAssistantUsageEvents } from "../src/conversation/extractAssistantUsageEvents";
 import { normalizeConversation } from "../src/conversation/normalizeConversation";
 import { branchedConversation, linearConversation, message } from "./helpers";
 import { RailView } from "../src/rail/view";
@@ -40,12 +39,13 @@ describe("navigation data from ConversationSnapshot.activeTurns", () => {
     view.dispose();
   });
 
-  it("does not drop inactive-branch assistant events", () => {
-    const events = extractAssistantUsageEvents(branchedConversation());
-    expect(events.map((event) => event.assistantMessageId).sort()).toEqual(["a-old", "a0"]);
+  it("keeps the active branch after a regenerated answer", () => {
+    const turns = normalizeConversation(branchedConversation());
+    expect(turns).toHaveLength(1);
+    expect(turns[0].assistantMessageId).toBe("a0");
   });
 
-  it("skips tool and reasoning messages", () => {
+  it("skips tool and reasoning messages in the rail branch", () => {
     const conversation = linearConversation(1);
     conversation.mapping!["tool"] = {
       id: "tool",
@@ -57,6 +57,6 @@ describe("navigation data from ConversationSnapshot.activeTurns", () => {
       parent: "u0",
       message: { ...message("reason", "assistant", "thought"), channel: "reasoning", content: { content_type: "thoughts", parts: ["hidden"] } }
     };
-    expect(extractAssistantUsageEvents(conversation).map((event) => event.assistantMessageId)).toEqual(["a0"]);
+    expect(normalizeConversation(conversation).map((turn) => turn.assistantMessageId)).toEqual(["a0"]);
   });
 });

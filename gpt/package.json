@@ -2,22 +2,17 @@
   "name": "chatgpt-yada",
   "version": "4.0.0",
   "private": true,
+  "license": "AGPL-3.0-only",
   "description": "Complete ChatGPT long-thread navigation, hover preview, copy-all timestamps, prompt library, and local Pro quota estimates.",
   "type": "module",
   "scripts": {
+    "check": "node scripts/check.mjs",
     "build": "tsc --noEmit && node scripts/build.mjs",
+    "candidate": "node scripts/candidate.mjs",
     "test": "vitest run",
-    "verify:unit": "vitest run",
+    "test:upstream": "vitest run vendor/luna-navigation/test",
     "verify:copy": "esbuild scripts/verify-copy.ts --bundle --platform=node --format=esm --outfile=/tmp/chatgpt-yada-copy-verify.mjs && node /tmp/chatgpt-yada-copy-verify.mjs",
-    "verify:features": "node scripts/verify-browser.mjs",
-    "verify:gate": "node scripts/verify-gate.mjs",
-    "verify": "node scripts/verify.mjs",
-    "acceptance:live": "node scripts/live-acceptance.mjs",
-    "release": "node scripts/pack.mjs",
-    "release:official": "node scripts/release.mjs major",
-    "release:patch": "node scripts/release.mjs patch",
-    "release:minor": "node scripts/release.mjs minor",
-    "release:major": "node scripts/release.mjs major"
+    "verify:gate": "node scripts/verify-gate.mjs"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.303",

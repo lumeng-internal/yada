@@ -1,5 +1,5 @@
 import * as esbuild from "esbuild";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,18 +37,25 @@ await esbuild.build({
   platform: "browser",
   target: ["chrome120"],
   outdir,
+  metafile: true,
   alias: {
     "@": resolve(root, "vendor/luna-navigation/src")
   },
   plugins: [inlineCss],
   logLevel: "info"
+}).then((result) => {
+  const artifacts = resolve(root, "artifacts/build");
+  mkdirSync(artifacts, { recursive: true });
+  writeFileSync(resolve(artifacts, "metafile.json"), `${JSON.stringify(result.metafile, null, 2)}\n`);
 });
 
 cpSync(resolve(root, "manifest.json"), resolve(outdir, "manifest.json"));
 cpSync(resolve(root, "src/popup/popup.css"), resolve(outdir, "popup.css"));
 cpSync(resolve(root, "src/popup/index.html"), resolve(outdir, "popup.html"));
-const notices = resolve(root, "THIRD_PARTY_NOTICES.md");
-if (existsSync(notices)) cpSync(notices, resolve(outdir, "THIRD_PARTY_NOTICES.md"));
+for (const file of ["LICENSE", "NOTICE.md", "THIRD_PARTY_NOTICES.md"]) {
+  const from = resolve(root, file);
+  if (existsSync(from)) cpSync(from, resolve(outdir, file));
+}
 
 const built = JSON.parse(readFileSync(resolve(outdir, "manifest.json"), "utf8"));
 if (built.version !== "4.0.0") throw new Error(`dist manifest version is ${built.version}`);

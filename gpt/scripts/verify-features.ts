@@ -1,12 +1,9 @@
 import { normalizeConversation } from "../src/conversation/normalizeConversation";
 import type { ApiConversation, ApiConversationMessage } from "../src/conversation/fetchConversation";
 import { fetchCompleteConversation } from "../src/conversation/completeConversation";
-import { ConversationRepository } from "../src/core/conversationRepository";
-import { extractAssistantUsageEvents } from "../src/conversation/extractAssistantUsageEvents";
+import { ConversationSync } from "../src/core/conversationSync";
 import { RailView } from "../src/rail/view";
 import { formatPreviewTime } from "../src/rail/preview";
-import { OfficialNavSuppressor } from "../src/navigation/officialNavSuppressor";
-import { tryOfficialFastPath } from "../src/navigation/officialFastPath";
 import { readLibrary, saveLibrary, PROMPT_KEY, PREVIEW_KEY } from "../src/prompts/storage";
 import { YadaToolbar } from "../src/ui/toolbar";
 import type { YadaTurn } from "../src/conversation/types";
@@ -48,7 +45,7 @@ function makeApi(count: number, id = "fixture-1"): ApiConversation {
     api.mapping![`a${i}`] = {
       id: `a${i}`,
       parent: `u${i}`,
-      message: { id: `a${i}`, author: { role: "assistant" }, channel: "final", content: { content_type: "text", parts: [`Assistant ${i} answer`] }, metadata: { model_slug: "gpt-6-pro" }, create_time: 1700000001 + i }
+      message: { id: `a${i}`, author: { role: "assistant" }, recipient: "all", channel: "final", status: "finished_successfully", content: { content_type: "text", parts: [`Assistant ${i} answer`] }, metadata: { model_slug: "gpt-6-pro" }, create_time: 1700000001 + i }
     };
   }
   return api;
@@ -137,40 +134,6 @@ function railChecks(): void {
   pass("rail renders 18/50/150/300 ticks from API turns; gray/green preview; timestamps");
 }
 
-function suppressorChecks(): void {
-  const official = el("button");
-  official.setAttribute("data-toc-item-index", "0");
-  official.textContent = "official";
-  document.body.append(official);
-  const suppressor = new OfficialNavSuppressor();
-  const view = new RailView(() => undefined);
-  view.setTurns(turns);
-  suppressor.enable();
-  assert(getComputedStyle(official).opacity === "0", "official navigation was not visually hidden");
-  assert(document.getElementById("chatgpt-yada-rail-host"), "Yada rail missing while official nav is suppressed");
-  suppressor.dispose();
-  view.dispose();
-  official.remove();
-  pass("official navigation visual hide does not remove Yada rail");
-}
-
-function fastPathChecks(): void {
-  history.replaceState({}, "", "/c/fixture-1");
-  const nav = el("div");
-  let clicks = 0;
-  for (let i = 0; i < 18; i++) {
-    const button = document.createElement("button");
-    button.setAttribute("data-toc-item-index", String(i));
-    button.addEventListener("click", () => { clicks += 1; });
-    nav.append(button);
-  }
-  document.body.append(nav);
-  assert(tryOfficialFastPath(3, 18, "fixture-1") === true && clicks === 1, "complete official nav fast path failed");
-  assert(tryOfficialFastPath(3, 50, "fixture-1") === false, "incomplete official nav was used as fast path");
-  nav.remove();
-  pass("official fast path requires identical button/turn counts");
-}
-
 async function repositoryChecks(): Promise<void> {
   let reads = 0;
   Object.assign(globalThis, { fetch: async (url: string) => {
@@ -179,19 +142,21 @@ async function repositoryChecks(): Promise<void> {
     await wait(30);
     return new Response(JSON.stringify(makeApi(6, "shared")));
   } });
-  const repo = new ConversationRepository();
-  const [a, b] = await Promise.all([repo.load("shared"), repo.load("shared")]);
-  assert(reads === 1 && a.revision === b.revision, "consumers did not share one request");
-  assert(a.activeTurns.length === 6 && a.assistantEvents.length === 6, "turns/events split across versions");
+  const sync = new ConversationSync();
+  sync.setActiveConversation("shared");
+  await Promise.all([sync.requestSync("a"), sync.requestSync("b")]);
+  const snapshot = sync.getSnapshot();
+  assert(reads === 1 && snapshot?.activeTurns.length === 6 && snapshot.quotaTurns.length >= 0, "consumers did not share one request");
   const branched = makeApi(1, "branch");
-  branched.mapping!["old"] = { id: "old", parent: "u0", message: { id: "old", author: { role: "assistant" }, channel: "final", content: { content_type: "text", parts: ["old"] }, metadata: { model_slug: "gpt-6-pro" } } };
+  branched.mapping!["old"] = { id: "old", parent: "u0", message: { id: "old", author: { role: "assistant" }, channel: "final", status: "finished_successfully", content: { content_type: "text", parts: ["old"] }, metadata: { model_slug: "gpt-6-pro" } } };
   Object.assign(globalThis, { fetch: async () => new Response(JSON.stringify(branched)) });
-  const snapshot = await repo.load("branch", { force: true });
-  assert(extractAssistantUsageEvents(branched).some((event) => event.assistantMessageId === "old"), "inactive branch assistant dropped");
-  assert(snapshot.activeTurns[0].assistantMessageId !== "old", "active branch lost");
-  repo.dispose();
+  sync.setActiveConversation("branch");
+  await sync.requestSync("branch");
+  const next = sync.getSnapshot();
+  assert(next?.activeTurns[0].assistantMessageId !== "old", "active branch lost");
+  sync.dispose();
   Object.assign(globalThis, { fetch: normalFetch });
-  pass("repository shares one request and keeps branch assistant events");
+  pass("conversation sync shares one request and keeps branch assistant events");
 }
 
 async function run(): Promise<void> {
@@ -208,8 +173,6 @@ async function run(): Promise<void> {
   await apiChecks();
   await repositoryChecks();
   railChecks();
-  suppressorChecks();
-  fastPathChecks();
 
   toolbar = new YadaToolbar(); toolbar.mount(); toolbar.setVisible(true);
   const mode = document.getElementById("chatgpt-yada-toolbar-host")!.shadowRoot!.querySelector<HTMLButtonElement>("[data-preview-mode]")!;

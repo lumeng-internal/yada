@@ -12,13 +12,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
-    include: [
-      "test/**/*.test.ts",
-      "vendor/luna-navigation/test/**/*.test.ts"
-    ],
-    exclude: [
-      "vendor/luna-navigation/test/platforms/chatgpt/renderedFingerprintCollector.test.ts"
-    ],
+    include: ["test/**/*.test.ts"],
     setupFiles: ["test/setup.ts"]
   }
 });

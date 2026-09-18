@@ -1,7 +1,15 @@
 _archives/
 node_modules/
 dist_chrome.zip
+ChatGPT-Yada-v*.zip
 reference/*.zip
 .DS_Store
 npm-debug.log*
 .verify-browser-*
+artifacts/
+.runtime/
+*.candidate.tmp
+*.metafile.json
+.cdp-debug*
+*.png
+.zip-compare/

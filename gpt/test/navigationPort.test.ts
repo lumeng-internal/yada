@@ -1,6 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { NavigationPort } from "../src/navigation/navigationPort";
-import { tryOfficialFastPath } from "../src/navigation/officialFastPath";
+import { searchVirtualPrompt } from "@/navigation/jump/virtualSearchController";
 import { linearConversation } from "./helpers";
 import { normalizeConversation } from "../src/conversation/normalizeConversation";
 
@@ -23,6 +23,10 @@ function mountMessages(ids: string[]): HTMLElement {
 }
 
 describe("NavigationPort", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+    vi.useRealTimers();
+  });
   it("jumps directly when the target user message is already rendered", async () => {
     mountMessages(["u0", "a0", "u1", "a1"]);
     const port = new NavigationPort();
@@ -31,22 +35,6 @@ describe("NavigationPort", () => {
     expect(result.ok).toBe(true);
     expect(result.path).toBe("direct");
     port.dispose();
-  });
-
-  it("uses the official fast path only when button count matches activeTurns", () => {
-    history.replaceState({}, "", "/c/conversation-1");
-    const nav = document.createElement("div");
-    const clicks: number[] = [];
-    for (let i = 0; i < 3; i++) {
-      const button = document.createElement("button");
-      button.setAttribute("data-toc-item-index", String(i));
-      button.addEventListener("click", () => clicks.push(i));
-      nav.append(button);
-    }
-    document.body.append(nav);
-    expect(tryOfficialFastPath(1, 3, "conversation-1")).toBe(true);
-    expect(clicks).toEqual([1]);
-    expect(tryOfficialFastPath(1, 18, "conversation-1")).toBe(false);
   });
 
   it("does not confirm a target by duplicate prompt text", async () => {
@@ -76,11 +64,35 @@ describe("NavigationPort", () => {
     mountMessages([]);
     const port = new NavigationPort();
     const turns = normalizeConversation(linearConversation(8));
-    vi.spyOn(window, "setTimeout");
     const pending = port.navigateTo("u0", turns, "conversation-1");
     window.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
     const result = await pending;
     expect(result.status).toBe("cancelled");
     port.dispose();
+  });
+
+  it("uses virtual search when the target is not rendered and times out deterministically", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    mountMessages([]);
+    const pending = searchVirtualPrompt({
+      targetPromptId: "u0",
+      targetPromptIndex: 0,
+      promptCount: 120,
+      getConfirmedAnchors: async () => [],
+      invalidateConfirmedAnchor: async () => undefined,
+      getObservedAnchors: () => [],
+      recordObservation: () => undefined,
+      getScrollMetrics: () => ({ scrollTop: 0, maximumScrollTop: 20_000, viewportWidth: 1280, viewportHeight: 800 }),
+      observePosition: async () => ({ position: { status: "none" }, anchors: [] }),
+      isTargetRendered: () => false,
+      scrollTo: () => undefined,
+      now: () => Date.now(),
+      maxDurationMs: 0,
+      maxAttempts: 32
+    });
+    await vi.advanceTimersByTimeAsync(50);
+    const result = await pending;
+    expect(result.status).toBe("timed-out");
   });
 });

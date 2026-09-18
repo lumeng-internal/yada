@@ -525,7 +525,7 @@ async function waitForTargetBackfill({
   getScrollMetrics: () => VirtualScrollMetrics;
 }): Promise<boolean> {
   const deadline =
-    performance.now() + APP_CONFIG.navigation.search.edgeBackfillWaitMs;
+    Date.now() + APP_CONFIG.navigation.search.edgeBackfillWaitMs;
 
   // Wait for ChatGPT to backfill the next page of history. The scrollable
   // height growing is the signal that a backfill landed; once it has grown we
@@ -537,7 +537,7 @@ async function waitForTargetBackfill({
   let sawChange = false;
   let stableRounds = 0;
 
-  while (performance.now() < deadline) {
+  while (Date.now() < deadline) {
     if (signal?.aborted || isTargetRendered()) return sawChange;
     await new Promise((resolve) => setTimeout(resolve, 120));
 

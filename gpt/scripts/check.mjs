@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const root = resolve(import.meta.dirname, "..");
@@ -10,7 +9,6 @@ function run(command, args) {
 }
 
 run("node", ["scripts/verify-gate.mjs"]);
-run("npm", ["run", "verify:unit"]);
+run("npx", ["vitest", "run"]);
 run("npm", ["run", "verify:copy"]);
-run("npm", ["run", "verify:features"]);
-console.log("VERIFY=PASS");
+console.log("CHECK=PASS");

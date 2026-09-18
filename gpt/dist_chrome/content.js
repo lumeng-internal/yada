@@ -163,10 +163,22 @@
     if (!conversationId) return null;
     return fetchConversation(conversationId, signal);
   }
+  async function chatgptApi(path, init = {}) {
+    const headers = new Headers(init.headers);
+    headers.set("Accept", headers.get("Accept") ?? "application/json");
+    const accessToken = await getAccessToken();
+    if (accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+      headers.set("X-Authorization", `Bearer ${accessToken}`);
+    }
+    const accountId = getChatGptAccountId();
+    if (accountId && !headers.has("Chatgpt-Account-Id")) {
+      headers.set("Chatgpt-Account-Id", accountId);
+    }
+    return fetch(path, { credentials: "include", cache: "no-store", ...init, headers });
+  }
   async function fetchConversation(conversationId, signal) {
-    const headers = {
-      Accept: "application/json"
-    };
+    const headers = { Accept: "application/json" };
     const accessToken = await getAccessToken();
     if (accessToken) {
       headers.Authorization = `Bearer ${accessToken}`;
@@ -220,107 +232,6 @@
       if (nested) return nested;
     }
     return null;
-  }
-
-  // src/conversation/extractAssistantUsageEvents.ts
-  var SKIP_CONTENT_TYPES = /* @__PURE__ */ new Set([
-    "thoughts",
-    "reasoning_recap",
-    "model_editable_context",
-    "user_editable_context",
-    "reasoning"
-  ]);
-  function extractAssistantUsageEvents(conversation, observedAt = Date.now()) {
-    const conversationId = conversation.id ?? conversation.conversation_id ?? "";
-    const workspaceKind = inferConversationWorkspaceKind(conversation);
-    const seen = /* @__PURE__ */ new Set();
-    const events = [];
-    const consider = (message) => {
-      if (!message || typeof message.id !== "string" || !message.id) return;
-      if (seen.has(message.id)) return;
-      if (!isCountableAssistant(message)) return;
-      seen.add(message.id);
-      events.push({
-        assistantMessageId: message.id,
-        conversationId,
-        createdAt: normalizeCreatedAt(message.create_time),
-        observedAt,
-        modelSlug: readModelSlug(message),
-        status: "final",
-        workspaceKind
-      });
-    };
-    if (conversation.mapping) {
-      for (const node of Object.values(conversation.mapping)) {
-        consider(node.message);
-      }
-    }
-    if (Array.isArray(conversation.messages)) {
-      for (const message of conversation.messages) consider(message);
-    }
-    return events;
-  }
-  function inferConversationWorkspaceKind(conversation) {
-    const record = conversation;
-    const raw = [
-      record.workspace_id,
-      record.workspaceId,
-      record.workspace_type,
-      record.workspaceType,
-      record.is_workspace,
-      record.isWorkspace
-    ];
-    for (const value of raw) {
-      const kind = classifyWorkspaceValue(value);
-      if (kind !== "unknown") return kind;
-    }
-    return "unknown";
-  }
-  function isCountableAssistant(message) {
-    const role = message.author?.role;
-    if (role !== "assistant") return false;
-    const recipient = message.recipient;
-    if (recipient && recipient !== "all") return false;
-    const channel = message.channel;
-    if (channel && channel !== "final") return false;
-    const metadata = message.metadata ?? {};
-    if (metadata.is_visually_hidden_from_conversation === true || metadata.is_hidden === true || metadata.hidden === true) {
-      return false;
-    }
-    const contentType = typeof message.content?.content_type === "string" ? String(message.content.content_type) : "";
-    if (SKIP_CONTENT_TYPES.has(contentType) || contentType.includes("reasoning")) return false;
-    if (contentType === "thoughts" || contentType === "code" && metadata.is_reasoning === true) return false;
-    return true;
-  }
-  function readModelSlug(message) {
-    const metadata = message.metadata ?? {};
-    const keys = [
-      "model_slug",
-      "model",
-      "default_model_slug",
-      "model_id",
-      "slug"
-    ];
-    for (const key of keys) {
-      const value = metadata[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
-    return null;
-  }
-  function normalizeCreatedAt(value) {
-    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-    return value;
-  }
-  function classifyWorkspaceValue(value) {
-    if (value === true) return "work";
-    if (value === false) return "personal";
-    if (typeof value !== "string" || !value.trim()) return "unknown";
-    const normalized = value.trim().toLowerCase();
-    if (["personal", "plus", "pro", "free", "consumer"].includes(normalized)) return "personal";
-    if (normalized.includes("work") || normalized.includes("team") || normalized.includes("business") || normalized.includes("enterprise") || normalized.includes("workspace")) {
-      return "work";
-    }
-    return "unknown";
   }
 
   // src/conversation/composerGuard.ts
@@ -511,23 +422,6 @@ ${cleanText}`;
   }
 
   // src/conversation/normalizeConversation.ts
-  async function loadCurrentConversationSnapshot(options = {}) {
-    const conversationId = options.conversationId ?? getConversationIdFromUrl();
-    if (!conversationId) throw new Error("No active ChatGPT conversation");
-    const conversation = await fetchCurrentConversation(conversationId, options.signal);
-    if (!conversation) throw new Error("ChatGPT conversation was not returned");
-    const turns = normalizeConversation(conversation);
-    return {
-      conversationId: conversation.id ?? conversationId,
-      source: "api-full",
-      turns,
-      capturedAt: Date.now(),
-      apiTurnsLength: turns.length,
-      domTurnsLength: 0,
-      usingCachedApiTurns: false,
-      lastStableTurnsLength: turns.length
-    };
-  }
   function normalizeConversation(conversation) {
     const nodes = getCurrentBranchNodes(conversation);
     const turns = [];
@@ -680,342 +574,569 @@ ${text}
     return plain.length > 180 ? `${plain.slice(0, 179)}…` : plain;
   }
 
-  // src/core/conversationRepository.ts
-  var COALESCE_MS = 250;
-  var ConversationRepository = class {
-    listeners = /* @__PURE__ */ new Set();
-    cache = /* @__PURE__ */ new Map();
-    inflight = /* @__PURE__ */ new Map();
-    pending = /* @__PURE__ */ new Map();
-    revision = 0;
-    disposed = false;
-    activeConversationId = null;
-    activeAbort = null;
-    subscribe(listener) {
-      this.listeners.add(listener);
-      const current = this.activeConversationId ? this.cache.get(this.activeConversationId) ?? null : null;
-      listener(current ?? null);
-      return () => this.listeners.delete(listener);
+  // src/quota/vibebar/json.ts
+  var VALID_MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+  function asObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("ChatGPT Chat response exceeds the read bound or is not an object.");
     }
-    load(conversationId, options = {}) {
-      if (this.disposed) return Promise.reject(new Error("ConversationRepository disposed"));
-      if (!conversationId) return Promise.reject(new Error("No active ChatGPT conversation"));
-      if (!options.force) {
-        const cached = this.cache.get(conversationId);
-        if (cached) return Promise.resolve(cached);
-        const existing = this.inflight.get(conversationId);
-        if (existing) return existing.then((snapshot) => snapshot.revision >= 0 ? snapshot : this.read(conversationId, options.signal));
+    return value;
+  }
+  function parseDate(value) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.round(value < 1e12 ? value * 1e3 : value);
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+  function validModel(value) {
+    return VALID_MODEL.test(value);
+  }
+  function parseInteger(value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) return null;
+    return value;
+  }
+
+  // src/quota/vibebar/modelLimits.ts
+  function modelLimits(data, now) {
+    if (!data || typeof data !== "object") return [];
+    const rows = data.model_limits;
+    if (!Array.isArray(rows)) return [];
+    const limits = [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const record = row;
+      const model = typeof record.model_slug === "string" ? record.model_slug : null;
+      if (!model || !validModel(model)) continue;
+      const reset = parseDate(record.resets_after);
+      if (reset != null && reset <= now) continue;
+      const fallbackRaw = typeof record.using_default_model_slug === "string" ? record.using_default_model_slug : null;
+      const fallbackModel = fallbackRaw && validModel(fallbackRaw) ? fallbackRaw : null;
+      limits.push({ model, resetsAt: reset, fallbackModel });
+    }
+    return limits;
+  }
+
+  // src/quota/vibebar/conversationParser.ts
+  var HEX = "0123456789abcdef";
+  async function identity(value) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    const bytes = new Uint8Array(digest);
+    let out = "chat-";
+    for (const byte of bytes) {
+      out += HEX[byte >> 4];
+      out += HEX[byte & 15];
+    }
+    return out;
+  }
+  function isWork(origin, model) {
+    const originKey = origin?.toLowerCase() ?? "";
+    const modelKey = model?.toLowerCase() ?? "";
+    return ["tpp", "flora", "codex"].includes(originKey) || modelKey.endsWith("-wm") || modelKey.includes("codex");
+  }
+  function isTemporary(value) {
+    if (!value || typeof value !== "object") return false;
+    const record = value;
+    return record.is_temporary_chat === true || record.isTemporary === true;
+  }
+  function conversationOrigin(value) {
+    if (!value || typeof value !== "object") return null;
+    const origin = value.conversation_origin;
+    return typeof origin === "string" && origin.trim() ? origin.trim() : null;
+  }
+  async function parseConversation(data, id, updatedAt, since) {
+    const root = asObject(data);
+    const conversationId = typeof root.conversation_id === "string" ? root.conversation_id : typeof root.id === "string" ? root.id : null;
+    const mapping = root.mapping;
+    if (conversationId !== id || !mapping || typeof mapping !== "object" || Array.isArray(mapping)) {
+      throw new Error("ChatGPT Chat conversation identity or mapping is missing.");
+    }
+    const origin = conversationOrigin(root);
+    const defaultModel = typeof root.default_model_slug === "string" ? root.default_model_slug : null;
+    if (isWork(origin, defaultModel)) {
+      return { updatedAt, turns: [], isWork: true, unclassifiedTurns: 0 };
+    }
+    const knownOrigin = origin == null || origin === "chat" || origin === "chatgpt";
+    const nodes = mapping;
+    const users = {};
+    for (const [key, node] of Object.entries(nodes)) {
+      const message = messageOf(node);
+      if (roleOf(message) !== "user") continue;
+      const created = parseDate(message.create_time);
+      if (created != null && created < since) continue;
+      users[key] = message;
+    }
+    const replies = {};
+    const owners = new Map(Object.keys(users).map((key) => [key, key]));
+    const orphans = /* @__PURE__ */ new Set();
+    for (const [key, node] of Object.entries(nodes)) {
+      const message = messageOf(node);
+      if (!isFinalAssistant(message)) continue;
+      let cursor = key;
+      const path = [];
+      const visited = /* @__PURE__ */ new Set();
+      let owner;
+      while (cursor && !visited.has(cursor)) {
+        visited.add(cursor);
+        const known = owners.get(cursor);
+        if (known) {
+          owner = known;
+          break;
+        }
+        if (orphans.has(cursor)) break;
+        const candidate = messageOf(nodes[cursor]);
+        if (roleOf(candidate) === "user") break;
+        path.push(cursor);
+        cursor = typeof nodes[cursor]?.parent === "string" ? nodes[cursor].parent : null;
+      }
+      if (owner) {
+        for (const nodeId of path) owners.set(nodeId, owner);
+        (replies[owner] ??= []).push(message);
       } else {
-        const existing = this.inflight.get(conversationId);
-        if (existing) return existing.then((snapshot) => snapshot.revision >= 0 ? snapshot : this.read(conversationId, options.signal));
+        for (const nodeId of path) orphans.add(nodeId);
       }
-      return this.read(conversationId, options.signal);
     }
-    refresh(conversationId, _reason) {
-      if (this.disposed) return Promise.reject(new Error("ConversationRepository disposed"));
-      const existing = this.inflight.get(conversationId);
-      if (existing) return existing.then((snapshot) => snapshot.revision >= 0 ? snapshot : this.read(conversationId));
-      const pending = this.pending.get(conversationId);
-      if (pending) clearTimeout(pending.timer);
-      return new Promise((resolve, reject) => {
-        const timer = setTimeout(() => {
-          this.pending.delete(conversationId);
-          this.read(conversationId).then(resolve, reject);
-        }, COALESCE_MS);
-        this.pending.set(conversationId, { reason: _reason, timer });
-      });
-    }
-    invalidate(conversationId) {
-      this.cache.delete(conversationId);
-      if (this.activeConversationId === conversationId) this.emit(null);
-    }
-    setActiveConversation(conversationId) {
-      if (this.activeConversationId === conversationId) return;
-      this.activeAbort?.abort();
-      this.activeAbort = null;
-      const pending = this.activeConversationId ? this.pending.get(this.activeConversationId) : void 0;
-      if (pending && this.activeConversationId) {
-        clearTimeout(pending.timer);
-        this.pending.delete(this.activeConversationId);
+    const turns = /* @__PURE__ */ new Map();
+    let unknown = 0;
+    for (const [nodeID, user] of Object.entries(users)) {
+      const messageID = typeof user.id === "string" ? user.id : "";
+      const created = parseDate(user.create_time);
+      const reply = newest(replies[nodeID] ?? []);
+      const metadata = reply && typeof reply.metadata === "object" && reply.metadata ? reply.metadata : null;
+      const model = typeof metadata?.model_slug === "string" ? metadata.model_slug : null;
+      if (!knownOrigin || !messageID || created == null || !reply || !model || !validModel(model)) {
+        unknown += 1;
+        continue;
       }
-      this.activeConversationId = conversationId;
-      if (!conversationId) {
-        this.emit(null);
-        return;
-      }
-      void this.load(conversationId).then((snapshot) => {
-        if (snapshot.revision < 0) return;
-      }, (error) => {
-        if (isAbortError2(error)) return;
-        if (this.activeConversationId === conversationId) this.emit(null);
-      });
+      if (isWork(origin, model)) continue;
+      const key = await identity(`${id}:${messageID}`);
+      turns.set(key, { id: key, createdAt: created, model });
     }
-    getSnapshot(conversationId = this.activeConversationId) {
-      return conversationId ? this.cache.get(conversationId) ?? null : null;
-    }
-    dispose() {
-      this.disposed = true;
-      this.activeAbort?.abort();
-      this.activeAbort = null;
-      for (const pending of this.pending.values()) clearTimeout(pending.timer);
-      this.pending.clear();
-      this.inflight.clear();
-      this.cache.clear();
-      this.listeners.clear();
-    }
-    read(conversationId, externalSignal) {
-      const existing = this.inflight.get(conversationId);
-      if (existing) return existing;
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      if (this.activeConversationId === conversationId) {
-        this.activeAbort?.abort();
-        this.activeAbort = controller;
-      }
-      if (externalSignal) {
-        if (externalSignal.aborted) controller.abort();
-        else externalSignal.addEventListener("abort", abort, { once: true });
-      }
-      const request = new Promise((resolve, reject) => {
-        void (async () => {
-          try {
-            const conversation = await fetchCurrentConversation(conversationId, controller.signal);
-            if (controller.signal.aborted) {
-              this.dropInflight(conversationId, request);
-              resolve(cancelledSnapshot(conversationId));
-              return;
-            }
-            if (!conversation) throw new Error("ChatGPT conversation was not returned");
-            this.revision += 1;
-            const snapshot = {
-              conversationId: conversation.id ?? conversation.conversation_id ?? conversationId,
-              revision: this.revision,
-              capturedAt: Date.now(),
-              activeTurns: normalizeConversation(conversation),
-              assistantEvents: extractAssistantUsageEvents(conversation),
-              title: conversation.title
-            };
-            this.cache.set(conversationId, snapshot);
-            if (snapshot.conversationId !== conversationId) this.cache.set(snapshot.conversationId, snapshot);
-            if (this.activeConversationId === conversationId || this.activeConversationId === snapshot.conversationId) {
-              this.emit(snapshot);
-            }
-            resolve(snapshot);
-          } catch (error) {
-            if (controller.signal.aborted || isAbortError2(error)) {
-              this.dropInflight(conversationId, request);
-              resolve(cancelledSnapshot(conversationId));
-              return;
-            }
-            reject(error);
-          }
-        })().catch((error) => {
-          if (controller.signal.aborted || isAbortError2(error)) {
-            this.dropInflight(conversationId, request);
-            resolve(cancelledSnapshot(conversationId));
-            return;
-          }
-          reject(error);
-        });
-      });
-      this.inflight.set(conversationId, request);
-      void request.finally(() => {
-        if (this.inflight.get(conversationId) === request) this.inflight.delete(conversationId);
-        externalSignal?.removeEventListener("abort", abort);
-        if (this.activeAbort === controller) this.activeAbort = null;
-      });
-      return request;
-    }
-    dropInflight(conversationId, request) {
-      if (this.inflight.get(conversationId) === request) this.inflight.delete(conversationId);
-    }
-    emit(snapshot) {
-      for (const listener of this.listeners) listener(snapshot);
-    }
-  };
-  function cancelledSnapshot(conversationId) {
+    return { updatedAt, turns: [...turns.values()], isWork: false, unclassifiedTurns: unknown };
+  }
+  function messageOf(node) {
+    if (!node || typeof node.message !== "object" || !node.message) return {};
+    return node.message;
+  }
+  function roleOf(message) {
+    const author = message.author;
+    if (!author || typeof author !== "object") return null;
+    const role = author.role;
+    return typeof role === "string" ? role : null;
+  }
+  function isFinalAssistant(message) {
+    if (roleOf(message) !== "assistant") return false;
+    if (message.recipient !== "all") return false;
+    if (message.status !== "finished_successfully") return false;
+    if (!(message.channel == null || message.channel === "final")) return false;
+    const content = message.content;
+    const contentType = content && typeof content === "object" ? content.content_type : null;
+    return contentType === "text" || contentType === "multimodal_text";
+  }
+  function newest(messages) {
+    if (!messages.length) return null;
+    return messages.reduce((best, current) => {
+      const a = parseDate(best.create_time) ?? 0;
+      const b = parseDate(current.create_time) ?? 0;
+      return b > a ? current : best;
+    });
+  }
+
+  // src/quota/vibebar/historyReader.ts
+  var HISTORY_WINDOW_SECONDS = 7 * 86400;
+  var HISTORY_PAGE_SIZE = 50;
+  var HISTORY_MAX_PAGES = 4;
+  var HISTORY_DETAIL_BUDGET = 24;
+  var HISTORY_DEADLINE_MS = 25e3;
+  var HISTORY_CACHE_KEY = "chatgpt-yada:quota-history:v2";
+  var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  function createChromeHistoryStore() {
     return {
-      conversationId,
-      revision: -1,
-      capturedAt: 0,
-      activeTurns: [],
-      assistantEvents: []
+      async load(identity2) {
+        const data = await chrome.storage.local.get(HISTORY_CACHE_KEY);
+        const all = data[HISTORY_CACHE_KEY] ?? {};
+        return all[identity2] ?? { conversations: {} };
+      },
+      async save(cache, identity2) {
+        const data = await chrome.storage.local.get(HISTORY_CACHE_KEY);
+        const all = data[HISTORY_CACHE_KEY] ?? {};
+        all[identity2] = cache;
+        await chrome.storage.local.set({ [HISTORY_CACHE_KEY]: all });
+      }
     };
+  }
+  async function readChatHistory(input) {
+    const windowSeconds = input.windowSeconds ?? HISTORY_WINDOW_SECONDS;
+    const pageSize = input.pageSize ?? HISTORY_PAGE_SIZE;
+    const maxPages = input.maxPages ?? HISTORY_MAX_PAGES;
+    const detailBudget = input.detailBudget ?? HISTORY_DETAIL_BUDGET;
+    const deadlineMs = input.deadlineMs ?? HISTORY_DEADLINE_MS;
+    const clock = input.clock ?? Date.now;
+    const cutoff = input.now - windowSeconds * 1e3;
+    const deadline = input.now + deadlineMs;
+    let cache = await input.store.load(input.identity);
+    const keepAfter = input.now - 2 * windowSeconds * 1e3;
+    cache = {
+      conversations: Object.fromEntries(
+        Object.entries(cache.conversations).filter(([, value]) => value.updatedAt >= keepAfter)
+      )
+    };
+    const seen = /* @__PURE__ */ new Set();
+    let streamsFinished = 0;
+    let failures = 0;
+    let work = 0;
+    let unknown = 0;
+    let fetched = 0;
+    let read = 0;
+    let cancelled = false;
+    let hitDeadline = false;
+    let hitDetailBudget = false;
+    const turns = [];
+    const aborted = () => Boolean(input.signal?.aborted);
+    try {
+      for (const archived of [false, true]) {
+        let offset = 0;
+        let reachedEnd = false;
+        for (let page = 0; page < maxPages; page++) {
+          if (aborted()) throw abortError2();
+          if (clock() >= deadline) {
+            hitDeadline = true;
+            break;
+          }
+          const path = `/backend-api/conversations?offset=${offset}&limit=${pageSize}&order=updated&is_archived=${archived}`;
+          const data = await input.transport.request(path, input.signal);
+          const root = asObject(data);
+          const items = Array.isArray(root.items) ? root.items : null;
+          if (!items) throw new Error("ChatGPT Chat history list has no items.");
+          const before = seen.size;
+          for (const item of items) {
+            const id = typeof item.id === "string" ? item.id : "";
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            const updated = parseDate(item.update_time);
+            if (updated != null && updated < cutoff) {
+              reachedEnd = true;
+              continue;
+            }
+            if (isWork(typeof item.conversation_origin === "string" ? item.conversation_origin : null, null)) {
+              work += 1;
+              continue;
+            }
+            if (item.is_temporary_chat === true) continue;
+            if (!UUID.test(id) || updated == null) {
+              failures += 1;
+              continue;
+            }
+            const key = await identity(id);
+            let parsed = cache.conversations[key];
+            if (parsed?.updatedAt !== updated) {
+              if (fetched < detailBudget && clock() < deadline) {
+                fetched += 1;
+                try {
+                  const detail = await input.transport.request(`/backend-api/conversation/${id}`, input.signal);
+                  parsed = await parseConversation(detail, id, updated, cutoff);
+                  cache.conversations[key] = parsed;
+                } catch (error) {
+                  if (isAbortError2(error)) throw error;
+                  failures += 1;
+                }
+              } else {
+                if (fetched >= detailBudget) hitDetailBudget = true;
+                if (clock() >= deadline) hitDeadline = true;
+                failures += 1;
+              }
+            }
+            if (parsed) {
+              read += 1;
+              if (parsed.isWork) work += 1;
+              unknown += parsed.unclassifiedTurns;
+              turns.push(...parsed.turns);
+            }
+          }
+          offset += items.length;
+          if (!items.length) reachedEnd = true;
+          const total = parseInteger(root.total);
+          if (total != null && offset >= total) reachedEnd = true;
+          if (reachedEnd) break;
+          if (seen.size === before) {
+            failures += 1;
+            break;
+          }
+        }
+        if (reachedEnd) streamsFinished += 1;
+      }
+    } catch (error) {
+      if (isAbortError2(error)) cancelled = true;
+      else failures += 1;
+    }
+    if (!cancelled) await input.store.save(cache, input.identity);
+    const recent = turns.filter((turn) => turn.createdAt >= cutoff && turn.createdAt <= input.now);
+    const complete = streamsFinished === 2 && failures === 0 && !cancelled && !hitDetailBudget && !hitDeadline;
+    return {
+      turns: recent,
+      summary: {
+        queriedAt: input.now,
+        observedFrom: cutoff,
+        complete,
+        conversationsRead: read,
+        excludedWorkConversations: work,
+        unclassifiedTurns: unknown,
+        failedConversations: failures,
+        cancelled,
+        hitDetailBudget,
+        hitDeadline
+      }
+    };
+  }
+  function abortError2() {
+    return new DOMException("Aborted", "AbortError");
   }
   function isAbortError2(error) {
     return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
   }
 
-  // vendor/luna-navigation/src/config/config.ts
-  var APP_CONFIG = {
-    ui: {
-      sidebar: {
-        defaultWidthPx: 300,
-        minimumWidthPx: 240,
-        maximumWidthPx: 520,
-        /**
-         * How long the sidebar status drawer stays visible after an operation
-         * completes (loading finished, jump resolved) before retracting.
-         */
-        statusLingerMs: 500,
-        /**
-         * How long to wait, with no `CHATGPT_CONVERSATION_DATA` and no
-         * `CHATGPT_CONVERSATION_ENDED` event, before declaring the load
-         * complete anyway. Catches chats ChatGPT hydrates from its own
-         * client-side cache (no network fetch, no page-hook events) and
-         * similarly hard-to-reach cases — the sidebar would otherwise
-         * park at "Loading..." forever on those routes.
-         */
-        loadingSettleMs: 1e3
-      },
-      stacking: {
-        baseZIndex: 1e3,
-        offsets: {
-          sidebar: 0,
-          toggle: 10,
-          popover: 20,
-          modal: 100
+  // src/conversation/readConversation.ts
+  function abortError3() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  function isAbortError3(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
+  async function readConversation(conversationId, signal) {
+    if (signal?.aborted) throw abortError3();
+    if (!conversationId) throw new Error("No active ChatGPT conversation");
+    const conversation = await fetchCurrentConversation(conversationId, signal);
+    if (signal?.aborted) throw abortError3();
+    if (!conversation) throw new Error("ChatGPT conversation was not returned");
+    const now = Date.now();
+    const parsed = await parseConversation(
+      conversation,
+      conversation.id ?? conversation.conversation_id ?? conversationId,
+      now,
+      now - HISTORY_WINDOW_SECONDS * 1e3
+    );
+    return {
+      conversationId: conversation.id ?? conversation.conversation_id ?? conversationId,
+      revision: 0,
+      capturedAt: now,
+      activeTurns: normalizeConversation(conversation),
+      quotaTurns: parsed.turns,
+      quotaIsWork: parsed.isWork,
+      quotaUnclassifiedTurns: parsed.unclassifiedTurns,
+      quotaOrigin: conversationOrigin(conversation),
+      quotaTemporary: isTemporary(conversation),
+      title: conversation.title
+    };
+  }
+
+  // src/core/conversationSync.ts
+  var ConversationSync = class {
+    activeConversationId = null;
+    generation = 0;
+    runningPromise = null;
+    dirty = false;
+    abortController = null;
+    latestSnapshot = null;
+    listeners = /* @__PURE__ */ new Set();
+    observer = null;
+    lastStreamingState = false;
+    seenAssistantMessageIds = /* @__PURE__ */ new Set();
+    disposed = false;
+    published = 0;
+    read;
+    constructor(options = {}) {
+      this.read = options.readConversation ?? readConversation;
+    }
+    subscribe(listener) {
+      this.listeners.add(listener);
+      void listener(this.latestSnapshot);
+      return () => this.listeners.delete(listener);
+    }
+    requestSync(_reason) {
+      if (this.disposed) return Promise.reject(abortError3());
+      this.dirty = true;
+      if (this.runningPromise) return this.runningPromise;
+      this.runningPromise = Promise.resolve().then(() => this.runLoop());
+      return this.runningPromise;
+    }
+    setActiveConversation(conversationId) {
+      if (this.activeConversationId === conversationId) return;
+      this.generation += 1;
+      this.abortController?.abort();
+      this.abortController = null;
+      this.activeConversationId = conversationId;
+      this.seenAssistantMessageIds.clear();
+      this.lastStreamingState = false;
+      this.latestSnapshot = null;
+      if (!conversationId) {
+        this.dirty = false;
+        void this.publish(null);
+        return;
+      }
+      this.dirty = true;
+      void this.requestSync("route");
+    }
+    getSnapshot() {
+      return this.latestSnapshot;
+    }
+    getActiveConversationId() {
+      return this.activeConversationId;
+    }
+    mountPageObserver(root = document.documentElement) {
+      if (this.observer || typeof MutationObserver === "undefined") return;
+      this.observer = new MutationObserver(() => this.inspectPageSignals());
+      this.observer.observe(root, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["data-is-streaming", "data-message-id", "data-message-author-role"]
+      });
+    }
+    dispose() {
+      this.disposed = true;
+      this.generation += 1;
+      this.abortController?.abort();
+      this.abortController = null;
+      this.dirty = false;
+      this.observer?.disconnect();
+      this.observer = null;
+      this.listeners.clear();
+      this.latestSnapshot = null;
+      this.runningPromise = null;
+      this.seenAssistantMessageIds.clear();
+    }
+    async runLoop() {
+      try {
+        while (this.dirty && !this.disposed) {
+          this.dirty = false;
+          const conversationId = this.activeConversationId;
+          const generation = this.generation;
+          if (!conversationId) {
+            await this.publish(null);
+            continue;
+          }
+          this.abortController?.abort();
+          this.abortController = new AbortController();
+          const signal = this.abortController.signal;
+          try {
+            const snapshot = await this.read(conversationId, signal);
+            if (this.disposed || signal.aborted) throw abortError3();
+            if (this.activeConversationId === conversationId && this.generation === generation) {
+              snapshot.revision = ++this.published;
+              await this.publish(snapshot);
+            }
+          } catch (error) {
+            if (this.disposed) return;
+            if (isAbortError3(error) || this.generation !== generation) continue;
+            if (this.activeConversationId === conversationId) await this.publish(null);
+          }
+        }
+      } finally {
+        this.runningPromise = null;
+        if (this.dirty && !this.disposed) {
+          await this.requestSync("drain");
         }
       }
+    }
+    async publish(snapshot) {
+      this.latestSnapshot = snapshot;
+      if (snapshot) {
+        for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+        for (const turn of snapshot.activeTurns) {
+          if (turn.assistantMessageId) this.seenAssistantMessageIds.add(turn.assistantMessageId);
+        }
+      }
+      await Promise.all([...this.listeners].map((listener) => listener(snapshot)));
+    }
+    inspectPageSignals() {
+      if (this.disposed || !this.activeConversationId) return;
+      const streaming = isAssistantStreaming();
+      const wasStreaming = this.lastStreamingState;
+      this.lastStreamingState = streaming;
+      if (streaming) return;
+      if (wasStreaming) void this.requestSync("streaming-end");
+      for (const id of collectStableAssistantMessageIds()) {
+        if (this.seenAssistantMessageIds.has(id)) continue;
+        this.seenAssistantMessageIds.add(id);
+        void this.requestSync("new-assistant");
+      }
+    }
+  };
+  function isAssistantStreaming(root = document) {
+    return Boolean(
+      root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')
+    );
+  }
+  function collectStableAssistantMessageIds(root = document) {
+    const ids = [];
+    for (const node of root.querySelectorAll('[data-message-author-role="assistant"][data-message-id]')) {
+      if (node.getAttribute("data-is-streaming") === "true" || node.classList.contains("result-streaming")) continue;
+      const id = node.dataset.messageId;
+      if (id) ids.push(id);
+    }
+    return ids;
+  }
+
+  // src/navigation/config.ts
+  var NAVIGATION_CONFIG = {
+    promptTopOffsetPx: 16,
+    fingerprint: {
+      countPerAssistant: 3,
+      probeLength: 40,
+      verificationLength: 256,
+      segmentViewportRatio: 0.75,
+      segmentOverlapRatio: 0.15,
+      estimatedCharsPerVisualLine: 60,
+      estimatedRowsPerViewport: 30,
+      maximumSegmentsPerAssistant: 20,
+      buildBatchSize: 10,
+      buildTimeBudgetMs: 8,
+      observationDebounceMs: 750
     },
+    anchorCache: {
+      maxConversations: 50,
+      maxAnchorsPerConversation: 100,
+      maxAgeMs: 30 * 24 * 60 * 60 * 1e3,
+      viewportWidthTolerance: 48
+    },
+    search: {
+      maxAttempts: 32,
+      maxUnproductiveAttempts: 6,
+      renderWaitMs: 80,
+      maxDurationMs: 3e4,
+      edgeBackfillWaitMs: 1200,
+      maximumWindowSlideCycles: 16,
+      interpolationFailuresBeforeBinary: 2,
+      relativeViewportRatio: 0.75,
+      minimumRelativeViewportRatio: 0.25,
+      maximumRelativeViewportCount: 16,
+      maximumLearnedRelativeViewportCount: 64,
+      nearTargetPromptDistance: 4,
+      maximumNearTargetViewportCount: 8,
+      stalledStepGrowthRatio: 1.5,
+      crossingStepRatio: 0.5,
+      promptMountScanViewportRatio: 0.2,
+      minimumPromptMountViewportRatio: 0.05,
+      maximumPromptMountViewportCount: 2,
+      promptMountStepGrowthRatio: 1.5,
+      promptMountCrossingStepRatio: 0.5,
+      maximumPromptMountAttempts: 12
+    }
+  };
+  var APP_CONFIG = {
     platforms: {
       chatgpt: {
-        navigationAlgorithm: "independent-virtual",
-        promptTopOffsetPx: 16,
-        settleAttempts: 3,
-        backfillMaxPages: 10,
-        // Rewrites ChatGPT's own older-page pagination requests so its
-        // renderer fills the message store in a single fetch (speeds up
-        // far-jump navigation). Set to null to disable.
-        interceptChatGptPaginationNumTurns: 100,
-        // Rewrites ChatGPT's own initial conversation load so a single
-        // request returns the whole history (collapses 2 fetches -> 1
-        // for short conversations). Set to null to disable.
-        interceptChatGptInitialLoadNumTurns: 100,
-        // Centralizes every ChatGPT external-contract value (API paths, selectors,
-        // postMessage channels, behavior constants). Each entry has parallel
-        // `formal`/`local` slots and a human-readable `label` for the
-        // compatibility-alert popup. See getActiveContractValue().
-        contract: {
-          "api.conversation.path": {
-            formal: "/backend-api/conversations/{id}",
-            local: "/backend-api/conversations/{id}",
-            // local: '/backend-api/test/{id}',
-            label: "Conversation data API path"
-          },
-          "api.conversation.messages-path": {
-            formal: "/backend-api/conversations/{id}/messages",
-            local: "/backend-api/conversations/{id}/messages",
-            label: "Conversation messages pagination endpoint"
-          },
-          "api.send-message.path": {
-            formal: "/backend-api/f/conversation",
-            local: "/backend-api/f/conversation",
-            label: "Send-message POST endpoint"
-          },
-          "api.params.num-turns": {
-            formal: "num_turns",
-            local: "num_turns",
-            label: "Pagination num_turns parameter"
-          },
-          "api.params.before": {
-            formal: "before",
-            local: "before",
-            label: "Pagination cursor parameter"
-          },
-          "api.params.include-has-versions": {
-            formal: "include_has_versions",
-            local: "include_has_versions",
-            label: "Pagination include_has_versions flag"
-          },
-          "dom.selector.user-message": {
-            formal: '[data-message-author-role="user"]',
-            local: '[data-message-author-role="user"]',
-            label: "User message DOM marker"
-          },
-          "dom.selector.message-id": {
-            formal: "[data-message-id]",
-            local: "[data-message-id]",
-            label: "Message identifier attribute"
-          },
-          "postmessage.channel.conversation-data": {
-            formal: "CHATGPT_CONVERSATION_DATA",
-            local: "CHATGPT_CONVERSATION_DATA",
-            label: "Page-to-extension conversation data channel"
-          },
-          "postmessage.channel.width-spoof": {
-            formal: "CHATGPT_NAVIGATOR_SET_WIDTH_SPOOF",
-            local: "CHATGPT_NAVIGATOR_SET_WIDTH_SPOOF",
-            label: "Sidebar width-spoof toggle channel"
-          },
-          "postmessage.hook-flag": {
-            formal: "__conversationNavigatorFetchHookInstalled",
-            local: "__conversationNavigatorFetchHookInstalled",
-            label: "Page-hook installation sentinel"
-          },
-          "response.messages-field": {
-            formal: "messages",
-            local: "messages",
-            label: "Conversation messages field"
-          },
-          "behavior.viewport-spoof-width": {
-            formal: "1400",
-            local: "1400",
-            label: "Sidebar viewport spoof width"
-          }
-        },
-        // When true, getActiveContractValue() returns the `local` slot instead of
-        // `formal`. Flipped by the developer during local debugging/testing.
-        useLocalConfig: false,
-        // When true, the content-script compatibility alert renders a topmost
-        // portal modal on chatgpt.com when the detector observes a mismatch.
-        // Exposed in the Options page; defaults OFF so end users are unaffected.
-        showCompatibilityAlert: false
+        promptTopOffsetPx: NAVIGATION_CONFIG.promptTopOffsetPx,
+        settleAttempts: 3
       }
     },
     navigation: {
-      fingerprint: {
-        countPerAssistant: 3,
-        probeLength: 40,
-        verificationLength: 256,
-        segmentViewportRatio: 0.75,
-        segmentOverlapRatio: 0.15,
-        estimatedCharsPerVisualLine: 60,
-        estimatedRowsPerViewport: 30,
-        maximumSegmentsPerAssistant: 20,
-        buildBatchSize: 10,
-        buildTimeBudgetMs: 8,
-        observationDebounceMs: 750
-      },
-      anchorCache: {
-        maxConversations: 50,
-        maxAnchorsPerConversation: 100,
-        maxAgeMs: 30 * 24 * 60 * 60 * 1e3,
-        viewportWidthTolerance: 48
-      },
-      search: {
-        maxAttempts: 32,
-        maxUnproductiveAttempts: 6,
-        renderWaitMs: 80,
-        maxDurationMs: 3e4,
-        edgeBackfillWaitMs: 1200,
-        maximumWindowSlideCycles: 16,
-        interpolationFailuresBeforeBinary: 2,
-        relativeViewportRatio: 0.75,
-        minimumRelativeViewportRatio: 0.25,
-        maximumRelativeViewportCount: 16,
-        maximumLearnedRelativeViewportCount: 64,
-        nearTargetPromptDistance: 4,
-        maximumNearTargetViewportCount: 8,
-        stalledStepGrowthRatio: 1.5,
-        crossingStepRatio: 0.5,
-        promptMountScanViewportRatio: 0.2,
-        minimumPromptMountViewportRatio: 0.05,
-        maximumPromptMountViewportCount: 2,
-        promptMountStepGrowthRatio: 1.5,
-        promptMountCrossingStepRatio: 0.5,
-        maximumPromptMountAttempts: 12
-      }
+      fingerprint: NAVIGATION_CONFIG.fingerprint,
+      anchorCache: NAVIGATION_CONFIG.anchorCache,
+      search: NAVIGATION_CONFIG.search
     }
   };
 
@@ -1883,11 +2004,11 @@ ${text}
     isTargetRendered,
     getScrollMetrics
   }) {
-    const deadline = performance.now() + APP_CONFIG.navigation.search.edgeBackfillWaitMs;
+    const deadline = Date.now() + APP_CONFIG.navigation.search.edgeBackfillWaitMs;
     let previousMaximumScrollTop = getScrollMetrics().maximumScrollTop;
     let sawChange = false;
     let stableRounds = 0;
-    while (performance.now() < deadline) {
+    while (Date.now() < deadline) {
       if (signal?.aborted || isTargetRendered()) return sawChange;
       await new Promise((resolve) => setTimeout(resolve, 120));
       const currentMaximumScrollTop = getScrollMetrics().maximumScrollTop;
@@ -2895,28 +3016,13 @@ ${text}
     );
   }
 
-  // src/navigation/officialFastPath.ts
-  var OFFICIAL_BUTTON_SELECTOR = "button[data-toc-item-index], button[data-toc-active]";
-  function officialButtons(root = document) {
-    return [...root.querySelectorAll(OFFICIAL_BUTTON_SELECTOR)];
-  }
-  function tryOfficialFastPath(turnIndex, turnCount, conversationId) {
-    if (!conversationId || getConversationIdFromUrl() !== conversationId) return false;
-    if (turnCount <= 0 || turnIndex < 0 || turnIndex >= turnCount) return false;
-    const buttons = officialButtons();
-    if (buttons.length !== turnCount) return false;
-    const button = buttons[turnIndex];
-    if (!button) return false;
-    button.click();
-    return true;
-  }
-
   // src/navigation/navigationPort.ts
-  var PROMPT_TOP_OFFSET_PX = 16;
+  var PROMPT_TOP_OFFSET_PX = NAVIGATION_CONFIG.promptTopOffsetPx;
   var ANCHOR_KEY = "chatgpt-yada:nav-anchors:v1";
   var CANCEL_KEYS = /* @__PURE__ */ new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Space", " "]);
   var NavigationPort = class {
     transaction = null;
+    fingerprintCache = null;
     anchors = createNavigationAnchorStore({
       storage: {
         async read() {
@@ -2949,17 +3055,9 @@ ${text}
           return { ok: true, status: "found", path: "direct" };
         }
         if (controller.signal.aborted) return { ok: false, status: "cancelled" };
-        if (tryOfficialFastPath(turn.index, turns.length, conversationId)) {
-          await wait(80);
-          if (controller.signal.aborted) return { ok: false, status: "cancelled" };
-          if (await this.jumpDirect(turn, controller.signal)) {
-            return { ok: true, status: "found", path: "official" };
-          }
-        }
-        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
         return await this.jumpVirtual(turn, turns, conversationId, controller.signal);
       } catch (error) {
-        if (controller.signal.aborted || isAbortError3(error)) return { ok: false, status: "cancelled" };
+        if (controller.signal.aborted || isAbortError4(error)) return { ok: false, status: "cancelled" };
         return { ok: false, status: "failed" };
       } finally {
         options.signal?.removeEventListener("abort", abort);
@@ -2974,6 +3072,7 @@ ${text}
     }
     dispose() {
       this.cancel();
+      this.fingerprintCache = null;
     }
     async jumpDirect(turn, signal) {
       const ids = [turn.userMessageId, turn.assistantMessageId, turn.id].filter((id) => !!id);
@@ -2994,8 +3093,15 @@ ${text}
     async jumpVirtual(turn, turns, conversationId, signal) {
       const prompts = toLunaPrompts(turns);
       const lunaTurns = toLunaNavigationTurns(turns);
-      const fingerprintIndex = await buildFingerprintIndex(lunaTurns);
-      const segmentIndex = await buildDerivedSegmentIndex(lunaTurns);
+      const signature = `${conversationId}:${turns.map((item) => `${item.userMessageId}:${item.assistantMessageId}`).join("|")}`;
+      if (!this.fingerprintCache || this.fingerprintCache.signature !== signature) {
+        this.fingerprintCache = {
+          signature,
+          fingerprintIndex: await buildFingerprintIndex(lunaTurns),
+          segmentIndex: await buildDerivedSegmentIndex(lunaTurns)
+        };
+      }
+      const { fingerprintIndex, segmentIndex } = this.fingerprintCache;
       const targetPromptId = turn.userMessageId ?? turn.id;
       const container = () => getChatGptScrollContainer();
       const result = await searchVirtualPrompt({
@@ -3027,6 +3133,7 @@ ${text}
           const node = container();
           if (node) node.scrollTop = scrollTop;
         },
+        now: () => Date.now(),
         signal
       });
       if (result.status === "found") {
@@ -3094,7 +3201,7 @@ ${text}
   function wait(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
-  function isAbortError3(error) {
+  function isAbortError4(error) {
     return error instanceof DOMException && error.name === "AbortError";
   }
   function cssEscape(value) {
@@ -3103,19 +3210,19 @@ ${text}
 
   // src/navigation/navigatorController.ts
   var NavigatorController = class {
-    constructor(repository) {
-      this.repository = repository;
+    constructor(sync) {
+      this.sync = sync;
     }
     port = new NavigationPort();
     snapshot = null;
     unsubscribe = null;
     mount() {
-      this.unsubscribe = this.repository.subscribe((snapshot) => {
+      this.unsubscribe = this.sync.subscribe((snapshot) => {
         this.snapshot = snapshot;
       });
     }
     async navigateTo(turnId, signal) {
-      const snapshot = this.snapshot ?? this.repository.getSnapshot();
+      const snapshot = this.snapshot ?? this.sync.getSnapshot();
       if (!snapshot) return { ok: false, status: "failed" };
       return this.port.navigateTo(turnId, snapshot.activeTurns, snapshot.conversationId, { signal });
     }
@@ -3132,357 +3239,160 @@ ${text}
     }
   };
 
-  // src/quota/account.ts
-  function readAccountContext(conversationWorkspaceKind) {
-    const accountId = getChatGptAccountId();
-    const workspace = readWorkspaceFromAccountStore();
-    let workspaceKind = workspace.kind;
-    if (conversationWorkspaceKind && conversationWorkspaceKind !== "unknown") {
-      workspaceKind = conversationWorkspaceKind;
-    }
-    if (workspaceKind === "unknown" && workspace.kind !== "unknown") workspaceKind = workspace.kind;
-    const workspaceId = workspace.id;
-    const accountKey = [
-      accountId ?? "account-unknown",
-      workspaceKind === "work" ? workspaceId ?? "work" : workspaceKind
-    ].join(":");
-    return { accountId, workspaceId, workspaceKind, accountKey };
-  }
-  function readWorkspaceFromAccountStore() {
-    try {
-      const raw = window.localStorage.getItem("_account");
-      if (!raw) return { id: null, kind: "unknown" };
-      if (/^account-[a-z0-9_-]+$/i.test(raw)) return { id: null, kind: "unknown" };
-      const parsed = JSON.parse(raw);
-      return findWorkspace(parsed);
-    } catch {
-      return { id: null, kind: "unknown" };
-    }
-  }
-  function findWorkspace(value, depth = 0) {
-    if (!value || typeof value !== "object" || depth > 6) return { id: null, kind: "unknown" };
-    const record = value;
-    const id = readId(record);
-    const kind = readKind(record);
-    if (kind !== "unknown" || id) {
-      if (kind !== "unknown") return { id, kind };
-    }
-    for (const nested of Object.values(record)) {
-      const found = findWorkspace(nested, depth + 1);
-      if (found.kind !== "unknown" || found.id) return found;
-    }
-    return { id, kind };
-  }
-  function readId(record) {
-    for (const key of ["workspaceId", "workspace_id", "orgId", "org_id", "organization_id"]) {
-      const value = record[key];
-      if (typeof value === "string" && value.trim()) return value.trim();
-    }
+  // src/quota/vibebar/allowances.ts
+  var WEEK_SECONDS = 7 * 86400;
+  function parsePlanType(value) {
+    if (!value || typeof value !== "object") return null;
+    const raw = value.plan_type;
+    if (typeof raw !== "string") return null;
+    const plan = raw.trim().toLowerCase();
+    if (plan === "pro" || plan === "prolite") return plan;
     return null;
   }
-  function readKind(record) {
-    const tokens = [
-      record.workspaceType,
-      record.workspace_type,
-      record.accountType,
-      record.account_type,
-      record.planType,
-      record.plan_type,
-      record.structure,
-      record.isWorkspace,
-      record.is_workspace,
-      record.isBusiness,
-      record.product
-    ].map((value) => typeof value === "string" ? value.toLowerCase() : value);
-    if (tokens.includes(true) || tokens.some((value) => typeof value === "string" && /(work|team|business|enterprise|workspace)/.test(value))) {
-      return "work";
-    }
-    if (tokens.some((value) => typeof value === "string" && /(personal|plus|pro|free|consumer)/.test(value))) {
-      return "personal";
-    }
-    return "unknown";
-  }
 
-  // src/quota/rules.ts
-  var WEEK_MS = 7 * 24 * 60 * 60 * 1e3;
-  var DAY_MS = 24 * 60 * 60 * 1e3;
-
-  // src/quota/modelDetector.ts
-  var GPT6_PRO_ALIASES = /* @__PURE__ */ new Set([
-    "gpt-6-pro",
-    "gpt6-pro",
-    "gpt-6pro",
-    "chatgpt-gpt-6-pro",
-    "gpt-6-pro-2026"
-  ]);
-  var SOL_PRO_ALIASES = /* @__PURE__ */ new Set([
-    "gpt-5.6-sol-pro",
-    "gpt-5-6-sol-pro",
-    "gpt-5.6-thinking-pro",
-    "gpt-5.6-pro",
-    "gpt56-sol-pro",
-    "chatgpt-gpt-5.6-sol-pro"
-  ]);
-  function detectProModel(slug) {
-    if (!slug || !slug.trim()) return { kind: "unknown", slug: slug ?? null };
-    const normalized = normalizeSlug(slug);
-    if (GPT6_PRO_ALIASES.has(normalized) || /^gpt-?6(?:\.0)?-pro(?:-|$)/.test(normalized)) {
-      return { kind: "gpt-6-pro", slug };
-    }
-    if (SOL_PRO_ALIASES.has(normalized) || /^gpt-?5(?:\.|-)6(?:-sol)?-pro(?:-|$)/.test(normalized)) {
-      return { kind: "gpt-5.6-sol-pro", slug };
-    }
-    if (normalized.includes("pro") && (normalized.includes("gpt") || normalized.includes("o1") || normalized.includes("o3") || normalized.includes("sol"))) {
-      return { kind: "unknown", slug };
-    }
-    if (normalized.includes("pro") && !KNOWN_OTHER.has(normalized)) {
-      return { kind: "unknown", slug };
-    }
-    return { kind: "other", slug };
-  }
-  var KNOWN_OTHER = /* @__PURE__ */ new Set(["gpt-5.4", "gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4-mini"]);
-  function normalizeSlug(slug) {
-    return slug.trim().toLowerCase().replace(/_/g, "-");
-  }
-
-  // src/quota/usageScanner.ts
-  function toQuotaEvents(events, accountKey, source) {
-    return events.map((event) => {
-      const createdMs = toOccurredAt(event.createdAt);
-      const occurredAt = createdMs ?? event.observedAt;
-      const detected = detectProModel(event.modelSlug);
-      return {
-        id: event.assistantMessageId,
-        accountKey,
-        conversationId: event.conversationId,
-        occurredAt,
-        observedAt: event.observedAt,
-        timeSource: createdMs == null ? "observed" : "message",
-        model: detected.kind,
-        source,
-        workspaceKind: event.workspaceKind,
-        modelSlug: detected.slug ?? void 0
-      };
-    });
-  }
-  function toOccurredAt(createdAt) {
-    if (createdAt == null || !Number.isFinite(createdAt) || createdAt <= 0) return null;
-    return createdAt < 1e12 ? Math.round(createdAt * 1e3) : Math.round(createdAt);
-  }
-
-  // src/quota/types.ts
-  var BACKFILL_KEY = "chatgpt-yada:quota-backfill:v1";
-  var EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1e3;
-
-  // src/quota/historyBackfill.ts
-  var WEEK_MS2 = 7 * DAY_MS;
-  var MAX_CONCURRENCY = 2;
-  var PAGE_LIMIT = 28;
-  var GAP_MS = 180;
-  var MAX_RETRIES = 3;
-  var HistoryBackfill = class {
-    aborted = false;
-    async run() {
-      const state = await readBackfillState();
-      if (state.status === "complete" || state.status === "unavailable") return state.status;
-      this.aborted = false;
-      const cutoffAt = state.cutoffAt || Date.now() - WEEK_MS2;
-      state.cutoffAt = cutoffAt;
-      state.status = "running";
-      state.updatedAt = Date.now();
-      await writeBackfillState(state);
-      try {
-        let offset = state.cursorOffset;
-        while (!this.aborted) {
-          if (document.visibilityState === "hidden") {
-            state.status = "paused";
-            await writeBackfillState(state);
-            return "paused";
-          }
-          const page = await fetchConversationList(offset);
-          if (page === "unavailable") {
-            state.status = "unavailable";
-            await writeBackfillState(state);
-            return "unavailable";
-          }
-          if (!page.items.length) {
-            state.status = "complete";
-            await writeBackfillState(state);
-            return "complete";
-          }
-          const due = page.items.filter((item) => item.updateTime >= cutoffAt);
-          if (!due.length) {
-            state.status = "complete";
-            await writeBackfillState(state);
-            return "complete";
-          }
-          await this.scanItems(due, state);
-          offset += page.items.length;
-          state.cursorOffset = offset;
-          await writeBackfillState(state);
-          if (!page.hasMore || due.length < page.items.length) {
-            state.status = "complete";
-            await writeBackfillState(state);
-            return "complete";
-          }
-        }
-        state.status = "paused";
-        await writeBackfillState(state);
-        return "paused";
-      } catch {
-        state.status = "error";
-        await writeBackfillState(state);
-        return "error";
-      }
-    }
-    pause() {
-      this.aborted = true;
-    }
-    async scanItems(items, state) {
-      const pending = items.filter((item) => state.scanned[item.id] == null);
-      for (let i = 0; i < pending.length; i += MAX_CONCURRENCY) {
-        if (this.aborted) return;
-        const batch = pending.slice(i, i + MAX_CONCURRENCY);
-        await Promise.all(batch.map((item) => this.scanOne(item, state)));
-        await sleep(GAP_MS);
-      }
-    }
-    async scanOne(item, state) {
-      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-        try {
-          const conversation = await fetchConversation(item.id);
-          const events = extractAssistantUsageEvents(conversation);
-          const account = readAccountContext();
-          const quotaEvents = toQuotaEvents(events, account.accountKey, "history");
-          if (quotaEvents.length) {
-            await chrome.runtime.sendMessage({ type: "quota/ingest", events: quotaEvents });
-          }
-          state.scanned[item.id] = conversation.update_time ?? Date.now();
-          state.updatedAt = Date.now();
-          return;
-        } catch {
-          await sleep(GAP_MS * (attempt + 1));
-        }
-      }
-    }
-  };
-  async function fetchConversationList(offset) {
+  // src/quota/pageClient.ts
+  async function readChatAccount(signal) {
+    let userId = null;
+    let plan = null;
     try {
-      const response = await fetch(`/backend-api/conversations?offset=${offset}&limit=${PAGE_LIMIT}&order=updated`, {
-        credentials: "include",
-        headers: { Accept: "application/json" }
-      });
-      if (response.status === 401 || response.status === 403 || response.status === 404) return "unavailable";
-      if (!response.ok) throw new Error(`list ${response.status}`);
-      const data = await response.json();
-      const items = (data.items ?? []).map((item) => ({ id: item.id ?? item.conversation_id ?? "", updateTime: (item.update_time ?? 0) * (item.update_time && item.update_time < 1e12 ? 1e3 : 1) })).filter((item) => item.id);
-      return { items, hasMore: items.length === PAGE_LIMIT };
+      const session = await chatgptApi("/api/auth/session", { signal });
+      if (session.ok) {
+        const data = await session.json();
+        userId = typeof data.user?.id === "string" ? data.user.id : null;
+      }
     } catch {
-      return "unavailable";
+      userId = null;
     }
-  }
-  async function readBackfillState() {
-    const data = await chrome.storage.local.get(BACKFILL_KEY);
-    const value = data[BACKFILL_KEY];
-    if (!value || value.version !== 1) {
-      return { version: 1, status: "idle", cutoffAt: Date.now() - WEEK_MS2, scanned: {}, cursorOffset: 0, updatedAt: Date.now() };
+    try {
+      const usage = await chatgptApi("/backend-api/wham/usage", { signal });
+      if (usage.ok) {
+        const data = await usage.json();
+        if (!userId) userId = typeof data.user_id === "string" ? data.user_id : typeof data.account_id === "string" ? data.account_id : null;
+        plan = parsePlanType(data);
+      }
+    } catch {
+      plan = null;
     }
-    return value;
+    const accountId = getChatGptAccountId();
+    const identityKey = await identity(`${userId ?? "unknown"}:${accountId ?? "personal"}`);
+    return { userId, accountId, plan, identity: identityKey };
   }
-  async function writeBackfillState(state) {
-    await chrome.storage.local.set({ [BACKFILL_KEY]: state });
-  }
-  function sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
+  async function readModelLimits(now = Date.now(), signal) {
+    try {
+      const offsetMin = -Math.round((/* @__PURE__ */ new Date()).getTimezoneOffset());
+      const response = await chatgptApi("/backend-api/conversation/init", {
+        method: "POST",
+        signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: null,
+          gizmo_id: null,
+          requested_default_model: null,
+          system_hints: [],
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timezone_offset_min: offsetMin
+        })
+      });
+      if (!response.ok) return [];
+      return modelLimits(await response.json(), now);
+    } catch {
+      return [];
+    }
   }
 
   // src/quota/tracker.ts
-  var REFRESH_AFTER_ANSWER_MS = 1100;
   var QuotaTracker = class {
-    constructor(repository) {
-      this.repository = repository;
+    constructor(sync) {
+      this.sync = sync;
     }
     unsubscribe = null;
-    conversationId = null;
-    backfill = new HistoryBackfill();
-    answerTimer = 0;
-    mutation = null;
+    ingestQueue = Promise.resolve();
+    history = createChromeHistoryStore();
     disposed = false;
     mount() {
-      this.unsubscribe = this.repository.subscribe((snapshot) => {
-        void this.onSnapshot(snapshot);
-      });
-      this.mutation = new MutationObserver(() => this.observeAnswerLifecycle());
-      this.mutation.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-is-streaming"] });
+      this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       document.addEventListener("visibilitychange", this.onVisibility);
-      void this.backfill.run();
-    }
-    setConversationId(conversationId) {
-      this.conversationId = conversationId;
+      void this.scanHistory();
     }
     async refreshCurrent() {
-      if (!this.conversationId) return;
-      await this.repository.refresh(this.conversationId, "popup");
+      await this.sync.requestSync("popup");
+      await this.ingestQueue;
     }
     dispose() {
       this.disposed = true;
       this.unsubscribe?.();
       this.unsubscribe = null;
-      this.mutation?.disconnect();
-      this.mutation = null;
-      window.clearTimeout(this.answerTimer);
       document.removeEventListener("visibilitychange", this.onVisibility);
-      this.backfill.pause();
     }
-    async onSnapshot(snapshot) {
+    onSnapshot(snapshot) {
+      const work = this.writeLedger(snapshot);
+      this.ingestQueue = this.ingestQueue.then(() => work, () => work);
+      return work;
+    }
+    async writeLedger(snapshot) {
       if (this.disposed || !snapshot) return;
-      this.conversationId = snapshot.conversationId;
-      const account = readAccountContext(snapshot.assistantEvents[0]?.workspaceKind);
-      const events = toQuotaEvents(snapshot.assistantEvents, account.accountKey, "live").map((event) => account.workspaceKind === "work" || event.workspaceKind === "work" ? { ...event, workspaceKind: "work", accountKey: account.accountKey } : { ...event, accountKey: account.accountKey, workspaceKind: account.workspaceKind === "personal" ? event.workspaceKind === "unknown" ? account.workspaceKind : event.workspaceKind : event.workspaceKind });
-      if (!events.length) return;
-      await chrome.runtime.sendMessage({ type: "quota/ingest", events });
+      const account = await readChatAccount();
+      const limits = await readModelLimits();
+      const classification = classifySnapshot(snapshot);
+      const events = snapshot.quotaIsWork ? [] : toEvents(snapshot.quotaTurns, account.identity, classification);
+      await chrome.runtime.sendMessage({
+        type: "quota/ingest",
+        events,
+        plan: account.plan,
+        unclassifiedTurns: snapshot.quotaUnclassifiedTurns,
+        workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal",
+        limits,
+        historyComplete: void 0,
+        accountKey: account.identity
+      });
     }
-    observeAnswerLifecycle() {
-      if (this.disposed || !this.conversationId) return;
-      const streaming = document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming');
-      if (streaming) {
-        window.clearTimeout(this.answerTimer);
-        this.answerTimer = 0;
-        return;
-      }
-      if (this.answerTimer) return;
-      this.answerTimer = window.setTimeout(() => {
-        this.answerTimer = 0;
-        if (this.conversationId) void this.repository.refresh(this.conversationId, "answer-complete");
-      }, REFRESH_AFTER_ANSWER_MS);
+    async scanHistory() {
+      if (this.disposed || document.visibilityState === "hidden") return;
+      const account = await readChatAccount();
+      const result = await readChatHistory({
+        transport: {
+          async request(path, signal) {
+            const response = await chatgptApi(path, { signal });
+            if (response.status === 401 || response.status === 403) throw Object.assign(new Error("login"), { name: "AbortError" });
+            if (!response.ok) throw new Error(`history ${response.status}`);
+            return response.json();
+          }
+        },
+        store: this.history,
+        identity: account.identity,
+        now: Date.now()
+      });
+      if (this.disposed) return;
+      const events = toEvents(result.turns, account.identity, "personal");
+      await chrome.runtime.sendMessage({
+        type: "quota/ingest",
+        events,
+        plan: account.plan,
+        unclassifiedTurns: result.summary.unclassifiedTurns,
+        historyComplete: result.summary.complete,
+        workspaceKind: "personal",
+        accountKey: account.identity
+      });
     }
     onVisibility = () => {
-      if (document.visibilityState === "hidden") this.backfill.pause();
-      else void this.backfill.run();
+      if (document.visibilityState === "visible") void this.scanHistory();
     };
   };
-
-  // src/navigation/officialNavSuppressor.ts
-  var STYLE_ID = "chatgpt-yada-official-nav-suppressor";
-  var OfficialNavSuppressor = class {
-    style = null;
-    enable() {
-      if (this.style?.isConnected) return;
-      document.getElementById(STYLE_ID)?.remove();
-      this.style = document.createElement("style");
-      this.style.id = STYLE_ID;
-      this.style.textContent = `${OFFICIAL_BUTTON_SELECTOR}{opacity:0!important;pointer-events:none!important;}`;
-      document.documentElement.append(this.style);
-    }
-    disable() {
-      this.style?.remove();
-      document.getElementById(STYLE_ID)?.remove();
-      this.style = null;
-    }
-    dispose() {
-      this.disable();
-    }
-  };
+  function classifySnapshot(snapshot) {
+    if (snapshot.quotaIsWork) return "work";
+    if (snapshot.quotaTemporary) return "temporary";
+    if (snapshot.quotaOrigin && snapshot.quotaOrigin !== "chat" && snapshot.quotaOrigin !== "chatgpt") return "unknown";
+    return "personal";
+  }
+  function toEvents(turns, accountKey, classification) {
+    return turns.map((turn) => ({
+      id: turn.id,
+      accountKey,
+      createdAt: turn.createdAt,
+      model: turn.model,
+      classification
+    }));
+  }
 
   // src/rail/active.ts
   function viewport(root) {
@@ -3795,23 +3705,23 @@ ${text}
 
   // src/rail/controller.ts
   var YadaRailController = class {
-    constructor(repository, navigator2) {
-      this.repository = repository;
+    constructor(sync, navigator2) {
+      this.sync = sync;
       this.navigator = navigator2;
       this.view = new RailView((id) => {
         void this.jump(id);
       });
     }
     view;
-    suppressor = new OfficialNavSuppressor();
     unsubscribe = null;
     snapshot = null;
     root = null;
     disposed = false;
     raf = 0;
     jumping = false;
+    jumpGeneration = 0;
     mount() {
-      this.unsubscribe = this.repository.subscribe((snapshot) => this.onSnapshot(snapshot));
+      this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       window.addEventListener("resize", this.onLayout, { passive: true });
       window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
       this.root = findScrollRoot();
@@ -3824,7 +3734,6 @@ ${text}
       this.snapshot = null;
       this.view.setTurns([]);
       this.view.clearHover();
-      this.suppressor.disable();
     }
     dispose() {
       this.disposed = true;
@@ -3834,7 +3743,6 @@ ${text}
       window.removeEventListener("resize", this.onLayout);
       window.removeEventListener("scroll", this.onScroll, true);
       this.root?.removeEventListener("scroll", this.onScroll);
-      this.suppressor.dispose();
       this.view.dispose();
     }
     onSnapshot(snapshot) {
@@ -3843,19 +3751,18 @@ ${text}
       const turns = snapshot?.activeTurns ?? [];
       this.view.setTurns(turns);
       if (turns.length) {
-        this.suppressor.enable();
         this.layout();
         this.syncActive();
-      } else {
-        this.suppressor.disable();
       }
     }
     async jump(turnId) {
-      if (this.jumping) this.navigator.cancel();
+      const generation = ++this.jumpGeneration;
+      this.navigator.cancel();
       this.jumping = true;
       this.view.setStatus("定位中");
       try {
         const result = await this.navigator.navigateTo(turnId);
+        if (generation !== this.jumpGeneration) return;
         if (result.status === "cancelled") {
           this.view.setStatus("");
           return;
@@ -3867,7 +3774,7 @@ ${text}
         this.view.setStatus("");
         this.syncActive();
       } finally {
-        this.jumping = false;
+        if (generation === this.jumpGeneration) this.jumping = false;
       }
     }
     onLayout = () => {
@@ -4238,9 +4145,9 @@ ${timestamp ? `${timestamp}
   // src/ui/toolbar.ts
   var YadaToolbar = class {
     constructor(onPreviewMode = () => {
-    }, repository = null) {
+    }, sync = null) {
       this.onPreviewMode = onPreviewMode;
-      this.repository = repository;
+      this.sync = sync;
     }
     host = null;
     shadow = null;
@@ -4428,10 +4335,14 @@ ${timestamp ? `${timestamp}
       this.setCopyState("pending", "复制中...", 0);
       try {
         const id = getConversationIdFromUrl();
-        const cached = id ? this.repository?.getSnapshot(id) : this.repository?.getSnapshot();
-        const snapshot = cached ?? (this.repository && id ? await this.repository.load(id) : null) ?? (this.repository ? null : await loadCurrentConversationSnapshot());
+        if (id && this.sync && this.sync.getActiveConversationId() !== id) this.sync.setActiveConversation(id);
+        let snapshot = this.sync?.getSnapshot() ?? null;
+        if (!snapshot && this.sync) {
+          await this.sync.requestSync("copy");
+          snapshot = this.sync.getSnapshot();
+        }
         if (!snapshot) throw new Error("No conversation snapshot");
-        const turns = "activeTurns" in snapshot ? snapshot.activeTurns : snapshot.turns;
+        const turns = snapshot.activeTurns;
         const markdown = formatTurnsAsMarkdown(turns);
         if (!markdown) {
           this.setCopyState("empty", "没有可复制内容");
@@ -4526,7 +4437,7 @@ ${timestamp ? `${timestamp}
 
   // src/content.ts
   var ChatGptYadaApp = class {
-    repository = new ConversationRepository();
+    sync = new ConversationSync();
     navigator = null;
     rail = null;
     toolbar = null;
@@ -4534,13 +4445,14 @@ ${timestamp ? `${timestamp}
     routeDispose = null;
     messageDispose = null;
     mount() {
-      this.navigator = new NavigatorController(this.repository);
+      this.sync.mountPageObserver();
+      this.navigator = new NavigatorController(this.sync);
       this.navigator.mount();
-      this.rail = new YadaRailController(this.repository, this.navigator);
+      this.rail = new YadaRailController(this.sync, this.navigator);
       this.rail.mount();
-      this.quota = new QuotaTracker(this.repository);
+      this.quota = new QuotaTracker(this.sync);
       this.quota.mount();
-      this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.repository);
+      this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.sync);
       this.toolbar.mount();
       this.syncPageState();
       this.routeDispose = observeRouteChange(() => {
@@ -4549,8 +4461,10 @@ ${timestamp ? `${timestamp}
         this.navigator?.cancel();
         this.syncPageState();
       });
-      const onMessage = (message) => {
-        if (message?.type === "quota/refresh-current") void this.quota?.refreshCurrent();
+      const onMessage = (message, _sender, sendResponse) => {
+        if (message?.type !== "quota/refresh-current") return false;
+        void this.quota?.refreshCurrent().then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: String(error) }));
+        return true;
       };
       chrome.runtime.onMessage.addListener(onMessage);
       this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
@@ -4568,16 +4482,14 @@ ${timestamp ? `${timestamp}
       this.navigator = null;
       this.toolbar?.dispose();
       this.toolbar = null;
-      this.repository.dispose();
+      this.sync.dispose();
     };
     syncPageState() {
       this.toolbar?.ensurePlacement();
       this.toolbar?.setVisible(isChatGptPage());
       const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
       if (copy) copy.hidden = !isChatGptConversationPage();
-      const id = getConversationIdFromUrl();
-      this.quota?.setConversationId(id);
-      this.repository.setActiveConversation(id);
+      this.sync.setActiveConversation(getConversationIdFromUrl());
     }
   };
   if (isChatGptPage()) {
