@@ -238,6 +238,19 @@ function sampleTypeFor(count) {
   return null;
 }
 
+async function createChatTarget(cdp) {
+  const targetId = await cdp.createTarget("https://chatgpt.com/");
+  createdTargetIds.add(targetId);
+  await cdp.attach(targetId);
+  await waitFor(
+    cdp,
+    targetId,
+    `() => location.hostname.includes("chatgpt.com") && document.readyState === "complete"`,
+    "ChatGPT did not load"
+  );
+  return targetId;
+}
+
 async function main() {
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot }).toString().trim();
   const report = {
@@ -355,8 +368,9 @@ async function main() {
       const smokeIds = [...new Set([...(samples.personalIds || []), samples.best?.conversationId, samples.fallback?.conversationId].filter(Boolean))];
       let smokeError = null;
       for (const conversationId of smokeIds) {
+        const liveTarget = await createChatTarget(cdp);
         try {
-          report.live.smoke = await liveSmoke(cdp, chatTarget, { conversationId, turnCount: 0, userIds: [] });
+          report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId, turnCount: 0, userIds: [] });
           smokeError = null;
           break;
         } catch (error) {
@@ -582,13 +596,23 @@ async function openConversation(cdp, targetId, conversationId) {
     "Yada rail did not mount",
     20000
   );
-  await waitFor(
+  const usersReady = await waitFor(
     cdp,
     targetId,
     `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length > 0`,
     "ChatGPT did not render user turns",
     30000
-  );
+  ).catch(async (error) => {
+    const diag = await evaluateFn(cdp, targetId, `() => ({
+      href: location.href,
+      users: document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length,
+      roles: document.querySelectorAll("[data-message-author-role]").length,
+      rail: Boolean(document.getElementById("chatgpt-yada-rail-host")),
+      text: (document.body && document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 180)
+    })`).catch(() => null);
+    throw new Error(`${error.message}: ${JSON.stringify(diag)}`);
+  });
+  if (!usersReady) throw new Error("ChatGPT did not render user turns");
   await waitFor(
     cdp,
     targetId,
