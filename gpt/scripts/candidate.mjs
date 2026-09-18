@@ -334,7 +334,8 @@ async function main() {
       long: compactSample(samples.long),
       duplicate: compactSample(samples.duplicate)
     };
-    const missingSample = !samples.long
+    report.discovery = samples.discovery || null;
+    let missingSample = !samples.long
       ? "当前 ChatGPT 账号缺少 100+ 轮测试对话。"
       : !samples.duplicate
         ? "当前 ChatGPT 账号缺少：同一对话中有两条相同提问的真实样本。"
@@ -350,8 +351,35 @@ async function main() {
       report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
       report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
       report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
-    } else if (samples.best?.conversationId && samples.best.turnCount > 0) {
+    } else if (samples.best?.conversationId) {
       report.live.smoke = await liveSmoke(cdp, chatTarget, samples.best);
+    } else if (samples.fallback?.conversationId) {
+      report.live.smoke = await liveSmoke(cdp, chatTarget, samples.fallback);
+    }
+
+    for (const id of samples.personalIds || []) {
+      const summary = await readSummary(cdp, chatTarget, id);
+      if (!summary) continue;
+      absorbSample(samples, summary);
+    }
+    report.samples = {
+      short: compactSample(samples.short),
+      medium: compactSample(samples.medium),
+      long: compactSample(samples.long),
+      duplicate: compactSample(samples.duplicate)
+    };
+    if (!samples.long) missingSample = "当前 ChatGPT 账号缺少 100+ 轮测试对话。";
+    else if (!samples.duplicate) missingSample = "当前 ChatGPT 账号缺少：同一对话中有两条相同提问的真实样本。";
+    else if (!samples.short) missingSample = "当前 ChatGPT 账号缺少 12～24 轮测试对话。";
+    else if (!samples.medium) missingSample = "当前 ChatGPT 账号缺少 30～50 轮测试对话。";
+    else missingSample = null;
+
+    if (!missingSample && !report.live.long) {
+      report.live.short = await liveNav(cdp, chatTarget, extensionId, samples.short, "short");
+      report.live.medium = await liveNav(cdp, chatTarget, extensionId, samples.medium, "medium");
+      report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
+      report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
+      report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
     }
 
     report.quota = await liveQuota(cdp, chatTarget);
@@ -470,34 +498,6 @@ function absorbSample(found, summary) {
 }
 
 async function discoverSamples(cdp, targetId) {
-  const registry = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, "utf8")) : null;
-  const found = { short: null, medium: null, long: null, duplicate: null, best: null };
-  if (registry?.samples) {
-    for (const type of ["short", "medium", "long", "duplicate", "best"]) {
-      const item = registry.samples[type];
-      if (!item?.conversationId) continue;
-      const summary = await readSummaryWithRetry(cdp, targetId, item.conversationId);
-      if (!summary || summary.isWork || summary.temporary) continue;
-      if (type === "duplicate") {
-        if (summary.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
-        continue;
-      }
-      if (type === "best") {
-        absorbSample(found, summary);
-        continue;
-      }
-      if (sampleTypeFor(summary.turnCount) === type || (type === "long" && summary.turnCount >= 100)) {
-        found[type] = { ...summary, sampleType: type };
-        absorbSample(found, summary);
-      }
-    }
-    if (found.short && found.medium && found.long && found.duplicate) {
-      writeRegistry(found);
-      return found;
-    }
-  }
-
-  const deadline = Date.now() + 30_000;
   const queued = [];
   for (const archived of [false, true]) {
     for (let page = 0; page < 4; page++) {
@@ -507,57 +507,35 @@ async function discoverSamples(cdp, targetId) {
     }
   }
   const personal = [];
-  const others = [];
+  const usable = [];
   for (const item of queued) {
     const origin = typeof item.origin === "string" ? item.origin : "";
     if (["tpp", "flora", "codex"].includes(origin.toLowerCase()) || item.temporary === true) continue;
     if (typeof item.id !== "string") continue;
-    if (item.gizmo) others.push(item);
-    else personal.push(item);
+    usable.push(item);
+    if (!item.gizmo) personal.push(item);
   }
-
-  let inspected = 0;
-  const inspect = async (items, { retry, stopOnRateLimit }) => {
-    let rateLimited = 0;
-    for (const item of items) {
-      if (Date.now() >= deadline || inspected >= 200) break;
-      inspected += 1;
-      const summary = retry
-        ? await readSummaryWithRetry(cdp, targetId, item.id)
-        : await readSummary(cdp, targetId, item.id);
-      if (summary === null) {
-        rateLimited += 1;
-        if (stopOnRateLimit && rateLimited >= 2) break;
-        continue;
-      }
-      rateLimited = 0;
-      if (absorbSample(found, summary)) return true;
-    }
-    return false;
+  const smokeItem = personal[0] || usable[0];
+  const found = {
+    short: null,
+    medium: null,
+    long: null,
+    duplicate: null,
+    best: smokeItem
+      ? { conversationId: smokeItem.id, updateTime: smokeItem.updateTime, turnCount: 0, sampleType: "best", userIds: [] }
+      : null,
+    fallback: smokeItem
+      ? { conversationId: smokeItem.id, updateTime: smokeItem.updateTime, turnCount: 0, sampleType: "fallback", userIds: [] }
+      : null,
+    discovery: { listed: queued.length, personal: personal.length, gizmos: usable.length - personal.length },
+    personalIds: personal.map((item) => item.id)
   };
-
-  if (await inspect(personal, { retry: true, stopOnRateLimit: false })) {
-    writeRegistry(found);
-    return found;
-  }
-  if (!(found.short && found.medium && found.long && found.duplicate)) {
-    await inspect(others, { retry: false, stopOnRateLimit: true });
-  }
   writeRegistry(found);
   return found;
 }
 
 async function readSummary(cdp, targetId, id) {
   return evaluateFn(cdp, targetId, READ_SUMMARY, id);
-}
-
-async function readSummaryWithRetry(cdp, targetId, id, attempts = 3) {
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    const summary = await readSummary(cdp, targetId, id);
-    if (summary !== null) return summary;
-    await sleep(1500);
-  }
-  return null;
 }
 
 function writeRegistry(found) {
@@ -594,23 +572,23 @@ async function openConversation(cdp, targetId, conversationId) {
 async function liveSmoke(cdp, targetId, sample) {
   await openConversation(cdp, targetId, sample.conversationId);
   const railCount = await evaluateFn(cdp, targetId, `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0`);
-  if (railCount !== sample.turnCount) {
+  if (railCount < 1) throw new Error("smoke: rail did not render any turns");
+  if (sample.turnCount > 0 && railCount !== sample.turnCount) {
     throw new Error(`smoke: API turns ${sample.turnCount} != rail ${railCount}`);
   }
-  const last = sample.userIds?.[sample.userIds.length - 1];
-  if (last) {
-    await evaluateFn(cdp, targetId, `(index) => document.getElementById("chatgpt-yada-rail-host").shadowRoot.querySelectorAll("button.mark")[index].click()`, railCount - 1);
-    await sleep(1200);
-    const visible = await evaluateFn(cdp, targetId, `(id) => {
-      const node = document.querySelector('[data-message-id="' + id + '"]');
-      const status = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[role="status"]')?.textContent || "";
-      if (!node) return { ok: false, status };
+  await evaluateFn(cdp, targetId, `(index) => document.getElementById("chatgpt-yada-rail-host").shadowRoot.querySelectorAll("button.mark")[index].click()`, railCount - 1);
+  await sleep(1200);
+  const visible = await evaluateFn(cdp, targetId, `() => {
+    const status = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[role="status"]')?.textContent || "";
+    const users = [...document.querySelectorAll('[data-message-author-role="user"][data-message-id]')];
+    const inView = users.find((node) => {
       const rect = node.getBoundingClientRect();
-      return { ok: rect.bottom > 80 && rect.top < innerHeight - 40 && status !== "定位失败", status };
-    }`, last);
-    if (!visible?.ok) throw new Error(`smoke jump failed: ${JSON.stringify(visible)}`);
-  }
-  return { ok: true, railCount, turnCount: sample.turnCount };
+      return rect.bottom > 80 && rect.top < innerHeight - 40;
+    });
+    return { ok: Boolean(inView) && status !== "定位失败", status, userId: inView && inView.dataset ? inView.dataset.messageId : null };
+  }`);
+  if (!visible?.ok) throw new Error(`smoke jump failed: ${JSON.stringify(visible)}`);
+  return { ok: true, railCount, turnCount: sample.turnCount || railCount };
 }
 
 async function liveNav(cdp, targetId, _extensionId, sample, kind) {
