@@ -460,21 +460,35 @@ async function findLoadedYada(cdp) {
   return { id, name: manifest.name, version: manifest.version, temporaryLoaded: false, path: null };
 }
 
+function absorbSample(found, summary) {
+  if (!summary || summary.isWork || summary.temporary) return false;
+  if (!found.best || summary.turnCount > found.best.turnCount) found.best = summary;
+  const type = sampleTypeFor(summary.turnCount);
+  if (type && !found[type]) found[type] = { ...summary, sampleType: type };
+  if (summary.duplicate && !found.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
+  return Boolean(found.short && found.medium && found.long && found.duplicate);
+}
+
 async function discoverSamples(cdp, targetId) {
   const registry = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, "utf8")) : null;
   const found = { short: null, medium: null, long: null, duplicate: null, best: null };
   if (registry?.samples) {
-    for (const type of ["short", "medium", "long", "duplicate"]) {
+    for (const type of ["short", "medium", "long", "duplicate", "best"]) {
       const item = registry.samples[type];
       if (!item?.conversationId) continue;
-      const summary = await readSummary(cdp, targetId, item.conversationId);
+      const summary = await readSummaryWithRetry(cdp, targetId, item.conversationId);
       if (!summary || summary.isWork || summary.temporary) continue;
       if (type === "duplicate") {
         if (summary.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
         continue;
       }
+      if (type === "best") {
+        absorbSample(found, summary);
+        continue;
+      }
       if (sampleTypeFor(summary.turnCount) === type || (type === "long" && summary.turnCount >= 100)) {
         found[type] = { ...summary, sampleType: type };
+        absorbSample(found, summary);
       }
     }
     if (found.short && found.medium && found.long && found.duplicate) {
@@ -492,31 +506,42 @@ async function discoverSamples(cdp, targetId) {
       queued.push(...items);
     }
   }
-  queued.sort((a, b) => Number(Boolean(a?.gizmo)) - Number(Boolean(b?.gizmo)));
-  let inspected = 0;
-  let rateLimited = 0;
+  const personal = [];
+  const others = [];
   for (const item of queued) {
-    if (Date.now() >= deadline || inspected >= 200) break;
     const origin = typeof item.origin === "string" ? item.origin : "";
     if (["tpp", "flora", "codex"].includes(origin.toLowerCase()) || item.temporary === true) continue;
     if (typeof item.id !== "string") continue;
-    inspected += 1;
-    const summary = await readSummary(cdp, targetId, item.id);
-    if (summary === null) {
-      rateLimited += 1;
-      if (rateLimited >= 2) break;
-      continue;
+    if (item.gizmo) others.push(item);
+    else personal.push(item);
+  }
+
+  let inspected = 0;
+  const inspect = async (items, { retry, stopOnRateLimit }) => {
+    let rateLimited = 0;
+    for (const item of items) {
+      if (Date.now() >= deadline || inspected >= 200) break;
+      inspected += 1;
+      const summary = retry
+        ? await readSummaryWithRetry(cdp, targetId, item.id)
+        : await readSummary(cdp, targetId, item.id);
+      if (summary === null) {
+        rateLimited += 1;
+        if (stopOnRateLimit && rateLimited >= 2) break;
+        continue;
+      }
+      rateLimited = 0;
+      if (absorbSample(found, summary)) return true;
     }
-    rateLimited = 0;
-    if (!summary || summary.isWork || summary.temporary) continue;
-    if (!found.best || summary.turnCount > found.best.turnCount) found.best = summary;
-    const type = sampleTypeFor(summary.turnCount);
-    if (type && !found[type]) found[type] = { ...summary, sampleType: type };
-    if (summary.duplicate && !found.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
-    if (found.short && found.medium && found.long && found.duplicate) {
-      writeRegistry(found);
-      return found;
-    }
+    return false;
+  };
+
+  if (await inspect(personal, { retry: true, stopOnRateLimit: false })) {
+    writeRegistry(found);
+    return found;
+  }
+  if (!(found.short && found.medium && found.long && found.duplicate)) {
+    await inspect(others, { retry: false, stopOnRateLimit: true });
   }
   writeRegistry(found);
   return found;
@@ -526,6 +551,15 @@ async function readSummary(cdp, targetId, id) {
   return evaluateFn(cdp, targetId, READ_SUMMARY, id);
 }
 
+async function readSummaryWithRetry(cdp, targetId, id, attempts = 3) {
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const summary = await readSummary(cdp, targetId, id);
+    if (summary !== null) return summary;
+    await sleep(1500);
+  }
+  return null;
+}
+
 function writeRegistry(found) {
   mkdirSync(resolve(root, "artifacts/candidate"), { recursive: true });
   writeFileSync(registryPath, `${JSON.stringify({
@@ -533,7 +567,8 @@ function writeRegistry(found) {
       short: compactSample(found.short),
       medium: compactSample(found.medium),
       long: compactSample(found.long),
-      duplicate: compactSample(found.duplicate)
+      duplicate: compactSample(found.duplicate),
+      best: compactSample(found.best ? { ...found.best, sampleType: found.best.sampleType || "best" } : null)
     }
   }, null, 2)}\n`);
 }

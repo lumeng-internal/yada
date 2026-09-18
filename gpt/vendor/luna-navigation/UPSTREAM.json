@@ -53,6 +53,10 @@
     "settings",
     "diagnostics",
     "official native prompt navigation",
-    "unused adapters"
+    "unused adapters",
+    "pageHook / matchMedia spoof",
+    "follow mode",
+    "conversationPrompts message helper",
+    "full Luna APP_CONFIG.ui"
   ]
 }
