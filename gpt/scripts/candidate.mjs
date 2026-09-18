@@ -604,37 +604,28 @@ async function targetUrl(cdp, targetId) {
 
 async function openConversation(cdp, targetId, conversationId) {
   const needle = `/c/${conversationId}`;
-  const deadline = Date.now() + 20000;
+  const deadline = Date.now() + 25000;
   let lastUrl = await targetUrl(cdp, targetId);
   let users = 0;
+  let host = false;
+  let marks = 0;
   while (Date.now() < deadline) {
     lastUrl = await targetUrl(cdp, targetId);
     if (!lastUrl.includes(needle)) {
       throw new Error(`ChatGPT conversation page did not stay open: ${lastUrl}`);
     }
-    users = await evaluateFn(
-      cdp,
-      targetId,
-      `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length`
-    ).catch(() => 0);
-    if (users > 0) break;
+    const state = await evaluateFn(cdp, targetId, `() => ({
+      users: document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length,
+      host: Boolean(document.getElementById("chatgpt-yada-rail-host")),
+      marks: document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0
+    })`).catch(() => null);
+    users = Number(state?.users || 0);
+    host = Boolean(state?.host);
+    marks = Number(state?.marks || 0);
+    if (users > 0 && host && marks > 0) return;
     await sleep(250);
   }
-  if (users < 1) throw new Error(`ChatGPT did not render user turns (${lastUrl})`);
-  await waitFor(
-    cdp,
-    targetId,
-    `() => Boolean(document.getElementById("chatgpt-yada-rail-host"))`,
-    "Yada content script did not mount",
-    20000
-  );
-  await waitFor(
-    cdp,
-    targetId,
-    `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length > 0`,
-    "ConversationSync did not fill the rail",
-    25000
-  );
+  throw new Error(`Yada live smoke incomplete: ${JSON.stringify({ url: lastUrl, users, host, marks })}`);
 }
 
 async function liveSmoke(cdp, targetId, sample) {

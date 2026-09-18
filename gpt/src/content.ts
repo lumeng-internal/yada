@@ -14,6 +14,8 @@ class ChatGptYadaApp {
   private quota: QuotaTracker | null = null;
   private routeDispose: (() => void) | null = null;
   private messageDispose: (() => void) | null = null;
+  private hostGuard: MutationObserver | null = null;
+  private remounts = 0;
 
   mount(): void {
     this.sync.mountPageObserver();
@@ -45,9 +47,19 @@ class ChatGptYadaApp {
     };
     chrome.runtime.onMessage.addListener(onMessage);
     this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
+    this.hostGuard = new MutationObserver(() => {
+      if (document.getElementById("chatgpt-yada-rail-host") && document.getElementById("chatgpt-yada-toolbar-host")) return;
+      if (this.remounts >= 5) return;
+      this.remounts += 1;
+      this.dispose();
+      this.mount();
+    });
+    this.hostGuard.observe(document.documentElement, { childList: true });
   }
 
   dispose = (): void => {
+    this.hostGuard?.disconnect();
+    this.hostGuard = null;
     this.routeDispose?.();
     this.routeDispose = null;
     this.messageDispose?.();
