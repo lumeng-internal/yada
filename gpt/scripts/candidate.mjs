@@ -343,7 +343,16 @@ async function main() {
       const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${personalId}`);
       createdTargetIds.add(liveTarget);
       await cdp.attach(liveTarget);
-      report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: personalId, turnCount: 0, userIds: [] });
+      try {
+        report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: personalId, turnCount: 0, userIds: [] });
+      } catch (error) {
+        const message = String(error.message || error);
+        if (/did not stay open|did not render user turns|did not load/i.test(message)) {
+          report.live.smoke = { ok: false, error: message };
+        } else {
+          throw error;
+        }
+      }
     }
 
     const samples = await discoverSamples(cdp, chatTarget);
@@ -382,6 +391,12 @@ async function main() {
           smokeError = null;
           break;
         } catch (error) {
+          const message = String(error.message || error);
+          if (/did not stay open|did not render user turns|did not load/i.test(message)) {
+            report.live.smoke = { ok: false, error: message };
+            smokeError = null;
+            break;
+          }
           smokeError = error;
         }
       }
