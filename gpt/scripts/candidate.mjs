@@ -616,7 +616,7 @@ async function targetUrl(cdp, targetId) {
 
 async function openConversation(cdp, targetId, conversationId) {
   const needle = `/c/${conversationId}`;
-  const deadline = Date.now() + 25000;
+  const deadline = Date.now() + 45000;
   let lastUrl = await targetUrl(cdp, targetId);
   let users = 0;
   let host = false;

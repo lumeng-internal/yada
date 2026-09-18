@@ -7,7 +7,7 @@ import { YadaToolbar } from "./ui/toolbar";
 import { observeRouteChange } from "./utils/route";
 
 class ChatGptYadaApp {
-  private readonly sync = new ConversationSync();
+  private sync: ConversationSync | null = null;
   private navigator: NavigatorController | null = null;
   private rail: YadaRailController | null = null;
   private toolbar: YadaToolbar | null = null;
@@ -18,6 +18,7 @@ class ChatGptYadaApp {
   private remounts = 0;
 
   mount(): void {
+    this.sync = new ConversationSync();
     this.sync.mountPageObserver();
     this.navigator = new NavigatorController(this.sync);
     this.navigator.mount();
@@ -54,6 +55,7 @@ class ChatGptYadaApp {
       this.dispose();
       this.mount();
     });
+    this.hostGuard.observe(document, { childList: true });
     this.hostGuard.observe(document.documentElement, { childList: true });
   }
 
@@ -72,7 +74,8 @@ class ChatGptYadaApp {
     this.navigator = null;
     this.toolbar?.dispose();
     this.toolbar = null;
-    this.sync.dispose();
+    this.sync?.dispose();
+    this.sync = null;
   };
 
   private syncPageState(): void {
@@ -80,7 +83,7 @@ class ChatGptYadaApp {
     this.toolbar?.setVisible(isChatGptPage());
     const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector<HTMLButtonElement>("[data-copy-all]");
     if (copy) copy.hidden = !isChatGptConversationPage();
-    this.sync.setActiveConversation(getConversationIdFromUrl());
+    this.sync?.setActiveConversation(getConversationIdFromUrl());
   }
 }
 

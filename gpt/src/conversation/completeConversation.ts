@@ -103,7 +103,8 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
         if (signal?.aborted || controller.signal.aborted) throw abortError();
         return response;
       } catch (error) {
-        if (signal?.aborted || controller.signal.aborted || isAbortError(error)) throw abortError();
+        if (signal?.aborted) throw abortError();
+        if (controller.signal.aborted || isAbortError(error)) throw new Error("ChatGPT conversation API timed out");
         throw error;
       } finally {
         clearTimeout(timer);

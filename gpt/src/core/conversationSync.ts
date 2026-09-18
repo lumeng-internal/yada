@@ -14,10 +14,13 @@ export class ConversationSync {
   private readonly seenAssistantMessageIds = new Set<string>();
   private disposed = false;
   private published = 0;
+  private failures = 0;
   private readonly read: ReadConversation;
+  private readonly retryDelayMs: number;
 
-  constructor(options: { readConversation?: ReadConversation } = {}) {
+  constructor(options: { readConversation?: ReadConversation; retryDelayMs?: number } = {}) {
     this.read = options.readConversation ?? readConversationFromApi;
+    this.retryDelayMs = options.retryDelayMs ?? 800;
   }
 
   subscribe(listener: ConversationListener): () => void {
@@ -43,6 +46,7 @@ export class ConversationSync {
     this.seenAssistantMessageIds.clear();
     this.lastStreamingState = false;
     this.latestSnapshot = null;
+    this.failures = 0;
     if (!conversationId) {
       this.dirty = false;
       void this.publish(null);
@@ -103,12 +107,20 @@ export class ConversationSync {
           if (this.disposed || signal.aborted) throw abortError();
           if (this.activeConversationId === conversationId && this.generation === generation) {
             snapshot.revision = ++this.published;
+            this.failures = 0;
             await this.publish(snapshot);
           }
         } catch (error) {
           if (this.disposed) return;
           if (isAbortError(error) || this.generation !== generation) continue;
-          if (this.activeConversationId === conversationId) await this.publish(null);
+          if (this.activeConversationId === conversationId) {
+            await this.publish(null);
+            this.failures += 1;
+            if (this.failures <= 3) {
+              this.dirty = true;
+              if (this.retryDelayMs > 0) await delay(this.retryDelayMs);
+            }
+          }
         }
       }
     } finally {
@@ -164,4 +176,8 @@ function collectStableAssistantMessageIds(root: ParentNode = document): string[]
     if (id) ids.push(id);
   }
   return ids;
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -62,28 +62,54 @@
     if (current && !mapping[current]) throw new Error("Active branch tip missing after pagination");
     return { id, mapping, current_node: current || parent };
   }
+  function isRateLimited(error) {
+    return error instanceof Error && /API failed: 429\b/.test(error.message);
+  }
+  async function wait(ms, signal) {
+    if (signal?.aborted) throw abortError();
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(abortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
   async function fetchCompleteConversation(id, headers, signal) {
     const request = async (url) => {
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) controller.abort();
-      const timer = setTimeout(abort, 1e4);
-      try {
-        if (signal?.aborted || controller.signal.aborted) throw abortError();
-        const response = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
-        if (signal?.aborted || controller.signal.aborted) throw abortError();
-        if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
-        const data = await response.json();
-        if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
-        return data;
-      } catch (error) {
-        if (signal?.aborted || controller.signal.aborted || isAbortError(error)) throw abortError();
-        throw error;
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
+      const once = async () => {
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) controller.abort();
+        const timer = setTimeout(abort, 1e4);
+        try {
+          if (signal?.aborted || controller.signal.aborted) throw abortError();
+          const response2 = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
+          if (signal?.aborted || controller.signal.aborted) throw abortError();
+          return response2;
+        } catch (error) {
+          if (signal?.aborted) throw abortError();
+          if (controller.signal.aborted || isAbortError(error)) throw new Error("ChatGPT conversation API timed out");
+          throw error;
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+        }
+      };
+      let response = await once();
+      if (response.status === 429) {
+        await wait(1e3, signal);
+        response = await once();
       }
+      if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+      const data = await response.json();
+      if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
+      return data;
     };
     const complete = (raw) => {
       const data = unwrap(raw);
@@ -118,13 +144,13 @@
       throw new Error("Paginated conversation API returned no messages");
     } catch (error) {
       lastError = error;
-      if (signal?.aborted) throw error;
+      if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
     }
     try {
       return complete(await request(`${base}?include_full_conversation=true`));
     } catch (error) {
       lastError = error;
-      if (signal?.aborted) throw error;
+      if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
     }
     for (const url of [base, `${base}?offset=0&limit=100000`]) {
       try {
@@ -191,7 +217,13 @@
     return fetchCompleteConversation(conversationId, headers, signal);
   }
   async function getAccessToken() {
-    sessionTokenPromise ??= fetchSessionToken();
+    sessionTokenPromise ??= fetchSessionToken().then((token) => {
+      if (!token) sessionTokenPromise = null;
+      return token;
+    }, (error) => {
+      sessionTokenPromise = null;
+      throw error;
+    });
     return sessionTokenPromise;
   }
   async function fetchSessionToken() {
@@ -940,9 +972,12 @@ ${text}
     seenAssistantMessageIds = /* @__PURE__ */ new Set();
     disposed = false;
     published = 0;
+    failures = 0;
     read;
+    retryDelayMs;
     constructor(options = {}) {
       this.read = options.readConversation ?? readConversation;
+      this.retryDelayMs = options.retryDelayMs ?? 800;
     }
     subscribe(listener) {
       this.listeners.add(listener);
@@ -965,6 +1000,7 @@ ${text}
       this.seenAssistantMessageIds.clear();
       this.lastStreamingState = false;
       this.latestSnapshot = null;
+      this.failures = 0;
       if (!conversationId) {
         this.dirty = false;
         void this.publish(null);
@@ -1020,12 +1056,20 @@ ${text}
             if (this.disposed || signal.aborted) throw abortError3();
             if (this.activeConversationId === conversationId && this.generation === generation) {
               snapshot.revision = ++this.published;
+              this.failures = 0;
               await this.publish(snapshot);
             }
           } catch (error) {
             if (this.disposed) return;
             if (isAbortError3(error) || this.generation !== generation) continue;
-            if (this.activeConversationId === conversationId) await this.publish(null);
+            if (this.activeConversationId === conversationId) {
+              await this.publish(null);
+              this.failures += 1;
+              if (this.failures <= 3) {
+                this.dirty = true;
+                if (this.retryDelayMs > 0) await delay(this.retryDelayMs);
+              }
+            }
           }
         }
       } finally {
@@ -1072,6 +1116,9 @@ ${text}
       if (id) ids.push(id);
     }
     return ids;
+  }
+  function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // src/navigation/config.ts
@@ -3077,7 +3124,7 @@ ${text}
         if (!element || !container) continue;
         if (readMessageId(element) !== id) continue;
         scrollElementIntoContainer(element, container);
-        await wait(32);
+        await wait2(32);
         if (signal.aborted) return false;
         const still = findRenderedById(id);
         if (still && readMessageId(still) === id) return true;
@@ -3192,7 +3239,7 @@ ${text}
     const top = element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - PROMPT_TOP_OFFSET_PX;
     container.scrollTop = Math.max(0, top);
   }
-  function wait(ms) {
+  function wait2(ms) {
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
   function isAbortError4(error) {
@@ -3303,10 +3350,14 @@ ${text}
     ingestQueue = Promise.resolve();
     history = createChromeHistoryStore();
     disposed = false;
+    historyStarted = false;
+    historyTimer = 0;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       document.addEventListener("visibilitychange", this.onVisibility);
-      void this.scanHistory();
+      this.historyTimer = window.setTimeout(() => {
+        void this.startHistoryScan();
+      }, 4e3);
     }
     async refreshCurrent() {
       await this.sync.requestSync("popup");
@@ -3314,6 +3365,7 @@ ${text}
     }
     dispose() {
       this.disposed = true;
+      window.clearTimeout(this.historyTimer);
       this.unsubscribe?.();
       this.unsubscribe = null;
       document.removeEventListener("visibilitychange", this.onVisibility);
@@ -3321,7 +3373,14 @@ ${text}
     onSnapshot(snapshot) {
       const work = this.writeLedger(snapshot);
       this.ingestQueue = this.ingestQueue.then(() => work, () => work);
+      if (snapshot) void this.startHistoryScan();
       return work;
+    }
+    startHistoryScan() {
+      if (this.historyStarted || this.disposed) return;
+      this.historyStarted = true;
+      window.clearTimeout(this.historyTimer);
+      void this.scanHistory();
     }
     async writeLedger(snapshot) {
       if (this.disposed || !snapshot) return;
@@ -3370,7 +3429,7 @@ ${text}
       });
     }
     onVisibility = () => {
-      if (document.visibilityState === "visible") void this.scanHistory();
+      if (document.visibilityState === "visible") void this.startHistoryScan();
     };
   };
   function classifySnapshot(snapshot) {
@@ -4432,14 +4491,17 @@ ${timestamp ? `${timestamp}
 
   // src/content.ts
   var ChatGptYadaApp = class {
-    sync = new ConversationSync();
+    sync = null;
     navigator = null;
     rail = null;
     toolbar = null;
     quota = null;
     routeDispose = null;
     messageDispose = null;
+    hostGuard = null;
+    remounts = 0;
     mount() {
+      this.sync = new ConversationSync();
       this.sync.mountPageObserver();
       this.navigator = new NavigatorController(this.sync);
       this.navigator.mount();
@@ -4463,8 +4525,19 @@ ${timestamp ? `${timestamp}
       };
       chrome.runtime.onMessage.addListener(onMessage);
       this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
+      this.hostGuard = new MutationObserver(() => {
+        if (document.getElementById("chatgpt-yada-rail-host") && document.getElementById("chatgpt-yada-toolbar-host")) return;
+        if (this.remounts >= 5) return;
+        this.remounts += 1;
+        this.dispose();
+        this.mount();
+      });
+      this.hostGuard.observe(document, { childList: true });
+      this.hostGuard.observe(document.documentElement, { childList: true });
     }
     dispose = () => {
+      this.hostGuard?.disconnect();
+      this.hostGuard = null;
       this.routeDispose?.();
       this.routeDispose = null;
       this.messageDispose?.();
@@ -4477,14 +4550,15 @@ ${timestamp ? `${timestamp}
       this.navigator = null;
       this.toolbar?.dispose();
       this.toolbar = null;
-      this.sync.dispose();
+      this.sync?.dispose();
+      this.sync = null;
     };
     syncPageState() {
       this.toolbar?.ensurePlacement();
       this.toolbar?.setVisible(isChatGptPage());
       const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
       if (copy) copy.hidden = !isChatGptConversationPage();
-      this.sync.setActiveConversation(getConversationIdFromUrl());
+      this.sync?.setActiveConversation(getConversationIdFromUrl());
     }
   };
   if (isChatGptPage()) {

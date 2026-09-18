@@ -206,4 +206,22 @@ describe("ConversationSync", () => {
     expect(reads).toBe(afterFirst + 1);
     sync.dispose();
   });
+
+  it("retries a failed read and publishes the later snapshot", async () => {
+    let reads = 0;
+    const sync = new ConversationSync({
+      retryDelayMs: 0,
+      async readConversation(id) {
+        reads += 1;
+        if (reads === 1) throw new Error("not ready");
+        return snapshotFor(id, 2);
+      }
+    });
+    sync.setActiveConversation("conversation-1");
+    await sync.requestSync("init");
+    expect(reads).toBe(2);
+    expect(sync.getSnapshot()?.conversationId).toBe("conversation-1");
+    expect(sync.getSnapshot()?.activeTurns).toHaveLength(2);
+    sync.dispose();
+  });
 });
