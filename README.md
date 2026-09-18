@@ -1,12 +1,12 @@
 # Yada 扩展合集
 
-三个独立项目，共用一个仓库，各自保留版本、代码和使用方式。
+三个独立项目，共用一个仓库，各自保留版本、代码、许可证和使用方式。
 
-| 项目 | 版本 | 开发目录 | 浏览器加载目录 |
-| --- | --- | --- | --- |
-| ChatGPT Yada | 2.0.0 | `gpt/` | `gpt/dist_chrome/` |
-| Gemini Yada | 1.6.0 | `gemini/` | `gemini/` |
-| Claude Yada | 1.1.1 | `claude/` | `claude/dist_chrome/` |
+| 项目 | 版本 | 开发目录 | 浏览器加载目录 | 许可证 |
+| --- | --- | --- | --- | --- |
+| ChatGPT Yada | 4.0.0 | `gpt/` | `gpt/dist_chrome/` | AGPL-3.0（见 `gpt/LICENSE`、`gpt/NOTICE.md`） |
+| Gemini Yada | 1.6.0 | `gemini/` | `gemini/` | 独立程序，保留原有许可证；不与 `gpt/` 构建或链接 |
+| Claude Yada | 1.1.1 | `claude/` | `claude/dist_chrome/` | 独立程序，保留原有许可证；不与 `gpt/` 构建或链接 |
 
 ## 安装
 
