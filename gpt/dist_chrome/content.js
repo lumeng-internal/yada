@@ -91,16 +91,7 @@
       return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
     };
     const base = `/backend-api/conversation/${encodeURIComponent(id)}`;
-    let activeTip = "";
     let lastError;
-    try {
-      const full = await request(`${base}?include_full_conversation=true`);
-      activeTip = unwrap(full).current_node ?? unwrap(full).current_node_id ?? "";
-      return complete(full);
-    } catch (error) {
-      lastError = error;
-      if (signal?.aborted) throw error;
-    }
     try {
       const first = unwrap(await request(getPaginatedConversationApiUrl(id)));
       if (!Array.isArray(first.messages)) throw new Error("Paginated conversation API returned no messages");
@@ -119,9 +110,15 @@
         count++;
       }
       if (!messages.length) throw new Error("Paginated conversation is empty");
-      const current = first.current_node ?? first.current_node_id ?? activeTip;
+      const current = first.current_node ?? first.current_node_id ?? "";
       const rebuilt = buildConversationMappingFromMessages(messages, id, current);
       return { ...first, ...rebuilt, messages };
+    } catch (error) {
+      lastError = error;
+      if (signal?.aborted) throw error;
+    }
+    try {
+      return complete(await request(`${base}?include_full_conversation=true`));
     } catch (error) {
       lastError = error;
       if (signal?.aborted) throw error;
@@ -595,10 +592,6 @@ ${text}
   function validModel(value) {
     return VALID_MODEL.test(value);
   }
-  function parseInteger(value) {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0 || !Number.isInteger(value)) return null;
-    return value;
-  }
 
   // src/quota/vibebar/modelLimits.ts
   function modelLimits(data, now) {
@@ -836,7 +829,7 @@ ${text}
               if (fetched < detailBudget && clock() < deadline) {
                 fetched += 1;
                 try {
-                  const detail = await input.transport.request(`/backend-api/conversation/${id}`, input.signal);
+                  const detail = await (input.fetchDetail ? input.fetchDetail(id, input.signal) : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
                   parsed = await parseConversation(detail, id, updated, cutoff);
                   cache.conversations[key] = parsed;
                 } catch (error) {
@@ -857,9 +850,7 @@ ${text}
             }
           }
           offset += items.length;
-          if (!items.length) reachedEnd = true;
-          const total = parseInteger(root.total);
-          if (total != null && offset >= total) reachedEnd = true;
+          if (!items.length || items.length < pageSize) reachedEnd = true;
           if (reachedEnd) break;
           if (seen.size === before) {
             failures += 1;
@@ -3358,6 +3349,7 @@ ${text}
             return response.json();
           }
         },
+        fetchDetail: (id, signal) => fetchConversation(id, signal),
         store: this.history,
         identity: account.identity,
         now: Date.now()
