@@ -327,6 +327,18 @@ async function main() {
       20000
     );
 
+    const firstPage = await evaluateFn(cdp, chatTarget, LIST_ITEMS, { archived: false, offset: 0 });
+    const firstPersonal = Array.isArray(firstPage)
+      ? firstPage.find((item) => item && typeof item.id === "string" && !item.gizmo && item.temporary !== true && !["tpp", "flora", "codex"].includes(String(item.origin || "").toLowerCase()))
+      : null;
+    if (firstPersonal?.id) {
+      const liveTarget = await cdp.createTarget("https://chatgpt.com/");
+      createdTargetIds.add(liveTarget);
+      await cdp.attach(liveTarget);
+      await sleep(4000);
+      report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: firstPersonal.id, turnCount: 0, userIds: [] });
+    }
+
     const samples = await discoverSamples(cdp, chatTarget);
     report.samples = {
       short: compactSample(samples.short),
@@ -351,7 +363,7 @@ async function main() {
       report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
       report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
       report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
-    } else {
+    } else if (!report.live.smoke) {
       const smokeIds = [...new Set([...(samples.personalIds || []), samples.best?.conversationId, samples.fallback?.conversationId].filter(Boolean))];
       let smokeError = null;
       for (const conversationId of smokeIds) {

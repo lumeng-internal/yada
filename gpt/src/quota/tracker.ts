@@ -11,13 +11,15 @@ export class QuotaTracker {
   private ingestQueue: Promise<void> = Promise.resolve();
   private history = createChromeHistoryStore();
   private disposed = false;
+  private historyStarted = false;
+  private historyTimer = 0;
 
   constructor(private readonly sync: ConversationSync) {}
 
   mount(): void {
     this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
     document.addEventListener("visibilitychange", this.onVisibility);
-    void this.scanHistory();
+    this.historyTimer = window.setTimeout(() => { void this.startHistoryScan(); }, 4000);
   }
 
   async refreshCurrent(): Promise<void> {
@@ -27,6 +29,7 @@ export class QuotaTracker {
 
   dispose(): void {
     this.disposed = true;
+    window.clearTimeout(this.historyTimer);
     this.unsubscribe?.();
     this.unsubscribe = null;
     document.removeEventListener("visibilitychange", this.onVisibility);
@@ -35,7 +38,15 @@ export class QuotaTracker {
   private onSnapshot(snapshot: ConversationSnapshot | null): Promise<void> {
     const work = this.writeLedger(snapshot);
     this.ingestQueue = this.ingestQueue.then(() => work, () => work);
+    if (snapshot) void this.startHistoryScan();
     return work;
+  }
+
+  private startHistoryScan(): void {
+    if (this.historyStarted || this.disposed) return;
+    this.historyStarted = true;
+    window.clearTimeout(this.historyTimer);
+    void this.scanHistory();
   }
 
   private async writeLedger(snapshot: ConversationSnapshot | null): Promise<void> {
@@ -89,7 +100,7 @@ export class QuotaTracker {
   }
 
   private readonly onVisibility = (): void => {
-    if (document.visibilityState === "visible") void this.scanHistory();
+    if (document.visibilityState === "visible") void this.startHistoryScan();
   };
 }
 
