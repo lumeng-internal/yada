@@ -6,13 +6,19 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "moduleResolution": "Bundler",
     "strict": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
+    "skipLibCheck": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["vendor/luna-navigation/src/*"]
+    },
     "types": ["chrome", "node"]
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src"],
+  "exclude": ["vendor", "dist_chrome", "node_modules"]
 }

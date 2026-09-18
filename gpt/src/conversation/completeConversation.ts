@@ -16,6 +16,10 @@ const PAGE_NUM_TURNS = 100;
 const MAX_PAGES = 500;
 
 function unwrap(data: ConversationResponse): ConversationResponse { return data.conversation ?? data; }
+function abortError(): DOMException { return new DOMException("Aborted", "AbortError"); }
+function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "name" in error && (error as { name: string }).name === "AbortError");
+}
 export function isCompleteConversationMapping(raw: ConversationResponse): boolean {
   const data = unwrap(raw), mapping = data.mapping;
   let next = data.current_node ?? data.current_node_id ?? '';
@@ -74,11 +78,16 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
     if (signal?.aborted) controller.abort();
     const timer = setTimeout(abort, 10000);
     try {
+      if (signal?.aborted || controller.signal.aborted) throw abortError();
       const response = await fetch(url, { credentials: 'include', cache: 'no-store', headers, signal: controller.signal });
+      if (signal?.aborted || controller.signal.aborted) throw abortError();
       if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
       const data = await response.json();
       if (!data || typeof data !== 'object') throw new Error('Conversation API returned an empty response');
       return data as ConversationResponse;
+    } catch (error) {
+      if (signal?.aborted || controller.signal.aborted || isAbortError(error)) throw abortError();
+      throw error;
     } finally { clearTimeout(timer); signal?.removeEventListener('abort', abort); }
   };
   const complete = (raw: ConversationResponse): ApiConversation => {
@@ -113,7 +122,7 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
     if (!messages.length) throw new Error('Paginated conversation is empty');
     const current = first.current_node ?? first.current_node_id ?? activeTip;
     const rebuilt = buildConversationMappingFromMessages(messages, id, current);
-    return { ...first, ...rebuilt };
+    return { ...first, ...rebuilt, messages };
   } catch (error) { lastError = error; if (signal?.aborted) throw error; }
   // Upstream legacy candidates remain useful, but still require complete active ancestry.
   for (const url of [base, `${base}?offset=0&limit=100000`]) {

@@ -32,6 +32,13 @@ export type ApiConversation = {
   update_time?: number;
   current_node?: string;
   mapping?: Record<string, ApiConversationNode>;
+  messages?: ApiConversationMessage[];
+  workspace_id?: string;
+  workspaceId?: string;
+  workspace_type?: string;
+  workspaceType?: string;
+  is_workspace?: boolean;
+  isWorkspace?: boolean;
 };
 
 type SessionResponse = {
@@ -81,7 +88,7 @@ async function fetchSessionToken(): Promise<string | null> {
   }
 }
 
-function getChatGptAccountId(): string | null {
+export function getChatGptAccountId(): string | null {
   try {
     const raw = window.localStorage.getItem("_account");
     if (!raw) return null;

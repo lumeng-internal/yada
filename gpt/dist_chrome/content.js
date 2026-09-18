@@ -1,35 +1,3969 @@
-var Zt=Object.defineProperty;var Qt=(f,p,w)=>p in f?Zt(f,p,{enumerable:!0,configurable:!0,writable:!0,value:w}):f[p]=w;var a=(f,p,w)=>Qt(f,typeof p!="symbol"?p+"":p,w);(function(){"use strict";var J;function f(r=window.location.href){try{return new URL(r).hostname==="chatgpt.com"}catch{return!1}}function p(r=window.location.href){var t,e,n;try{const i=new URL(r);return((t=i.pathname.match(/^\/c\/([a-z0-9-]+)/i))==null?void 0:t[1])??((e=i.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i))==null?void 0:e[1])??null}catch{return((n=r.match(/\/c\/([a-z0-9-]+)/i))==null?void 0:n[1])??null}}function w(r=window.location.href){return f(r)&&p(r)!==null}const Z=[[/\.pdf$/i,"PDF 文件"],[/\.(?:md|markdown)$/i,"Markdown 文件"],[/\.csv$/i,"CSV 文件"],[/\.txt$/i,"文本文件"],[/\.json$/i,"JSON 文件"],[/\.(?:xlsx|xls)$/i,"Excel 文件"],[/\.(?:docx|doc)$/i,"Word 文件"],[/\.(?:zip|rar|7z)$/i,"压缩文件"]],Q=/\.(?:png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i;function tt(r){return r.map(ot).filter(Boolean).join(" ")}function et(r,t){const e=at(r),n=tt(t);return e&&n?`${n}
-${e}`:e||n||""}function nt(){return"[无文字消息]"}function rt(r){const t=[],e=b(r.content),n=b(r.metadata);if(Array.isArray(e==null?void 0:e.parts))for(const s of e.parts)M(s,t);const i=t.some(s=>s.kind==="image");for(const s of["attachments","files","uploaded_files"]){const d=(n==null?void 0:n[s])??r[s];if(Array.isArray(d))for(const c of d){const u=[];M(c,u),t.push(...u.filter(m=>!(i&&m.kind==="image")))}}const o=b(n==null?void 0:n.aggregate_result);if(Array.isArray(o==null?void 0:o.messages))for(const s of o.messages){const d=b(s);if(d&&l(d,"message_type")==="image"){const c=l(d,"image_url")??l(d,"url")??void 0;t.push({kind:"image",label:"图片",key:I("image",c??"aggregate")})}}return st(t)}function it(r,t){if(t!=null&&t.includes("pdf"))return"PDF 文件";if(t!=null&&t.includes("markdown"))return"Markdown 文件";if(t!=null&&t.includes("json"))return"JSON 文件";if(t!=null&&t.includes("csv"))return"CSV 文件";if(t!=null&&t.includes("text"))return"文本文件";if(t!=null&&t.includes("spreadsheet")||t!=null&&t.includes("excel"))return"Excel 文件";if(t!=null&&t.includes("word"))return"Word 文件";if(r){const e=Z.find(([n])=>n.test(r));if(e)return e[1]}return"文件"}function ot(r){return r.kind==="image"?"[图片]":r.kind==="pasted"?"[粘贴内容]":r.kind==="file"?r.filename?`[${r.label}] ${r.filename}`:`[${r.label}]`:""}function M(r,t){const e=b(r);if(!e)return;const n=(l(e,"content_type")??l(e,"type")??"").toLowerCase(),i=l(e,"file_name")??l(e,"filename")??l(e,"name")??l(e,"title")??void 0,o=l(e,"mime_type")??l(e,"mimetype")??l(e,"mime")??void 0,s=l(e,"asset_pointer")??l(e,"image_asset_pointer")??l(e,"url")??l(e,"href")??void 0,d=I("api",s??i??o??n);if(dt(n,i,o,s)){t.push({kind:"image",label:"图片",key:d});return}if(n.includes("paste")||n.includes("pasted")||e.pasted===!0){t.push({kind:"pasted",label:"粘贴内容",key:d??"pasted"});return}if(i||n.includes("file")||o){t.push({kind:"file",label:it(i,o),filename:i,mimeType:o,key:d});return}}function st(r){const t=new Set,e=[];let n=0;for(const i of r){const o=ut(i,n);i.kind==="image"&&!i.key&&(n+=1),!t.has(o)&&(t.add(o),e.push({kind:i.kind,label:i.label,filename:i.filename,mimeType:i.mimeType}))}return e}function at(r){return r.replace(/\u00a0/g," ").replace(/[ \t]+\n/g,`
-`).replace(/\n{3,}/g,`
+"use strict";
+(() => {
+  // src/conversation/completeConversation.ts
+  var PAGE_NUM_TURNS = 100;
+  var MAX_PAGES = 500;
+  function unwrap(data) {
+    return data.conversation ?? data;
+  }
+  function abortError() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  function isAbortError(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
+  function isCompleteConversationMapping(raw) {
+    const data = unwrap(raw), mapping = data.mapping;
+    let next = data.current_node ?? data.current_node_id ?? "";
+    if (!mapping || !next || !mapping[next]) return false;
+    const seen = /* @__PURE__ */ new Set();
+    while (next) {
+      if (seen.has(next) || !mapping[next]) return false;
+      seen.add(next);
+      next = mapping[next].parent ?? "";
+    }
+    return true;
+  }
+  function getPaginatedConversationApiUrl(conversationId, before = "") {
+    const id = encodeURIComponent(conversationId);
+    const path = before ? `/backend-api/conversations/${id}/messages` : `/backend-api/conversations/${id}`;
+    const params = new URLSearchParams();
+    if (before) params.set("before", before);
+    params.set("include_has_versions", "true");
+    params.set("num_turns", String(PAGE_NUM_TURNS));
+    return `${path}?${params}`;
+  }
+  function getPaginatedConversationCursor(data) {
+    const page = data.page_info ?? data.pageInfo;
+    if (!page || typeof (page.has_previous_page ?? page.hasPreviousPage) !== "boolean") throw new Error("Missing pagination completeness metadata");
+    const previous = page.has_previous_page === true || page.hasPreviousPage === true;
+    const cursor = page.start_cursor ?? page.startCursor ?? "";
+    if (previous && !cursor) throw new Error("Pagination requested an older page without a cursor");
+    return previous ? cursor : "";
+  }
+  function mergePaginatedConversationMessages(older, newer) {
+    const seen = /* @__PURE__ */ new Set();
+    return [...older, ...newer].filter((message) => {
+      if (!message?.id) throw new Error("Conversation message has no stable ID");
+      if (seen.has(message.id)) return false;
+      seen.add(message.id);
+      return true;
+    });
+  }
+  function buildConversationMappingFromMessages(messages, id, current) {
+    const rootId = `paginated-root:${id}`;
+    const mapping = { [rootId]: { id: rootId, parent: "", children: [] } };
+    let parent = rootId;
+    for (const message of messages) {
+      mapping[parent].children = [message.id];
+      mapping[message.id] = { id: message.id, parent, children: [], message };
+      parent = message.id;
+    }
+    if (current && !mapping[current]) throw new Error("Active branch tip missing after pagination");
+    return { id, mapping, current_node: current || parent };
+  }
+  async function fetchCompleteConversation(id, headers, signal) {
+    const request = async (url) => {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal?.addEventListener("abort", abort, { once: true });
+      if (signal?.aborted) controller.abort();
+      const timer = setTimeout(abort, 1e4);
+      try {
+        if (signal?.aborted || controller.signal.aborted) throw abortError();
+        const response = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
+        if (signal?.aborted || controller.signal.aborted) throw abortError();
+        if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+        const data = await response.json();
+        if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
+        return data;
+      } catch (error) {
+        if (signal?.aborted || controller.signal.aborted || isAbortError(error)) throw abortError();
+        throw error;
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      }
+    };
+    const complete = (raw) => {
+      const data = unwrap(raw);
+      if (!isCompleteConversationMapping(raw)) throw new Error("Incomplete active conversation path");
+      return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
+    };
+    const base = `/backend-api/conversation/${encodeURIComponent(id)}`;
+    let activeTip = "";
+    let lastError;
+    try {
+      const full = await request(`${base}?include_full_conversation=true`);
+      activeTip = unwrap(full).current_node ?? unwrap(full).current_node_id ?? "";
+      return complete(full);
+    } catch (error) {
+      lastError = error;
+      if (signal?.aborted) throw error;
+    }
+    try {
+      const first = unwrap(await request(getPaginatedConversationApiUrl(id)));
+      if (!Array.isArray(first.messages)) throw new Error("Paginated conversation API returned no messages");
+      let messages = mergePaginatedConversationMessages([], first.messages);
+      let cursor = getPaginatedConversationCursor(first);
+      const seen = /* @__PURE__ */ new Set();
+      let count = 1;
+      while (cursor) {
+        if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+        if (seen.has(cursor) || count >= MAX_PAGES) throw new Error("Conversation pagination stalled");
+        seen.add(cursor);
+        const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
+        if (!Array.isArray(page.messages)) throw new Error("Conversation message page returned no messages");
+        messages = mergePaginatedConversationMessages(page.messages, messages);
+        cursor = getPaginatedConversationCursor(page);
+        count++;
+      }
+      if (!messages.length) throw new Error("Paginated conversation is empty");
+      const current = first.current_node ?? first.current_node_id ?? activeTip;
+      const rebuilt = buildConversationMappingFromMessages(messages, id, current);
+      return { ...first, ...rebuilt, messages };
+    } catch (error) {
+      lastError = error;
+      if (signal?.aborted) throw error;
+    }
+    for (const url of [base, `${base}?offset=0&limit=100000`]) {
+      try {
+        return complete(await request(url));
+      } catch (error) {
+        lastError = error;
+        if (signal?.aborted) throw error;
+      }
+    }
+    throw lastError;
+  }
 
-`).trim()}function b(r){return r&&typeof r=="object"?r:null}function l(r,t){const e=r[t];return typeof e=="string"&&e.trim()?e.trim():null}function dt(r,t,e,n){return r.includes("image")||(e==null?void 0:e.toLowerCase().startsWith("image/"))===!0||ct(t)||(n==null?void 0:n.startsWith("sediment://"))===!0||(n==null?void 0:n.startsWith("data:image/"))===!0}function ct(r){return!!(r&&Q.test(r))}function ut(r,t){return r.key?`${r.kind}:${r.key}`:r.kind==="image"?`image:${r.filename??`anonymous-${t}`}`:r.kind==="pasted"?"pasted":`file:${r.filename??""}:${r.mimeType??""}:${r.label}`}function I(r,t){const e=t.replace(/\s+/g," ").trim().toLowerCase();return e?`${r}:${e}`:void 0}const lt=100,ht=500;function g(r){return r.conversation??r}function pt(r){const t=g(r),e=t.mapping;let n=t.current_node??t.current_node_id??"";if(!e||!n||!e[n])return!1;const i=new Set;for(;n;){if(i.has(n)||!e[n])return!1;i.add(n),n=e[n].parent??""}return!0}function R(r,t=""){const e=encodeURIComponent(r),n=t?`/backend-api/conversations/${e}/messages`:`/backend-api/conversations/${e}`,i=new URLSearchParams;return t&&i.set("before",t),i.set("include_has_versions","true"),i.set("num_turns",String(lt)),`${n}?${i}`}function B(r){const t=r.page_info??r.pageInfo;if(!t||typeof(t.has_previous_page??t.hasPreviousPage)!="boolean")throw new Error("Missing pagination completeness metadata");const e=t.has_previous_page===!0||t.hasPreviousPage===!0,n=t.start_cursor??t.startCursor??"";if(e&&!n)throw new Error("Pagination requested an older page without a cursor");return e?n:""}function q(r,t){const e=new Set;return[...r,...t].filter(n=>{if(!(n!=null&&n.id))throw new Error("Conversation message has no stable ID");return e.has(n.id)?!1:(e.add(n.id),!0)})}function mt(r,t,e){const n=`paginated-root:${t}`,i={[n]:{id:n,parent:"",children:[]}};let o=n;for(const s of r)i[o].children=[s.id],i[s.id]={id:s.id,parent:o,children:[],message:s},o=s.id;if(e&&!i[e])throw new Error("Active branch tip missing after pagination");return{id:t,mapping:i,current_node:e||o}}async function ft(r,t,e){const n=async c=>{const u=new AbortController,m=()=>u.abort();e==null||e.addEventListener("abort",m,{once:!0}),e!=null&&e.aborted&&u.abort();const T=setTimeout(m,1e4);try{const y=await fetch(c,{credentials:"include",cache:"no-store",headers:t,signal:u.signal});if(!y.ok)throw new Error(`ChatGPT conversation API failed: ${y.status}`);const x=await y.json();if(!x||typeof x!="object")throw new Error("Conversation API returned an empty response");return x}finally{clearTimeout(T),e==null||e.removeEventListener("abort",m)}},i=c=>{const u=g(c);if(!pt(c))throw new Error("Incomplete active conversation path");return{...u,id:u.id??u.conversation_id??r,current_node:u.current_node??u.current_node_id}},o=`/backend-api/conversation/${encodeURIComponent(r)}`;let s="",d;try{const c=await n(`${o}?include_full_conversation=true`);return s=g(c).current_node??g(c).current_node_id??"",i(c)}catch(c){if(d=c,e!=null&&e.aborted)throw c}try{const c=g(await n(R(r)));if(!Array.isArray(c.messages))throw new Error("Paginated conversation API returned no messages");let u=q([],c.messages),m=B(c);const T=new Set;let y=1;for(;m;){if(e!=null&&e.aborted)throw new DOMException("Aborted","AbortError");if(T.has(m)||y>=ht)throw new Error("Conversation pagination stalled");T.add(m);const $=g(await n(R(r,m)));if(!Array.isArray($.messages))throw new Error("Conversation message page returned no messages");u=q($.messages,u),m=B($),y++}if(!u.length)throw new Error("Paginated conversation is empty");const x=c.current_node??c.current_node_id??s,Jt=mt(u,r,x);return{...c,...Jt}}catch(c){if(d=c,e!=null&&e.aborted)throw c}for(const c of[o,`${o}?offset=0&limit=100000`])try{return i(await n(c))}catch(u){if(d=u,e!=null&&e.aborted)throw u}throw d}let O=null;async function wt(r=p(),t){return r?gt(r,t):null}async function gt(r,t){const e={Accept:"application/json"},n=await vt();n&&(e.Authorization=`Bearer ${n}`,e["X-Authorization"]=`Bearer ${n}`);const i=bt();return i&&(e["Chatgpt-Account-Id"]=i),ft(r,e,t)}async function vt(){return O??(O=yt()),O}async function yt(){try{const r=await fetch("/api/auth/session",{credentials:"include",headers:{Accept:"application/json"}});if(!r.ok)return null;const t=await r.json();return typeof t.accessToken=="string"?t.accessToken:null}catch{return null}}function bt(){try{const r=window.localStorage.getItem("_account");if(!r)return null;if(/^account-[a-z0-9_-]+$/i.test(r))return r;const t=JSON.parse(r);return D(t)}catch{return null}}function D(r){if(!r||typeof r!="object")return null;const t=r;for(const e of["accountId","account_id","currentAccountId","current_account_id","id"]){const n=t[e];if(typeof n=="string"&&/^account-[a-z0-9_-]+$/i.test(n))return n}for(const e of Object.values(t)){const n=D(e);if(n)return n}return null}async function N(r={}){const t=r.conversationId??p();if(!t)throw new Error("No active ChatGPT conversation");const e=await wt(t,r.signal);if(!e)throw new Error("ChatGPT conversation was not returned");const n=xt(e);return{conversationId:e.id??t,source:"api-full",turns:n,capturedAt:Date.now(),apiTurnsLength:n.length,domTurnsLength:0,usingCachedApiTurns:!1,lastStableTurnsLength:n.length}}function xt(r){const t=kt(r),e=[];let n=null;for(const i of t){const o=i.message;if(!o||Et(o))continue;const s=F(o);if(s!=="user"&&s!=="assistant")continue;const d=At(o);if(d.markdown){if(s==="user"){n&&e.push(_(e.length,n,null)),n=d;continue}n&&(e.push(_(e.length,n,d)),n=null)}}return n&&e.push(_(e.length,n,null)),e}function kt(r){var s;const t=r.mapping??{},e=r.current_node??((s=Object.values(t).find(d=>!d.children||d.children.length===0))==null?void 0:s.id),n=[],i=new Set;let o=e;for(;o&&!i.has(o);){i.add(o);const d=t[o];if(!d||d.parent===void 0&&!d.message)break;n.unshift(d),o=d.parent}return n}function _(r,t,e){return{id:t.messageId??(e==null?void 0:e.messageId)??`api-turn-${r+1}`,index:r,globalIndex:r,displayNumber:r+1,renderedLocalIndex:null,userMessageId:t.messageId,assistantMessageId:e==null?void 0:e.messageId,userCreatedAt:t.createdAt,assistantCreatedAt:e==null?void 0:e.createdAt,userMarkdown:t.markdown,assistantMarkdown:(e==null?void 0:e.markdown)??"",userPreview:t.preview,assistantPreview:(e==null?void 0:e.preview)??"",attachments:[...t.attachments,...(e==null?void 0:e.attachments)??[]]}}function Et(r){if(!r.content)return!0;const t=F(r);if(t==="system"||t==="tool")return!0;const e=r.recipient;if(e&&e!=="all")return!0;const n=r.channel;if(n&&n!=="final")return!0;const i=r.metadata??{};if(i.is_visually_hidden_from_conversation===!0||i.is_hidden===!0||i.hidden===!0)return!0;const o=h(r.content,"content_type");return o==="thoughts"||o==="reasoning_recap"||o==="model_editable_context"||o==="user_editable_context"}function At(r){const t=rt(r),e=et(Ct(r),t)||nt();return{messageId:r.id,createdAt:r.create_time,markdown:e,preview:Pt(e),attachments:t}}function Ct(r){const t=r.content;if(!t)return"";const e=h(t,"content_type");if(e==="text")return k(_t(t.parts));if(e==="multimodal_text")return k(Tt(t.parts));if(e==="code"){const n=h(t,"language")??"",i=h(t,"text")??"";return i?`\`\`\`${n}
-${i}
-\`\`\``:""}if(e==="execution_output"){const n=h(t,"text")??"";return n?`Result:
+  // src/platform/chatgptAdapter.ts
+  function isChatGptPage(url = window.location.href) {
+    try {
+      return new URL(url).hostname === "chatgpt.com";
+    } catch {
+      return false;
+    }
+  }
+  function getConversationIdFromUrl(url = window.location.href) {
+    try {
+      const parsed = new URL(url);
+      return parsed.pathname.match(/^\/c\/([a-z0-9-]+)/i)?.[1] ?? parsed.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i)?.[1] ?? document.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
+    } catch {
+      return url.match(/\/c\/([a-z0-9-]+)/i)?.[1] ?? document.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
+    }
+  }
+  function isChatGptConversationPage(url = window.location.href) {
+    return isChatGptPage(url) && getConversationIdFromUrl(url) !== null;
+  }
+
+  // src/conversation/fetchConversation.ts
+  var sessionTokenPromise = null;
+  async function fetchCurrentConversation(conversationId = getConversationIdFromUrl(), signal) {
+    if (!conversationId) return null;
+    return fetchConversation(conversationId, signal);
+  }
+  async function fetchConversation(conversationId, signal) {
+    const headers = {
+      Accept: "application/json"
+    };
+    const accessToken = await getAccessToken();
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+      headers["X-Authorization"] = `Bearer ${accessToken}`;
+    }
+    const accountId = getChatGptAccountId();
+    if (accountId) {
+      headers["Chatgpt-Account-Id"] = accountId;
+    }
+    return fetchCompleteConversation(conversationId, headers, signal);
+  }
+  async function getAccessToken() {
+    sessionTokenPromise ??= fetchSessionToken();
+    return sessionTokenPromise;
+  }
+  async function fetchSessionToken() {
+    try {
+      const response = await fetch("/api/auth/session", {
+        credentials: "include",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) return null;
+      const session = await response.json();
+      return typeof session.accessToken === "string" ? session.accessToken : null;
+    } catch {
+      return null;
+    }
+  }
+  function getChatGptAccountId() {
+    try {
+      const raw = window.localStorage.getItem("_account");
+      if (!raw) return null;
+      if (/^account-[a-z0-9_-]+$/i.test(raw)) return raw;
+      const parsed = JSON.parse(raw);
+      return findAccountId(parsed);
+    } catch {
+      return null;
+    }
+  }
+  function findAccountId(value) {
+    if (!value || typeof value !== "object") return null;
+    const record = value;
+    for (const key of ["accountId", "account_id", "currentAccountId", "current_account_id", "id"]) {
+      const candidate = record[key];
+      if (typeof candidate === "string" && /^account-[a-z0-9_-]+$/i.test(candidate)) {
+        return candidate;
+      }
+    }
+    for (const candidate of Object.values(record)) {
+      const nested = findAccountId(candidate);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  // src/conversation/extractAssistantUsageEvents.ts
+  var SKIP_CONTENT_TYPES = /* @__PURE__ */ new Set([
+    "thoughts",
+    "reasoning_recap",
+    "model_editable_context",
+    "user_editable_context",
+    "reasoning"
+  ]);
+  function extractAssistantUsageEvents(conversation, observedAt = Date.now()) {
+    const conversationId = conversation.id ?? conversation.conversation_id ?? "";
+    const workspaceKind = inferConversationWorkspaceKind(conversation);
+    const seen = /* @__PURE__ */ new Set();
+    const events = [];
+    const consider = (message) => {
+      if (!message || typeof message.id !== "string" || !message.id) return;
+      if (seen.has(message.id)) return;
+      if (!isCountableAssistant(message)) return;
+      seen.add(message.id);
+      events.push({
+        assistantMessageId: message.id,
+        conversationId,
+        createdAt: normalizeCreatedAt(message.create_time),
+        observedAt,
+        modelSlug: readModelSlug(message),
+        status: "final",
+        workspaceKind
+      });
+    };
+    if (conversation.mapping) {
+      for (const node of Object.values(conversation.mapping)) {
+        consider(node.message);
+      }
+    }
+    if (Array.isArray(conversation.messages)) {
+      for (const message of conversation.messages) consider(message);
+    }
+    return events;
+  }
+  function inferConversationWorkspaceKind(conversation) {
+    const record = conversation;
+    const raw = [
+      record.workspace_id,
+      record.workspaceId,
+      record.workspace_type,
+      record.workspaceType,
+      record.is_workspace,
+      record.isWorkspace
+    ];
+    for (const value of raw) {
+      const kind = classifyWorkspaceValue(value);
+      if (kind !== "unknown") return kind;
+    }
+    return "unknown";
+  }
+  function isCountableAssistant(message) {
+    const role = message.author?.role;
+    if (role !== "assistant") return false;
+    const recipient = message.recipient;
+    if (recipient && recipient !== "all") return false;
+    const channel = message.channel;
+    if (channel && channel !== "final") return false;
+    const metadata = message.metadata ?? {};
+    if (metadata.is_visually_hidden_from_conversation === true || metadata.is_hidden === true || metadata.hidden === true) {
+      return false;
+    }
+    const contentType = typeof message.content?.content_type === "string" ? String(message.content.content_type) : "";
+    if (SKIP_CONTENT_TYPES.has(contentType) || contentType.includes("reasoning")) return false;
+    if (contentType === "thoughts" || contentType === "code" && metadata.is_reasoning === true) return false;
+    return true;
+  }
+  function readModelSlug(message) {
+    const metadata = message.metadata ?? {};
+    const keys = [
+      "model_slug",
+      "model",
+      "default_model_slug",
+      "model_id",
+      "slug"
+    ];
+    for (const key of keys) {
+      const value = metadata[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return null;
+  }
+  function normalizeCreatedAt(value) {
+    if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
+    return value;
+  }
+  function classifyWorkspaceValue(value) {
+    if (value === true) return "work";
+    if (value === false) return "personal";
+    if (typeof value !== "string" || !value.trim()) return "unknown";
+    const normalized = value.trim().toLowerCase();
+    if (["personal", "plus", "pro", "free", "consumer"].includes(normalized)) return "personal";
+    if (normalized.includes("work") || normalized.includes("team") || normalized.includes("business") || normalized.includes("enterprise") || normalized.includes("workspace")) {
+      return "work";
+    }
+    return "unknown";
+  }
+
+  // src/conversation/composerGuard.ts
+  var DIRECT_COMPOSER_SELECTOR = [
+    "textarea",
+    "input",
+    "form",
+    "#prompt-textarea",
+    '[id*="prompt-textarea" i]',
+    '[data-testid*="composer" i]',
+    '[data-testid*="prompt-textarea" i]',
+    '[data-testid*="send-button" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    '[class*="composer" i]',
+    '[class*="prompt-textarea" i]'
+  ].join(", ");
+  var COMPOSER_HINT_SELECTOR = [
+    "textarea",
+    "input",
+    "form",
+    "#prompt-textarea",
+    '[id*="prompt-textarea" i]',
+    '[data-testid*="composer" i]',
+    '[data-testid*="prompt-textarea" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    '[class*="composer" i]',
+    '[class*="prompt-textarea" i]',
+    ".ProseMirror"
+  ].join(", ");
+  var DRAFT_CONTROL_SELECTOR = [
+    "textarea",
+    "input",
+    "#prompt-textarea",
+    '[id*="prompt-textarea" i]',
+    '[data-testid*="prompt-textarea" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    ".ProseMirror"
+  ].join(", ");
+
+  // src/conversation/attachmentSummary.ts
+  var FILE_EXTENSION_LABELS = [
+    [/\.pdf$/i, "PDF 文件"],
+    [/\.(?:md|markdown)$/i, "Markdown 文件"],
+    [/\.csv$/i, "CSV 文件"],
+    [/\.txt$/i, "文本文件"],
+    [/\.json$/i, "JSON 文件"],
+    [/\.(?:xlsx|xls)$/i, "Excel 文件"],
+    [/\.(?:docx|doc)$/i, "Word 文件"],
+    [/\.(?:zip|rar|7z)$/i, "压缩文件"]
+  ];
+  var IMAGE_EXTENSION_PATTERN = /\.(?:png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i;
+  function summarizeAttachments(attachments) {
+    return attachments.map(formatAttachment).filter(Boolean).join(" ");
+  }
+  function combineTextAndAttachments(text, attachments) {
+    const cleanText = normalizeBlockText(text);
+    const summary = summarizeAttachments(attachments);
+    if (cleanText && summary) return `${summary}
+${cleanText}`;
+    if (cleanText) return cleanText;
+    if (summary) return summary;
+    return "";
+  }
+  function noTextPlaceholder() {
+    return "[无文字消息]";
+  }
+  function extractApiAttachments(message) {
+    const attachments = [];
+    const content = readRecord(message.content);
+    const metadata = readRecord(message.metadata);
+    if (Array.isArray(content?.parts)) {
+      for (const part of content.parts) {
+        collectAttachmentFromPart(part, attachments);
+      }
+    }
+    const contentHasImage = attachments.some((attachment) => attachment.kind === "image");
+    for (const key of ["attachments", "files", "uploaded_files"]) {
+      const value = metadata?.[key] ?? message[key];
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const collected = [];
+          collectAttachmentFromPart(item, collected);
+          attachments.push(...collected.filter((attachment) => !(contentHasImage && attachment.kind === "image")));
+        }
+      }
+    }
+    const aggregateResult = readRecord(metadata?.aggregate_result);
+    if (Array.isArray(aggregateResult?.messages)) {
+      for (const item of aggregateResult.messages) {
+        const record = readRecord(item);
+        if (record && readString(record, "message_type") === "image") {
+          const url = readString(record, "image_url") ?? readString(record, "url") ?? void 0;
+          attachments.push({ kind: "image", label: "图片", key: makeKey("image", url ?? "aggregate") });
+        }
+      }
+    }
+    return dedupeAttachments(attachments);
+  }
+  function getFileLabel(filename, mimeType) {
+    if (mimeType?.includes("pdf")) return "PDF 文件";
+    if (mimeType?.includes("markdown")) return "Markdown 文件";
+    if (mimeType?.includes("json")) return "JSON 文件";
+    if (mimeType?.includes("csv")) return "CSV 文件";
+    if (mimeType?.includes("text")) return "文本文件";
+    if (mimeType?.includes("spreadsheet") || mimeType?.includes("excel")) return "Excel 文件";
+    if (mimeType?.includes("word")) return "Word 文件";
+    if (filename) {
+      const match = FILE_EXTENSION_LABELS.find(([pattern]) => pattern.test(filename));
+      if (match) return match[1];
+    }
+    return "文件";
+  }
+  function formatAttachment(attachment) {
+    if (attachment.kind === "image") return "[图片]";
+    if (attachment.kind === "pasted") return "[粘贴内容]";
+    if (attachment.kind === "file") {
+      return attachment.filename ? `[${attachment.label}] ${attachment.filename}` : `[${attachment.label}]`;
+    }
+    return "";
+  }
+  function collectAttachmentFromPart(part, attachments) {
+    const record = readRecord(part);
+    if (!record) return;
+    const contentType = (readString(record, "content_type") ?? readString(record, "type") ?? "").toLowerCase();
+    const filename = readString(record, "file_name") ?? readString(record, "filename") ?? readString(record, "name") ?? readString(record, "title") ?? void 0;
+    const mimeType = readString(record, "mime_type") ?? readString(record, "mimetype") ?? readString(record, "mime") ?? void 0;
+    const assetPointer = readString(record, "asset_pointer") ?? readString(record, "image_asset_pointer") ?? readString(record, "url") ?? readString(record, "href") ?? void 0;
+    const key = makeKey("api", assetPointer ?? filename ?? mimeType ?? contentType);
+    if (isImageContent(contentType, filename, mimeType, assetPointer)) {
+      attachments.push({ kind: "image", label: "图片", key });
+      return;
+    }
+    if (contentType.includes("paste") || contentType.includes("pasted") || record.pasted === true) {
+      attachments.push({ kind: "pasted", label: "粘贴内容", key: key ?? "pasted" });
+      return;
+    }
+    if (filename || contentType.includes("file") || mimeType) {
+      attachments.push({ kind: "file", label: getFileLabel(filename, mimeType), filename, mimeType, key });
+      return;
+    }
+  }
+  function dedupeAttachments(attachments) {
+    const seen = /* @__PURE__ */ new Set();
+    const result = [];
+    let anonymousImageIndex = 0;
+    for (const attachment of attachments) {
+      const key = getDedupeKey(attachment, anonymousImageIndex);
+      if (attachment.kind === "image" && !attachment.key) anonymousImageIndex += 1;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        kind: attachment.kind,
+        label: attachment.label,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType
+      });
+    }
+    return result;
+  }
+  function normalizeBlockText(value) {
+    return value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function readRecord(value) {
+    return value && typeof value === "object" ? value : null;
+  }
+  function readString(record, key) {
+    const value = record[key];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  function isImageContent(contentType, filename, mimeType, assetPointer) {
+    return contentType.includes("image") || mimeType?.toLowerCase().startsWith("image/") === true || isImageFilename(filename) || assetPointer?.startsWith("sediment://") === true || assetPointer?.startsWith("data:image/") === true;
+  }
+  function isImageFilename(filename) {
+    return Boolean(filename && IMAGE_EXTENSION_PATTERN.test(filename));
+  }
+  function getDedupeKey(attachment, anonymousImageIndex) {
+    if (attachment.key) return `${attachment.kind}:${attachment.key}`;
+    if (attachment.kind === "image") return `image:${attachment.filename ?? `anonymous-${anonymousImageIndex}`}`;
+    if (attachment.kind === "pasted") return "pasted";
+    return `file:${attachment.filename ?? ""}:${attachment.mimeType ?? ""}:${attachment.label}`;
+  }
+  function makeKey(prefix, value) {
+    const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
+    return normalized ? `${prefix}:${normalized}` : void 0;
+  }
+
+  // src/conversation/normalizeConversation.ts
+  async function loadCurrentConversationSnapshot(options = {}) {
+    const conversationId = options.conversationId ?? getConversationIdFromUrl();
+    if (!conversationId) throw new Error("No active ChatGPT conversation");
+    const conversation = await fetchCurrentConversation(conversationId, options.signal);
+    if (!conversation) throw new Error("ChatGPT conversation was not returned");
+    const turns = normalizeConversation(conversation);
+    return {
+      conversationId: conversation.id ?? conversationId,
+      source: "api-full",
+      turns,
+      capturedAt: Date.now(),
+      apiTurnsLength: turns.length,
+      domTurnsLength: 0,
+      usingCachedApiTurns: false,
+      lastStableTurnsLength: turns.length
+    };
+  }
+  function normalizeConversation(conversation) {
+    const nodes = getCurrentBranchNodes(conversation);
+    const turns = [];
+    let pendingUser = null;
+    for (const node of nodes) {
+      const message = node.message;
+      if (!message || shouldSkipMessage(message)) continue;
+      const role = readRole(message);
+      if (role !== "user" && role !== "assistant") continue;
+      const payload = extractMessagePayload(message);
+      if (!payload.markdown) continue;
+      if (role === "user") {
+        if (pendingUser) {
+          turns.push(makeTurn(turns.length, pendingUser, null));
+        }
+        pendingUser = payload;
+        continue;
+      }
+      if (!pendingUser) continue;
+      turns.push(makeTurn(turns.length, pendingUser, payload));
+      pendingUser = null;
+    }
+    if (pendingUser) {
+      turns.push(makeTurn(turns.length, pendingUser, null));
+    }
+    return turns;
+  }
+  function getCurrentBranchNodes(conversation) {
+    const mapping = conversation.mapping ?? {};
+    const startNodeId = conversation.current_node ?? Object.values(mapping).find((node) => !node.children || node.children.length === 0)?.id;
+    const result = [];
+    const seen = /* @__PURE__ */ new Set();
+    let currentNodeId = startNodeId;
+    while (currentNodeId && !seen.has(currentNodeId)) {
+      seen.add(currentNodeId);
+      const node = mapping[currentNodeId];
+      if (!node) break;
+      if (node.parent === void 0 && !node.message) break;
+      result.unshift(node);
+      currentNodeId = node.parent;
+    }
+    return result;
+  }
+  function makeTurn(index, user, assistant) {
+    return {
+      id: user.messageId ?? assistant?.messageId ?? `api-turn-${index + 1}`,
+      index,
+      globalIndex: index,
+      displayNumber: index + 1,
+      renderedLocalIndex: null,
+      userMessageId: user.messageId,
+      assistantMessageId: assistant?.messageId,
+      userCreatedAt: user.createdAt,
+      assistantCreatedAt: assistant?.createdAt,
+      userMarkdown: user.markdown,
+      assistantMarkdown: assistant?.markdown ?? "",
+      userPreview: user.preview,
+      assistantPreview: assistant?.preview ?? "",
+      attachments: [...user.attachments, ...assistant?.attachments ?? []]
+    };
+  }
+  function shouldSkipMessage(message) {
+    if (!message.content) return true;
+    const role = readRole(message);
+    if (role === "system" || role === "tool") return true;
+    const recipient = message.recipient;
+    if (recipient && recipient !== "all") return true;
+    const channel = message.channel;
+    if (channel && channel !== "final") return true;
+    const metadata = message.metadata ?? {};
+    if (metadata.is_visually_hidden_from_conversation === true || metadata.is_hidden === true || metadata.hidden === true) {
+      return true;
+    }
+    const contentType = readString2(message.content, "content_type");
+    return contentType === "thoughts" || contentType === "reasoning_recap" || contentType === "model_editable_context" || contentType === "user_editable_context";
+  }
+  function extractMessagePayload(message) {
+    const attachments = extractApiAttachments(message);
+    const markdown = combineTextAndAttachments(extractApiMarkdown(message), attachments) || noTextPlaceholder();
+    return {
+      messageId: message.id,
+      createdAt: message.create_time,
+      markdown,
+      preview: makePreview(markdown),
+      attachments
+    };
+  }
+  function extractApiMarkdown(message) {
+    const content = message.content;
+    if (!content) return "";
+    const contentType = readString2(content, "content_type");
+    if (contentType === "text") {
+      return normalizeMarkdown(joinStringParts(content.parts));
+    }
+    if (contentType === "multimodal_text") {
+      return normalizeMarkdown(extractMultimodalText(content.parts));
+    }
+    if (contentType === "code") {
+      const language = readString2(content, "language") ?? "";
+      const text = readString2(content, "text") ?? "";
+      return text ? `\`\`\`${language}
+${text}
+\`\`\`` : "";
+    }
+    if (contentType === "execution_output") {
+      const text = readString2(content, "text") ?? "";
+      return text ? `Result:
 \`\`\`
-${n}
-\`\`\``:""}if(e==="tether_quote"){const n=h(t,"title")??"",i=h(t,"text")??"";return k(`> ${n||i}`)}if(e==="tether_browsing_display"){const n=h(t,"result")??h(t,"summary")??"";return k(n)}return""}function Tt(r){return Array.isArray(r)?r.map(t=>{if(typeof t=="string")return t;if(!t||typeof t!="object")return"";const e=t,n=h(e,"content_type")??h(e,"type")??"";return n.includes("image")||n.includes("file")?"":h(e,"text")??h(e,"content")??h(e,"markdown")??""}).filter(Boolean).join(`
+${text}
+\`\`\`` : "";
+    }
+    if (contentType === "tether_quote") {
+      const title = readString2(content, "title") ?? "";
+      const text = readString2(content, "text") ?? "";
+      return normalizeMarkdown(`> ${title || text}`);
+    }
+    if (contentType === "tether_browsing_display") {
+      const result = readString2(content, "result") ?? readString2(content, "summary") ?? "";
+      return normalizeMarkdown(result);
+    }
+    return "";
+  }
+  function extractMultimodalText(parts) {
+    if (!Array.isArray(parts)) return "";
+    return parts.map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const record = part;
+      const contentType = readString2(record, "content_type") ?? readString2(record, "type") ?? "";
+      if (contentType.includes("image") || contentType.includes("file")) return "";
+      return readString2(record, "text") ?? readString2(record, "content") ?? readString2(record, "markdown") ?? "";
+    }).filter(Boolean).join("\n\n");
+  }
+  function joinStringParts(parts) {
+    if (!Array.isArray(parts)) return "";
+    return parts.map((part) => typeof part === "string" ? part : "").filter(Boolean).join("\n\n");
+  }
+  function readRole(message) {
+    return message.author?.role;
+  }
+  function readString2(record, key) {
+    const value = record[key];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  function normalizeMarkdown(value) {
+    return value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function makePreview(markdown) {
+    const plain = markdown.replace(/```[\s\S]*?```/g, "[代码块]").replace(/[#*_>`~-]/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    return plain.length > 180 ? `${plain.slice(0, 179)}…` : plain;
+  }
 
-`):""}function _t(r){return Array.isArray(r)?r.map(t=>typeof t=="string"?t:"").filter(Boolean).join(`
+  // src/core/conversationRepository.ts
+  var COALESCE_MS = 250;
+  var ConversationRepository = class {
+    listeners = /* @__PURE__ */ new Set();
+    cache = /* @__PURE__ */ new Map();
+    inflight = /* @__PURE__ */ new Map();
+    pending = /* @__PURE__ */ new Map();
+    revision = 0;
+    disposed = false;
+    activeConversationId = null;
+    activeAbort = null;
+    subscribe(listener) {
+      this.listeners.add(listener);
+      const current = this.activeConversationId ? this.cache.get(this.activeConversationId) ?? null : null;
+      listener(current ?? null);
+      return () => this.listeners.delete(listener);
+    }
+    load(conversationId, options = {}) {
+      if (this.disposed) return Promise.reject(new Error("ConversationRepository disposed"));
+      if (!conversationId) return Promise.reject(new Error("No active ChatGPT conversation"));
+      if (!options.force) {
+        const cached = this.cache.get(conversationId);
+        if (cached) return Promise.resolve(cached);
+        const existing = this.inflight.get(conversationId);
+        if (existing) return existing.then((snapshot) => snapshot.revision >= 0 ? snapshot : this.read(conversationId, options.signal));
+      } else {
+        const existing = this.inflight.get(conversationId);
+        if (existing) return existing.then((snapshot) => snapshot.revision >= 0 ? snapshot : this.read(conversationId, options.signal));
+      }
+      return this.read(conversationId, options.signal);
+    }
+    refresh(conversationId, _reason) {
+      if (this.disposed) return Promise.reject(new Error("ConversationRepository disposed"));
+      const existing = this.inflight.get(conversationId);
+      if (existing) return existing.then((snapshot) => snapshot.revision >= 0 ? snapshot : this.read(conversationId));
+      const pending = this.pending.get(conversationId);
+      if (pending) clearTimeout(pending.timer);
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(() => {
+          this.pending.delete(conversationId);
+          this.read(conversationId).then(resolve, reject);
+        }, COALESCE_MS);
+        this.pending.set(conversationId, { reason: _reason, timer });
+      });
+    }
+    invalidate(conversationId) {
+      this.cache.delete(conversationId);
+      if (this.activeConversationId === conversationId) this.emit(null);
+    }
+    setActiveConversation(conversationId) {
+      if (this.activeConversationId === conversationId) return;
+      this.activeAbort?.abort();
+      this.activeAbort = null;
+      const pending = this.activeConversationId ? this.pending.get(this.activeConversationId) : void 0;
+      if (pending && this.activeConversationId) {
+        clearTimeout(pending.timer);
+        this.pending.delete(this.activeConversationId);
+      }
+      this.activeConversationId = conversationId;
+      if (!conversationId) {
+        this.emit(null);
+        return;
+      }
+      void this.load(conversationId).then((snapshot) => {
+        if (snapshot.revision < 0) return;
+      }, (error) => {
+        if (isAbortError2(error)) return;
+        if (this.activeConversationId === conversationId) this.emit(null);
+      });
+    }
+    getSnapshot(conversationId = this.activeConversationId) {
+      return conversationId ? this.cache.get(conversationId) ?? null : null;
+    }
+    dispose() {
+      this.disposed = true;
+      this.activeAbort?.abort();
+      this.activeAbort = null;
+      for (const pending of this.pending.values()) clearTimeout(pending.timer);
+      this.pending.clear();
+      this.inflight.clear();
+      this.cache.clear();
+      this.listeners.clear();
+    }
+    read(conversationId, externalSignal) {
+      const existing = this.inflight.get(conversationId);
+      if (existing) return existing;
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      if (this.activeConversationId === conversationId) {
+        this.activeAbort?.abort();
+        this.activeAbort = controller;
+      }
+      if (externalSignal) {
+        if (externalSignal.aborted) controller.abort();
+        else externalSignal.addEventListener("abort", abort, { once: true });
+      }
+      const request = new Promise((resolve, reject) => {
+        void (async () => {
+          try {
+            const conversation = await fetchCurrentConversation(conversationId, controller.signal);
+            if (controller.signal.aborted) {
+              this.dropInflight(conversationId, request);
+              resolve(cancelledSnapshot(conversationId));
+              return;
+            }
+            if (!conversation) throw new Error("ChatGPT conversation was not returned");
+            this.revision += 1;
+            const snapshot = {
+              conversationId: conversation.id ?? conversation.conversation_id ?? conversationId,
+              revision: this.revision,
+              capturedAt: Date.now(),
+              activeTurns: normalizeConversation(conversation),
+              assistantEvents: extractAssistantUsageEvents(conversation),
+              title: conversation.title
+            };
+            this.cache.set(conversationId, snapshot);
+            if (snapshot.conversationId !== conversationId) this.cache.set(snapshot.conversationId, snapshot);
+            if (this.activeConversationId === conversationId || this.activeConversationId === snapshot.conversationId) {
+              this.emit(snapshot);
+            }
+            resolve(snapshot);
+          } catch (error) {
+            if (controller.signal.aborted || isAbortError2(error)) {
+              this.dropInflight(conversationId, request);
+              resolve(cancelledSnapshot(conversationId));
+              return;
+            }
+            reject(error);
+          }
+        })().catch((error) => {
+          if (controller.signal.aborted || isAbortError2(error)) {
+            this.dropInflight(conversationId, request);
+            resolve(cancelledSnapshot(conversationId));
+            return;
+          }
+          reject(error);
+        });
+      });
+      this.inflight.set(conversationId, request);
+      void request.finally(() => {
+        if (this.inflight.get(conversationId) === request) this.inflight.delete(conversationId);
+        externalSignal?.removeEventListener("abort", abort);
+        if (this.activeAbort === controller) this.activeAbort = null;
+      });
+      return request;
+    }
+    dropInflight(conversationId, request) {
+      if (this.inflight.get(conversationId) === request) this.inflight.delete(conversationId);
+    }
+    emit(snapshot) {
+      for (const listener of this.listeners) listener(snapshot);
+    }
+  };
+  function cancelledSnapshot(conversationId) {
+    return {
+      conversationId,
+      revision: -1,
+      capturedAt: 0,
+      activeTurns: [],
+      assistantEvents: []
+    };
+  }
+  function isAbortError2(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
 
-`):""}function F(r){var t;return(t=r.author)==null?void 0:t.role}function h(r,t){const e=r[t];return typeof e=="string"&&e.trim()?e.trim():null}function k(r){return r.replace(/\u00a0/g," ").replace(/[ \t]+\n/g,`
-`).replace(/\n{3,}/g,`
+  // vendor/luna-navigation/src/config/config.ts
+  var APP_CONFIG = {
+    ui: {
+      sidebar: {
+        defaultWidthPx: 300,
+        minimumWidthPx: 240,
+        maximumWidthPx: 520,
+        /**
+         * How long the sidebar status drawer stays visible after an operation
+         * completes (loading finished, jump resolved) before retracting.
+         */
+        statusLingerMs: 500,
+        /**
+         * How long to wait, with no `CHATGPT_CONVERSATION_DATA` and no
+         * `CHATGPT_CONVERSATION_ENDED` event, before declaring the load
+         * complete anyway. Catches chats ChatGPT hydrates from its own
+         * client-side cache (no network fetch, no page-hook events) and
+         * similarly hard-to-reach cases — the sidebar would otherwise
+         * park at "Loading..." forever on those routes.
+         */
+        loadingSettleMs: 1e3
+      },
+      stacking: {
+        baseZIndex: 1e3,
+        offsets: {
+          sidebar: 0,
+          toggle: 10,
+          popover: 20,
+          modal: 100
+        }
+      }
+    },
+    platforms: {
+      chatgpt: {
+        navigationAlgorithm: "independent-virtual",
+        promptTopOffsetPx: 16,
+        settleAttempts: 3,
+        backfillMaxPages: 10,
+        // Rewrites ChatGPT's own older-page pagination requests so its
+        // renderer fills the message store in a single fetch (speeds up
+        // far-jump navigation). Set to null to disable.
+        interceptChatGptPaginationNumTurns: 100,
+        // Rewrites ChatGPT's own initial conversation load so a single
+        // request returns the whole history (collapses 2 fetches -> 1
+        // for short conversations). Set to null to disable.
+        interceptChatGptInitialLoadNumTurns: 100,
+        // Centralizes every ChatGPT external-contract value (API paths, selectors,
+        // postMessage channels, behavior constants). Each entry has parallel
+        // `formal`/`local` slots and a human-readable `label` for the
+        // compatibility-alert popup. See getActiveContractValue().
+        contract: {
+          "api.conversation.path": {
+            formal: "/backend-api/conversations/{id}",
+            local: "/backend-api/conversations/{id}",
+            // local: '/backend-api/test/{id}',
+            label: "Conversation data API path"
+          },
+          "api.conversation.messages-path": {
+            formal: "/backend-api/conversations/{id}/messages",
+            local: "/backend-api/conversations/{id}/messages",
+            label: "Conversation messages pagination endpoint"
+          },
+          "api.send-message.path": {
+            formal: "/backend-api/f/conversation",
+            local: "/backend-api/f/conversation",
+            label: "Send-message POST endpoint"
+          },
+          "api.params.num-turns": {
+            formal: "num_turns",
+            local: "num_turns",
+            label: "Pagination num_turns parameter"
+          },
+          "api.params.before": {
+            formal: "before",
+            local: "before",
+            label: "Pagination cursor parameter"
+          },
+          "api.params.include-has-versions": {
+            formal: "include_has_versions",
+            local: "include_has_versions",
+            label: "Pagination include_has_versions flag"
+          },
+          "dom.selector.user-message": {
+            formal: '[data-message-author-role="user"]',
+            local: '[data-message-author-role="user"]',
+            label: "User message DOM marker"
+          },
+          "dom.selector.message-id": {
+            formal: "[data-message-id]",
+            local: "[data-message-id]",
+            label: "Message identifier attribute"
+          },
+          "postmessage.channel.conversation-data": {
+            formal: "CHATGPT_CONVERSATION_DATA",
+            local: "CHATGPT_CONVERSATION_DATA",
+            label: "Page-to-extension conversation data channel"
+          },
+          "postmessage.channel.width-spoof": {
+            formal: "CHATGPT_NAVIGATOR_SET_WIDTH_SPOOF",
+            local: "CHATGPT_NAVIGATOR_SET_WIDTH_SPOOF",
+            label: "Sidebar width-spoof toggle channel"
+          },
+          "postmessage.hook-flag": {
+            formal: "__conversationNavigatorFetchHookInstalled",
+            local: "__conversationNavigatorFetchHookInstalled",
+            label: "Page-hook installation sentinel"
+          },
+          "response.messages-field": {
+            formal: "messages",
+            local: "messages",
+            label: "Conversation messages field"
+          },
+          "behavior.viewport-spoof-width": {
+            formal: "1400",
+            local: "1400",
+            label: "Sidebar viewport spoof width"
+          }
+        },
+        // When true, getActiveContractValue() returns the `local` slot instead of
+        // `formal`. Flipped by the developer during local debugging/testing.
+        useLocalConfig: false,
+        // When true, the content-script compatibility alert renders a topmost
+        // portal modal on chatgpt.com when the detector observes a mismatch.
+        // Exposed in the Options page; defaults OFF so end users are unaffected.
+        showCompatibilityAlert: false
+      }
+    },
+    navigation: {
+      fingerprint: {
+        countPerAssistant: 3,
+        probeLength: 40,
+        verificationLength: 256,
+        segmentViewportRatio: 0.75,
+        segmentOverlapRatio: 0.15,
+        estimatedCharsPerVisualLine: 60,
+        estimatedRowsPerViewport: 30,
+        maximumSegmentsPerAssistant: 20,
+        buildBatchSize: 10,
+        buildTimeBudgetMs: 8,
+        observationDebounceMs: 750
+      },
+      anchorCache: {
+        maxConversations: 50,
+        maxAnchorsPerConversation: 100,
+        maxAgeMs: 30 * 24 * 60 * 60 * 1e3,
+        viewportWidthTolerance: 48
+      },
+      search: {
+        maxAttempts: 32,
+        maxUnproductiveAttempts: 6,
+        renderWaitMs: 80,
+        maxDurationMs: 3e4,
+        edgeBackfillWaitMs: 1200,
+        maximumWindowSlideCycles: 16,
+        interpolationFailuresBeforeBinary: 2,
+        relativeViewportRatio: 0.75,
+        minimumRelativeViewportRatio: 0.25,
+        maximumRelativeViewportCount: 16,
+        maximumLearnedRelativeViewportCount: 64,
+        nearTargetPromptDistance: 4,
+        maximumNearTargetViewportCount: 8,
+        stalledStepGrowthRatio: 1.5,
+        crossingStepRatio: 0.5,
+        promptMountScanViewportRatio: 0.2,
+        minimumPromptMountViewportRatio: 0.05,
+        maximumPromptMountViewportCount: 2,
+        promptMountStepGrowthRatio: 1.5,
+        promptMountCrossingStepRatio: 0.5,
+        maximumPromptMountAttempts: 12
+      }
+    }
+  };
 
-`).trim()}function Pt(r){const t=r.replace(/```[\s\S]*?```/g,"[代码块]").replace(/[#*_>`~-]/g,"").replace(/[ \t]+/g," ").replace(/\n{3,}/g,`
+  // vendor/luna-navigation/src/navigation/jump/navigationAnchorStore.ts
+  var CACHE_VERSION = 2;
+  var DEFAULT_STORAGE_KEY = "chatToc:navigationAnchors";
+  function createNavigationAnchorStore(options = {}) {
+    const config = APP_CONFIG.navigation.anchorCache;
+    const storage = options.storage || createChromeNavigationAnchorStorage();
+    const now = options.now || Date.now;
+    const maxConversations = options.maxConversations ?? config.maxConversations;
+    const maxAnchorsPerConversation = options.maxAnchorsPerConversation ?? config.maxAnchorsPerConversation;
+    const maxAgeMs = options.maxAgeMs ?? config.maxAgeMs;
+    const viewportWidthTolerance = options.viewportWidthTolerance ?? config.viewportWidthTolerance;
+    const observedByConversation = /* @__PURE__ */ new Map();
+    let persistentCachePromise = null;
+    function recordObservation(input) {
+      const anchor = createNavigationAnchor(input, now());
+      const conversationAnchors = observedByConversation.get(anchor.conversationKey) || /* @__PURE__ */ new Map();
+      conversationAnchors.set(anchor.promptId, anchor);
+      observedByConversation.set(anchor.conversationKey, conversationAnchors);
+      return cloneAnchor(anchor);
+    }
+    function getObservedAnchors(conversationKey) {
+      return sortAnchors(
+        [...observedByConversation.get(conversationKey)?.values() || []].map(
+          cloneAnchor
+        )
+      );
+    }
+    async function recordConfirmed(input) {
+      const anchor = createNavigationAnchor(input, now());
+      const cache = await getPersistentCache();
+      const conversation = cache.conversations[anchor.conversationKey] || {
+        lastUsedAt: anchor.updatedAt,
+        anchors: []
+      };
+      const nextAnchors = conversation.anchors.filter(
+        ({ promptId }) => promptId !== anchor.promptId
+      );
+      nextAnchors.push(anchor);
+      conversation.lastUsedAt = anchor.updatedAt;
+      conversation.anchors = keepMostRecent(
+        nextAnchors,
+        maxAnchorsPerConversation
+      );
+      cache.conversations[anchor.conversationKey] = conversation;
+      prunePersistentCache(cache, now(), {
+        maxAgeMs,
+        maxConversations
+      });
+      await storage.write(clonePersistentCache(cache));
+      return cloneAnchor(anchor);
+    }
+    async function findConfirmed(query) {
+      const cache = await getPersistentCache();
+      const currentTime = now();
+      const conversation = cache.conversations[query.conversationKey];
+      if (!conversation) return null;
+      const anchor = conversation.anchors.find(
+        (candidate) => candidate.promptId === query.promptId && candidate.promptIndex === query.promptIndex && currentTime - candidate.updatedAt <= maxAgeMs && Math.abs(candidate.viewportWidth - query.viewportWidth) <= viewportWidthTolerance
+      );
+      return anchor ? cloneAnchor(anchor) : null;
+    }
+    async function removeConfirmed(conversationKey, promptId) {
+      const cache = await getPersistentCache();
+      const conversation = cache.conversations[conversationKey];
+      if (!conversation) return false;
+      const nextAnchors = conversation.anchors.filter(
+        (anchor) => anchor.promptId !== promptId
+      );
+      if (nextAnchors.length === conversation.anchors.length) return false;
+      if (nextAnchors.length === 0) {
+        delete cache.conversations[conversationKey];
+      } else {
+        conversation.anchors = nextAnchors;
+        conversation.lastUsedAt = now();
+      }
+      await storage.write(clonePersistentCache(cache));
+      return true;
+    }
+    async function getConfirmedAnchors(conversationKey) {
+      const cache = await getPersistentCache();
+      const currentTime = now();
+      const anchors = cache.conversations[conversationKey]?.anchors || [];
+      return sortAnchors(
+        anchors.filter((anchor) => currentTime - anchor.updatedAt <= maxAgeMs).map(cloneAnchor)
+      );
+    }
+    async function getPersistentCache() {
+      persistentCachePromise ||= storage.read().then((value) => {
+        const cache = parsePersistentCache(value);
+        prunePersistentCache(cache, now(), {
+          maxAgeMs,
+          maxConversations
+        });
+        return cache;
+      });
+      return persistentCachePromise;
+    }
+    return {
+      recordObservation,
+      getObservedAnchors,
+      recordConfirmed,
+      removeConfirmed,
+      findConfirmed,
+      getConfirmedAnchors
+    };
+  }
+  function createChromeNavigationAnchorStorage(storageKey = DEFAULT_STORAGE_KEY) {
+    return {
+      async read() {
+        const localStorage = getChromeLocalStorage();
+        if (!localStorage) return void 0;
+        try {
+          const values = await localStorage.get(storageKey);
+          return values[storageKey];
+        } catch {
+          return void 0;
+        }
+      },
+      async write(value) {
+        const localStorage = getChromeLocalStorage();
+        if (!localStorage) return;
+        try {
+          await localStorage.set({ [storageKey]: value });
+        } catch {
+        }
+      }
+    };
+  }
+  function getChromeLocalStorage() {
+    if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
+    return chrome.storage.local;
+  }
+  function createNavigationAnchor(input, updatedAt = Date.now()) {
+    const maximumScrollTop = Math.max(
+      0,
+      input.scrollHeight - input.viewportHeight
+    );
+    const scrollTop = clamp(input.scrollTop, 0, maximumScrollTop);
+    return {
+      conversationKey: input.conversationKey,
+      promptId: input.promptId,
+      promptIndex: Math.max(0, Math.trunc(input.promptIndex)),
+      scrollTop,
+      scrollHeight: Math.max(0, input.scrollHeight),
+      viewportWidth: Math.max(0, input.viewportWidth),
+      viewportHeight: Math.max(0, input.viewportHeight),
+      scrollProgress: maximumScrollTop > 0 ? scrollTop / maximumScrollTop : 0,
+      updatedAt
+    };
+  }
+  function parsePersistentCache(value) {
+    if (!isRecord(value) || value.version !== CACHE_VERSION) {
+      return createEmptyPersistentCache();
+    }
+    const conversationsValue = value.conversations;
+    if (!isRecord(conversationsValue)) return createEmptyPersistentCache();
+    const conversations = {};
+    Object.entries(conversationsValue).forEach(
+      ([conversationKey, conversationValue]) => {
+        if (!isRecord(conversationValue)) return;
+        const lastUsedAt = conversationValue.lastUsedAt;
+        const anchorsValue = conversationValue.anchors;
+        if (typeof lastUsedAt !== "number" || !Array.isArray(anchorsValue)) {
+          return;
+        }
+        const anchors = anchorsValue.filter(isNavigationAnchor).map(cloneAnchor);
+        if (anchors.length === 0) return;
+        conversations[conversationKey] = {
+          lastUsedAt,
+          anchors
+        };
+      }
+    );
+    return {
+      version: CACHE_VERSION,
+      conversations
+    };
+  }
+  function prunePersistentCache(cache, currentTime, limits) {
+    Object.entries(cache.conversations).forEach(
+      ([conversationKey, conversation]) => {
+        conversation.anchors = conversation.anchors.filter(
+          ({ updatedAt }) => currentTime - updatedAt <= limits.maxAgeMs
+        );
+        if (conversation.anchors.length === 0) {
+          delete cache.conversations[conversationKey];
+        }
+      }
+    );
+    const retainedConversations = Object.entries(cache.conversations).sort(
+      ([, first], [, second]) => second.lastUsedAt - first.lastUsedAt
+    ).slice(0, Math.max(0, limits.maxConversations));
+    cache.conversations = Object.fromEntries(retainedConversations);
+  }
+  function keepMostRecent(anchors, limit) {
+    return [...anchors].sort((first, second) => second.updatedAt - first.updatedAt).slice(0, Math.max(0, limit));
+  }
+  function sortAnchors(anchors) {
+    return anchors.sort(
+      (first, second) => first.promptIndex - second.promptIndex || first.updatedAt - second.updatedAt
+    );
+  }
+  function isNavigationAnchor(value) {
+    if (!isRecord(value)) return false;
+    return typeof value.conversationKey === "string" && typeof value.promptId === "string" && [
+      value.promptIndex,
+      value.scrollTop,
+      value.scrollHeight,
+      value.viewportWidth,
+      value.viewportHeight,
+      value.scrollProgress,
+      value.updatedAt
+    ].every((field) => typeof field === "number" && Number.isFinite(field));
+  }
+  function isRecord(value) {
+    return typeof value === "object" && value !== null;
+  }
+  function createEmptyPersistentCache() {
+    return {
+      version: CACHE_VERSION,
+      conversations: {}
+    };
+  }
+  function cloneAnchor(anchor) {
+    return { ...anchor };
+  }
+  function clonePersistentCache(cache) {
+    return {
+      version: cache.version,
+      conversations: Object.fromEntries(
+        Object.entries(cache.conversations).map(
+          ([conversationKey, conversation]) => [
+            conversationKey,
+            {
+              lastUsedAt: conversation.lastUsedAt,
+              anchors: conversation.anchors.map(cloneAnchor)
+            }
+          ]
+        )
+      )
+    };
+  }
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
 
-`).trim();return t.length>180?`${t.slice(0,179)}…`:t}const z="button[data-toc-item-index], button[data-toc-active]";function H(r=document){return[...r.querySelectorAll(z)]}function v(r){const t=r instanceof Element?r:r instanceof Node?r.parentElement:null;return(t==null?void 0:t.closest(z))??null}function St(r,t){if(t<=0)return null;const e=Lt(r.getAttribute("data-toc-item-index"));if(e!=null&&e>=0&&e<t)return e;const n=H(r.ownerDocument??document);if(n.length===t){const i=n.indexOf(r);if(i>=0)return i}return $t(r,t)}function Lt(r){if(r==null||r.trim()==="")return null;const t=Number(r);return Number.isInteger(t)?t:null}function $t(r,t){const n=[...[r.getAttribute("aria-label"),r.getAttribute("title"),r.textContent].filter(s=>!!s&&s.trim().length>0).join(" ").matchAll(/\d+/g)].map(s=>Number(s[0]));if(!n.length)return null;const i=n.length>=2&&n[n.length-1]===t?n.slice(0,-1):n,o=[...new Set(i.flatMap(s=>s>=1&&s<=t?[s-1]:[]))];return o.length===1?o[0]:null}const Mt="#10A37F",It="rgba(16, 163, 127, 0.14)",U="chatgpt-yada-toolbar-host",j="chatgpt-yada-preview-host";function E(){const r=document.documentElement,t=G(r,"data-theme")??G(document.body,"data-theme");return t!=null&&t.toLowerCase().includes("dark")?"dark":t!=null&&t.toLowerCase().includes("light")?"light":r.classList.contains("dark")?"dark":r.classList.contains("light")?"light":getComputedStyle(r).colorScheme.includes("dark")||window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}function G(r,t){return r instanceof Element?r.getAttribute(t):null}function P(r){const t=()=>r(E()),e=new MutationObserver(t);e.observe(document.documentElement,{attributes:!0,attributeFilter:["class","data-theme"]}),e.observe(document.body,{attributes:!0,attributeFilter:["class","data-theme"]});const n=window.matchMedia("(prefers-color-scheme: dark)");return n.addEventListener("change",t),t(),()=>{e.disconnect(),n.removeEventListener("change",t)}}function Rt(r){if(r===void 0||!Number.isFinite(r))return"";const t=new Date(r*1e3);if(!Number.isFinite(t.getTime()))return"";const e=n=>String(n).padStart(2,"0");return`${e(t.getMonth()+1)}月${e(t.getDate())}日 ${["周日","周一","周二","周三","周四","周五","周六"][t.getDay()]} ${e(t.getHours())}:${e(t.getMinutes())}:${e(t.getSeconds())}`}class Bt{constructor(){a(this,"host",null);a(this,"preview",null);a(this,"turn",null);a(this,"button",null);a(this,"assistant",!1);a(this,"timer",0);a(this,"themeDispose",null)}setPreviewMode(t){this.assistant=t,this.turn&&this.button&&this.render()}show(t,e){this.ensureHost();const n=this.turn===t&&this.button===e&&this.preview&&!this.preview.hidden;this.turn=t,this.button=e,n||(window.clearTimeout(this.timer),this.preview&&(this.preview.dataset.expanded="false"),this.timer=window.setTimeout(()=>{!this.preview||this.turn!==t||this.button!==e||(this.preview.dataset.expanded="true",this.render())},1e3)),this.render()}hide(){window.clearTimeout(this.timer),this.timer=0,this.turn=null,this.button=null,this.preview&&(this.preview.hidden=!0,this.preview.dataset.expanded="false")}reposition(){var i;if(!this.preview||this.preview.hidden||!((i=this.button)!=null&&i.isConnected))return;const t=this.button.getBoundingClientRect(),e=this.preview.getBoundingClientRect().width||Math.min(340,innerWidth-24);this.preview.style.left=`${Math.max(8,Math.min(innerWidth-e-8,t.left-e-12))}px`,this.preview.style.maxHeight=`${innerHeight-16}px`;const n=this.preview.getBoundingClientRect().height;this.preview.style.top=`${Math.max(8,Math.min(innerHeight-n-8,t.top+t.height/2-n/2))}px`}dispose(){var t,e;this.hide(),(t=this.themeDispose)==null||t.call(this),this.themeDispose=null,(e=this.host)==null||e.remove(),this.host=null,this.preview=null}ensureHost(){var n,i,o;if((n=this.host)!=null&&n.isConnected&&this.preview)return;(i=document.getElementById(j))==null||i.remove(),this.host=document.createElement("div"),this.host.id=j,this.host.dataset.yadaRoot="true",this.host.style.cssText="position:fixed;inset:0;width:0;height:0;overflow:visible;pointer-events:none;z-index:2147483400",this.host.setAttribute("data-yada-theme",E());const t=this.host.attachShadow({mode:"open"}),e=document.createElement("style");e.textContent=`
-      :host { pointer-events: none; font: 12px/1.5 system-ui; --text:#303030; --bg:#fff; color: var(--text); }
-      :host([data-yada-theme="dark"]) { --text:#eee; --bg:#272727; color-scheme: dark; }
-      .preview { position: fixed; box-sizing: border-box; width: min(340px, calc(100vw - 24px)); background: var(--bg); color: var(--text); border: 1px solid #8884; box-shadow: 0 5px 20px #0002; padding: 10px 12px; border-radius: 10px; pointer-events: none; overflow: hidden; }
-      .preview[hidden] { display: none; }
-      .preview strong { display: block; margin-bottom: 4px; font-size: 11px; }
-      .preview section strong { color: #10a37f; font-weight: 700; }
-      .preview-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 10px; }
-      .preview-header strong { margin: 0; white-space: nowrap; }
-      .preview time { white-space: nowrap; opacity: .7; }
-      .preview section + section { margin-top: 8px; }
-      .preview p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
-      .preview[data-expanded="true"] p { -webkit-line-clamp: 5; }
-    `,this.preview=document.createElement("div"),this.preview.className="preview",this.preview.hidden=!0,this.preview.style.pointerEvents="none",t.append(e,this.preview),document.documentElement.append(this.host),(o=this.themeDispose)==null||o.call(this),this.themeDispose=P(s=>{var d;return(d=this.host)==null?void 0:d.setAttribute("data-yada-theme",s)})}render(){if(!this.preview||!this.turn)return;const t=this.turn,e=document.createElement("strong");e.textContent=`第 ${t.index+1} 轮`;const n=document.createElement("div");n.className="preview-header",n.append(e);const i=Rt(t.userCreatedAt);if(i){const o=document.createElement("time");o.textContent=i,n.append(o)}this.preview.replaceChildren(n,this.block("Harson",t.userPreview)),this.assistant&&this.preview.append(this.block("ChatGPT",t.assistantPreview||"该轮暂无 ChatGPT 回复")),this.preview.hidden=!1,this.reposition()}block(t,e){const n=document.createElement("section");n.dataset.previewRole=t;const i=document.createElement("strong");i.textContent=t;const o=document.createElement("p");return o.textContent=e,n.append(i,o),n}}const qt=600,Ot=2e3;class Dt{constructor(){a(this,"view",new Bt);a(this,"turns",[]);a(this,"route");a(this,"epoch",0);a(this,"disposed",!1);a(this,"request",null);a(this,"fetching",!1);a(this,"pendingRefresh",!1);a(this,"debounceTimer",0);a(this,"gapTimer",0);a(this,"lastAutoRefreshAt",0);a(this,"snapshotButtonCount",0);a(this,"currentButton",null);a(this,"mutation");a(this,"onPointerOver",t=>{const e=v(t.target);e&&this.previewButton(e)});a(this,"onPointerOut",t=>{const e=v(t.target),n=v(t.relatedTarget);e&&e!==n&&(n?this.previewButton(n):this.currentButton===e&&this.clearPreview())});a(this,"onFocusIn",t=>{const e=v(t.target);e&&this.previewButton(e)});a(this,"onFocusOut",t=>{const e=v(t.target),n=v(t.relatedTarget);e&&e!==n&&(n?this.previewButton(n):this.currentButton===e&&this.clearPreview())});a(this,"onReposition",()=>{if(this.currentButton){if(!this.currentButton.isConnected){this.clearPreview();return}this.view.reposition()}});document.addEventListener("pointerover",this.onPointerOver),document.addEventListener("pointerout",this.onPointerOut),document.addEventListener("focusin",this.onFocusIn),document.addEventListener("focusout",this.onFocusOut),window.addEventListener("scroll",this.onReposition,!0),window.addEventListener("resize",this.onReposition),this.mutation=new MutationObserver(()=>{this.currentButton&&!this.currentButton.isConnected&&this.clearPreview(),this.scheduleAutoRefresh()}),this.mutation.observe(document.documentElement,{childList:!0,subtree:!0})}setPreviewMode(t){this.view.setPreviewMode(t)}syncRoute(){const t=p();t!==this.route&&(this.epoch++,this.route=t,this.resetRequestState(),this.turns=[],this.snapshotButtonCount=0,this.lastAutoRefreshAt=0,this.clearPreview(),t&&this.fetchTurns())}dispose(){this.disposed=!0,this.epoch++,this.resetRequestState(),this.clearPreview(),this.mutation.disconnect(),document.removeEventListener("pointerover",this.onPointerOver),document.removeEventListener("pointerout",this.onPointerOut),document.removeEventListener("focusin",this.onFocusIn),document.removeEventListener("focusout",this.onFocusOut),window.removeEventListener("scroll",this.onReposition,!0),window.removeEventListener("resize",this.onReposition),this.view.dispose()}previewButton(t,e=!1){this.currentButton=t;const n=St(t,this.turns.length),i=n==null?void 0:this.turns[n];if(!i){this.view.hide(),e||this.requestRefresh("hover");return}this.view.show(i,t),!e&&n===this.turns.length-1&&!i.assistantMarkdown&&this.requestRefresh("hover")}clearPreview(){this.currentButton=null,this.view.hide()}officialButtonCount(){return H().length}shouldAutoRefresh(){if(!this.route||this.disposed)return!1;const t=this.officialButtonCount();return t>this.turns.length&&t>this.snapshotButtonCount}scheduleAutoRefresh(){this.shouldAutoRefresh()&&(this.debounceTimer&&window.clearTimeout(this.debounceTimer),this.debounceTimer=window.setTimeout(()=>{this.debounceTimer=0,this.requestRefresh("auto")},qt))}requestRefresh(t){if(!(!this.route||this.disposed)&&!(t==="auto"&&!this.shouldAutoRefresh())){if(this.fetching){this.pendingRefresh=!0;return}if(t==="hover"&&this.clearTimers(),t==="auto"){const e=this.lastAutoRefreshAt?Ot-(Date.now()-this.lastAutoRefreshAt):0;if(e>0){this.gapTimer&&window.clearTimeout(this.gapTimer),this.gapTimer=window.setTimeout(()=>{this.gapTimer=0,this.requestRefresh("auto")},e);return}this.lastAutoRefreshAt=Date.now()}this.fetchTurns()}}resetRequestState(){var t;(t=this.request)==null||t.abort(),this.request=null,this.fetching=!1,this.pendingRefresh=!1,this.clearTimers()}clearTimers(){this.debounceTimer&&(window.clearTimeout(this.debounceTimer),this.debounceTimer=0),this.gapTimer&&(window.clearTimeout(this.gapTimer),this.gapTimer=0)}async fetchTurns(){var i;const t=this.route,e=this.epoch;if(!t||this.disposed||this.fetching)return;this.fetching=!0,this.pendingRefresh=!1;const n=new AbortController;this.request=n;try{const o=await N({conversationId:t,signal:n.signal});if(e!==this.epoch||this.disposed)return;this.turns=o.turns,this.snapshotButtonCount=this.officialButtonCount(),(i=this.currentButton)!=null&&i.isConnected&&this.previewButton(this.currentButton,!0)}catch{if(e!==this.epoch||this.disposed||n.signal.aborted)return;this.snapshotButtonCount=this.officialButtonCount()}finally{if(e!==this.epoch||this.disposed)return;this.fetching=!1,this.pendingRefresh&&(this.pendingRefresh=!1,this.fetchTurns())}}}const Nt=":host{font:13px/1.5 system-ui;color-scheme:light}:host([hidden]),[hidden]{display:none!important}*{box-sizing:border-box}.yada-prompt-modal{position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483647;--bg:#fff;--text:#303030;--muted:#666;--border:#8884;--hover:#8881;color:var(--text);overscroll-behavior:contain}.yada-prompt-modal[data-toolkit-theme=dark]{--bg:#272727;--text:#eee;--muted:#bbb;--hover:#fff1;color-scheme:dark}.yada-prompt-backdrop{position:absolute;top:0;right:0;bottom:0;left:0;background:#0006;touch-action:none}.yada-prompt-panel{position:absolute;right:20px;bottom:20px;width:min(620px,calc(100vw - 24px));min-height:0;height:auto;max-height:min(72vh,680px);display:flex;flex-direction:column;gap:12px;padding:16px;overflow:hidden;background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 12px 40px #0003}.yada-prompt-header,.yada-prompt-item-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.yada-prompt-header{flex-shrink:0}.yada-prompt-header strong{font-size:16px}.yada-prompt-header-actions,.yada-prompt-item-actions{display:flex;gap:4px;flex-shrink:0}button{font:inherit;color:inherit;background:transparent;border:1px solid var(--border);border-radius:8px;padding:5px 9px;cursor:pointer}button:hover{background:var(--hover)}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #10a37f;outline-offset:2px}[data-prompt-action=add],.yada-prompt-add{color:#fff;background:#10a37f;border-color:#10a37f}[data-prompt-action=add]:hover,.yada-prompt-add:hover{background:#0c8567}.yada-prompt-list{min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:10px;scrollbar-width:thin}.yada-prompt-item{border:1px solid var(--border);border-radius:10px;padding:10px 12px;flex-shrink:0;cursor:default}.yada-prompt-item-title{margin:0;font-size:13px;overflow-wrap:anywhere;min-width:0}.yada-prompt-icon{width:30px;height:30px;padding:6px;border-color:transparent;display:grid;place-items:center}.yada-prompt-icon[data-prompt-action=delete]{color:#c86464}.yada-prompt-item-content{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}.yada-prompt-empty{margin:0;padding:12px;text-align:center;color:var(--muted)}.yada-prompt-editor{display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0;flex-shrink:0}.yada-prompt-editor input,.yada-prompt-editor textarea{grid-column:1 / -1;width:100%;background:var(--bg);color:inherit;border:1px solid var(--border);border-radius:8px;padding:8px;font:inherit}.yada-prompt-editor textarea{height:clamp(50px,20vh,180px);min-height:0;resize:none;overscroll-behavior:contain}[role=alert]{margin:0;color:#c86464}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}@media(max-width:640px){.yada-prompt-panel{right:12px;bottom:12px}.yada-prompt-header{gap:6px}}";async function Y(r){try{await navigator.clipboard.writeText(r);return}catch{Ft(r)}}function Ft(r){const t=document.createElement("textarea");t.value=r,t.setAttribute("readonly","true"),t.style.position="fixed",t.style.top="-1000px",t.style.left="-1000px",document.documentElement.append(t),t.select();const e=document.execCommand("copy");if(t.remove(),!e)throw new Error("Clipboard fallback failed")}const S="chatgpt-yada:prompt-library:v1",L="chatgpt-yada:preview-assistant:v1";function V(r){if(r===void 0)return{version:1,prompts:[]};if(!r||typeof r!="object")throw new Error("提示词数据无效");const t=r;if(t.version!==1||!Array.isArray(t.prompts))throw new Error("提示词版本不支持");const e=new Set;for(const n of t.prompts){if(!n||typeof n.id!="string"||!n.id||e.has(n.id)||typeof n.title!="string"||typeof n.content!="string"||!Number.isFinite(n.createdAt)||!Number.isFinite(n.updatedAt))throw new Error("提示词数据无效");e.add(n.id)}return t}async function zt(){return V((await chrome.storage.local.get(S))[S])}async function Ht(r){await chrome.storage.local.set({[S]:V(r)})}const A=r=>`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${r}</svg>`,C={copy:A('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),edit:A('<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>'),delete:A('<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>'),check:A('<path d="m5 12 4 4L19 6"/>')},W="chatgpt-yada-prompt-host";class Ut{constructor(t){a(this,"host",document.createElement("div"));a(this,"root");a(this,"modal");a(this,"library",{version:1,prompts:[]});a(this,"copyTimers",new Map);a(this,"generation",0);a(this,"busy",!1);a(this,"disposed",!1);a(this,"editing",null);a(this,"disposeTheme");a(this,"stopPageScroll",t=>{const e=t.target instanceof Element?t.target:null,n=e==null?void 0:e.closest(".yada-prompt-list, textarea");if(!n||n.scrollHeight<=n.clientHeight){t.preventDefault();return}t instanceof WheelEvent&&(t.deltaY<0&&n.scrollTop<=0||t.deltaY>0&&n.scrollTop+n.clientHeight>=n.scrollHeight)&&t.preventDefault()});a(this,"close",()=>{this.generation++;for(const[t,e]of this.copyTimers)clearTimeout(e),t.innerHTML=C.copy;this.copyTimers.clear(),this.host.hidden=!0,this.button.setAttribute("aria-expanded","false")});a(this,"toggle",async()=>{if(!this.host.hidden){this.close();return}const t=++this.generation;this.host.isConnected||document.body.append(this.host),this.host.hidden=!1,this.button.setAttribute("aria-expanded","true"),this.query('[role="alert"]').hidden=!0,this.query("form").hidden=!0;try{const e=await zt();if(this.disposed||t!==this.generation)return;this.library=e,this.renderList(),this.query('[data-prompt-action="add"]').focus()}catch{t===this.generation&&this.error("无法读取提示词，请重新打开重试。")}});a(this,"outside",t=>{!this.host.hidden&&!t.composedPath().includes(this.host)&&!t.composedPath().includes(this.button)&&this.close()});a(this,"keydown",t=>{if(!this.host.hidden&&(t.key==="Escape"&&(t.stopPropagation(),this.close(),this.button.focus()),t.key==="Tab")){const e=[...this.modal.querySelectorAll("button, input, textarea")].filter(s=>s.getClientRects().length&&!s.disabled),n=e[0],i=e.at(-1),o=this.root.activeElement;t.shiftKey&&o===n?(t.preventDefault(),i==null||i.focus()):!t.shiftKey&&o===i&&(t.preventDefault(),n==null||n.focus())}});a(this,"handleClick",t=>{const e=t.target instanceof Element?t.target:null,n=e==null?void 0:e.closest("[data-prompt-action]");if(!n||this.host.hidden)return;const i=n.dataset.promptAction;if(i==="close"){this.close(),this.button.focus();return}if(this.busy)return;const o=this.library.prompts.find(s=>s.id===n.dataset.promptId);i==="add"&&this.edit(),i==="cancel"&&(this.query("form").hidden=!0,this.renderList()),i==="edit"&&o&&this.edit(o),i==="delete"&&o&&this.persist({version:1,prompts:this.library.prompts.filter(s=>s.id!==o.id)}),i==="copy"&&o&&this.copy(o,n)});var n;this.button=t,(n=document.getElementById(W))==null||n.remove(),this.host.id=W,this.host.dataset.yadaRoot="true",this.host.hidden=!0,this.root=this.host.attachShadow({mode:"open"});const e=document.createElement("style");e.textContent=Nt,this.modal=document.createElement("section"),this.modal.className="yada-prompt-modal is-visible",this.modal.innerHTML=`
+  // vendor/luna-navigation/src/navigation/jump/relativeSearchPlanner.ts
+  function planRelativeSearch({
+    targetPromptIndex,
+    currentSample,
+    previousSample,
+    lastScrollDelta,
+    maximumScrollTop,
+    viewportHeight
+  }) {
+    const viewport2 = Math.max(1, viewportHeight);
+    const logicalDelta = targetPromptIndex - currentSample.logicalPosition;
+    const direction = logicalDelta >= 0 ? 1 : -1;
+    const distance = Math.abs(logicalDelta);
+    const config = APP_CONFIG.navigation.search;
+    const defaultMovementLimit = config.maximumRelativeViewportCount * viewport2;
+    let movementLimit = defaultMovementLimit;
+    let planningBasis = "distance-default";
+    let estimatedPixelsPerPrompt = null;
+    let movement = clamp2(
+      distance * config.relativeViewportRatio * viewport2,
+      config.minimumRelativeViewportRatio * viewport2,
+      movementLimit
+    );
+    if (previousSample) {
+      const previousLogicalDelta = targetPromptIndex - previousSample.logicalPosition;
+      const crossedTarget = previousLogicalDelta !== 0 && Math.sign(previousLogicalDelta) !== Math.sign(logicalDelta);
+      const observedPromptDelta = Math.abs(
+        currentSample.logicalPosition - previousSample.logicalPosition
+      );
+      const observedScrollDelta = Math.abs(
+        currentSample.scrollTop - previousSample.scrollTop
+      );
+      if (crossedTarget && lastScrollDelta !== null) {
+        planningBasis = "target-crossing";
+        movement = Math.max(
+          config.minimumRelativeViewportRatio * viewport2,
+          Math.abs(lastScrollDelta) * config.crossingStepRatio
+        );
+      } else if (observedPromptDelta > 0 && observedScrollDelta > 0) {
+        planningBasis = "learned-rate";
+        estimatedPixelsPerPrompt = observedScrollDelta / observedPromptDelta;
+        movementLimit = distance <= config.nearTargetPromptDistance ? config.maximumNearTargetViewportCount * viewport2 : config.maximumLearnedRelativeViewportCount * viewport2;
+        movement = clamp2(
+          distance * estimatedPixelsPerPrompt,
+          config.minimumRelativeViewportRatio * viewport2,
+          movementLimit
+        );
+      } else if (lastScrollDelta !== null) {
+        planningBasis = "stalled-growth";
+        movement = clamp2(
+          Math.abs(lastScrollDelta) * config.stalledStepGrowthRatio,
+          config.minimumRelativeViewportRatio * viewport2,
+          movementLimit
+        );
+      }
+    }
+    return {
+      ...createRelativePlan(
+        targetPromptIndex,
+        currentSample.scrollTop + direction * movement,
+        maximumScrollTop
+      ),
+      planningBasis,
+      estimatedPixelsPerPrompt,
+      movementLimit
+    };
+  }
+  function planPromptMountScan({
+    targetPromptIndex,
+    currentScrollTop,
+    maximumScrollTop,
+    viewportHeight,
+    direction,
+    viewportRatio = APP_CONFIG.navigation.search.promptMountScanViewportRatio
+  }) {
+    const movement = Math.max(1, viewportHeight) * Math.max(0, viewportRatio);
+    return createRelativePlan(
+      targetPromptIndex,
+      currentScrollTop + direction * movement,
+      maximumScrollTop
+    );
+  }
+  function createRelativePlan(targetPromptIndex, scrollTop, maximumScrollTop) {
+    return {
+      method: "linear-probe",
+      targetPromptIndex,
+      scrollTop: clamp2(scrollTop, 0, Math.max(0, maximumScrollTop)),
+      lowerAnchor: null,
+      upperAnchor: null
+    };
+  }
+  function clamp2(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  // vendor/luna-navigation/src/navigation/jump/virtualSearchMachine.ts
+  function createVirtualSearchMachine() {
+    return {
+      phase: "initial-estimate",
+      mountAttempts: 0,
+      mountDirection: null,
+      mountStepViewportRatio: 0
+    };
+  }
+  function advanceVirtualSearchMachine(state, targetResponseLocated) {
+    if (state.phase === "mount-prompt") return state;
+    return targetResponseLocated ? {
+      phase: "mount-prompt",
+      mountAttempts: 0,
+      mountDirection: null,
+      mountStepViewportRatio: 0
+    } : { ...state, phase: "seek-response" };
+  }
+  function updatePromptMountFeedback(state, {
+    targetPromptIndex,
+    logicalPosition,
+    initialDirection,
+    initialStepViewportRatio,
+    minimumStepViewportRatio,
+    maximumStepViewportRatio,
+    growthRatio,
+    crossingRatio
+  }) {
+    if (state.phase !== "mount-prompt") return state;
+    const desiredDirection = logicalPosition === null || logicalPosition >= targetPromptIndex ? initialDirection : initialDirection === 1 ? -1 : 1;
+    const crossedBoundary = state.mountDirection !== null && state.mountDirection !== desiredDirection;
+    const nextStep = state.mountDirection === null ? initialStepViewportRatio : crossedBoundary ? state.mountStepViewportRatio * crossingRatio : state.mountStepViewportRatio * growthRatio;
+    return {
+      ...state,
+      mountAttempts: state.mountAttempts + 1,
+      mountDirection: desiredDirection,
+      mountStepViewportRatio: Math.min(
+        Math.max(nextStep, minimumStepViewportRatio),
+        maximumStepViewportRatio
+      )
+    };
+  }
+
+  // vendor/luna-navigation/src/navigation/jump/virtualSearchPlanner.ts
+  function planVirtualSearch({
+    targetPromptIndex,
+    promptCount,
+    maximumScrollTop,
+    viewportWidth,
+    observedAnchors,
+    confirmedAnchors,
+    failedInterpolationAttempts = 0
+  }) {
+    const safePromptCount = Math.max(1, Math.trunc(promptCount));
+    const safeMaximumScrollTop = Math.max(0, maximumScrollTop);
+    const safeTargetPromptIndex = clamp3(
+      Math.trunc(targetPromptIndex),
+      0,
+      safePromptCount - 1
+    );
+    const anchors = mergeCompatibleAnchors({
+      observedAnchors,
+      confirmedAnchors,
+      viewportWidth,
+      maximumScrollTop: safeMaximumScrollTop
+    });
+    const exactAnchor = anchors.find(
+      ({ promptIndex }) => promptIndex === safeTargetPromptIndex
+    );
+    if (exactAnchor) {
+      return createPlan(
+        "exact-anchor",
+        safeTargetPromptIndex,
+        exactAnchor.scrollTop,
+        exactAnchor,
+        exactAnchor,
+        safeMaximumScrollTop
+      );
+    }
+    if (anchors.length === 0) {
+      const denominator = Math.max(1, safePromptCount - 1);
+      const proportionalScrollTop = safeTargetPromptIndex / denominator * safeMaximumScrollTop;
+      return createPlan(
+        "proportional",
+        safeTargetPromptIndex,
+        proportionalScrollTop,
+        null,
+        null,
+        safeMaximumScrollTop
+      );
+    }
+    const lowerAnchor = findNearestLowerAnchor(anchors, safeTargetPromptIndex) || createBoundaryAnchor(0, 0);
+    const upperAnchor = findNearestUpperAnchor(anchors, safeTargetPromptIndex) || createBoundaryAnchor(safePromptCount - 1, safeMaximumScrollTop);
+    if (lowerAnchor.scrollTop >= upperAnchor.scrollTop) {
+      const denominator = Math.max(1, safePromptCount - 1);
+      const proportionalScrollTop = safeTargetPromptIndex / denominator * safeMaximumScrollTop;
+      return createPlan(
+        "proportional",
+        safeTargetPromptIndex,
+        proportionalScrollTop,
+        null,
+        null,
+        safeMaximumScrollTop
+      );
+    }
+    const shouldUseBinary = failedInterpolationAttempts >= APP_CONFIG.navigation.search.interpolationFailuresBeforeBinary;
+    const scrollTop = shouldUseBinary ? (lowerAnchor.scrollTop + upperAnchor.scrollTop) / 2 : interpolateScrollTop(
+      safeTargetPromptIndex,
+      lowerAnchor,
+      upperAnchor
+    );
+    return createPlan(
+      shouldUseBinary ? "binary" : "interpolation",
+      safeTargetPromptIndex,
+      scrollTop,
+      lowerAnchor,
+      upperAnchor,
+      safeMaximumScrollTop
+    );
+  }
+  function mergeCompatibleAnchors({
+    observedAnchors,
+    confirmedAnchors,
+    viewportWidth,
+    maximumScrollTop
+  }) {
+    const tolerance = APP_CONFIG.navigation.anchorCache.viewportWidthTolerance;
+    const anchorsByPromptIndex = /* @__PURE__ */ new Map();
+    confirmedAnchors.filter(
+      (anchor) => Math.abs(anchor.viewportWidth - viewportWidth) <= tolerance
+    ).forEach((anchor) => {
+      anchorsByPromptIndex.set(anchor.promptIndex, {
+        promptIndex: anchor.promptIndex,
+        scrollTop: anchor.scrollProgress * maximumScrollTop,
+        source: "confirmed"
+      });
+    });
+    observedAnchors.forEach((anchor) => {
+      anchorsByPromptIndex.set(anchor.promptIndex, {
+        promptIndex: anchor.promptIndex,
+        scrollTop: anchor.scrollTop,
+        source: "observed"
+      });
+    });
+    return [...anchorsByPromptIndex.values()].sort(
+      (first, second) => first.promptIndex - second.promptIndex
+    );
+  }
+  function findNearestLowerAnchor(anchors, targetPromptIndex) {
+    for (let index = anchors.length - 1; index >= 0; index -= 1) {
+      const anchor = anchors[index];
+      if (anchor.promptIndex < targetPromptIndex) return anchor;
+    }
+    return null;
+  }
+  function findNearestUpperAnchor(anchors, targetPromptIndex) {
+    return anchors.find(({ promptIndex }) => promptIndex > targetPromptIndex) || null;
+  }
+  function interpolateScrollTop(targetPromptIndex, lowerAnchor, upperAnchor) {
+    const indexDistance = upperAnchor.promptIndex - lowerAnchor.promptIndex;
+    if (indexDistance <= 0) {
+      return (lowerAnchor.scrollTop + upperAnchor.scrollTop) / 2;
+    }
+    const targetRatio = (targetPromptIndex - lowerAnchor.promptIndex) / indexDistance;
+    return lowerAnchor.scrollTop + targetRatio * (upperAnchor.scrollTop - lowerAnchor.scrollTop);
+  }
+  function createBoundaryAnchor(promptIndex, scrollTop) {
+    return {
+      promptIndex,
+      scrollTop,
+      source: "boundary"
+    };
+  }
+  function createPlan(method, targetPromptIndex, scrollTop, lowerAnchor, upperAnchor, maximumScrollTop) {
+    return {
+      method,
+      targetPromptIndex,
+      scrollTop: clamp3(scrollTop, 0, maximumScrollTop),
+      lowerAnchor,
+      upperAnchor
+    };
+  }
+  function clamp3(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  // vendor/luna-navigation/src/navigation/jump/virtualSearchController.ts
+  var SCROLL_POSITION_TOLERANCE_PX = 1;
+  async function searchVirtualPrompt({
+    targetPromptId,
+    targetPromptIndex,
+    promptCount,
+    getConfirmedAnchors,
+    invalidateConfirmedAnchor,
+    getObservedAnchors,
+    recordObservation,
+    getScrollMetrics,
+    observePosition,
+    isTargetRendered,
+    scrollTo,
+    waitForRender = waitForVirtualRender,
+    now = () => performance.now(),
+    signal,
+    maxAttempts = APP_CONFIG.navigation.search.maxAttempts,
+    maxUnproductiveAttempts = APP_CONFIG.navigation.search.maxUnproductiveAttempts,
+    maxDurationMs = APP_CONFIG.navigation.search.maxDurationMs,
+    targetDomRecoveryDirection = null,
+    onDiagnosticEvent,
+    onProgress
+  }) {
+    const startedAt = now();
+    const confirmedAnchors = await getConfirmedAnchors();
+    let machine = createVirtualSearchMachine();
+    let attempts = 0;
+    let unproductiveAttempts = 0;
+    let previousDistance = null;
+    let previousSample = null;
+    let lastScrollDelta = null;
+    let lastDirection = null;
+    let lastPlan = null;
+    let lastPosition = { status: "none" };
+    let networkBackfillDone = false;
+    const finish = (status) => {
+      onDiagnosticEvent?.({
+        eventName: "SEARCH_FINISHED",
+        details: {
+          status,
+          phase: machine.phase,
+          attempts,
+          unproductiveAttempts,
+          lastPlanMethod: lastPlan?.method || null,
+          lastPositionStatus: lastPosition.status
+        }
+      });
+      return { status, attempts, lastPlan, lastPosition };
+    };
+    onDiagnosticEvent?.({
+      eventName: "SEARCH_STARTED",
+      details: {
+        targetPromptId,
+        targetPromptIndex,
+        promptCount,
+        confirmedAnchorCount: confirmedAnchors.length,
+        maxAttempts,
+        maxUnproductiveAttempts,
+        maxDurationMs
+      }
+    });
+    while (attempts < Math.max(0, maxAttempts)) {
+      onProgress?.({ remaining: Math.max(0, maxAttempts - attempts) });
+      const terminalStatus = getTerminalStatus({
+        signal,
+        startedAt,
+        currentTime: now(),
+        maxDurationMs,
+        isTargetRendered
+      });
+      if (terminalStatus) return finish(terminalStatus);
+      const observation = await observePosition();
+      lastPosition = observation.position;
+      observation.anchors.forEach(recordObservation);
+      if (isTargetRendered()) return finish("found");
+      const metrics = getScrollMetrics();
+      const logicalPosition = getClosestLogicalPosition(
+        targetPromptIndex,
+        observation.position
+      );
+      const currentDistance = logicalPosition === null ? null : Math.abs(targetPromptIndex - logicalPosition);
+      const targetResponseLocated = logicalPosition !== null && getMatchedLogicalPositions(observation.position).some(
+        (position) => Math.trunc(position) === targetPromptIndex
+      );
+      onDiagnosticEvent?.({
+        eventName: "POSITION_OBSERVED",
+        details: {
+          ...getPositionDiagnosticDetails(
+            observation.position,
+            observation.anchors.length
+          ),
+          logicalPosition,
+          currentDistance,
+          phase: machine.phase
+        }
+      });
+      if (attempts === 1 && lastPlan?.method === "exact-anchor" && lastPlan.lowerAnchor?.source === "confirmed" && logicalPosition !== null && Math.trunc(logicalPosition) !== targetPromptIndex) {
+        await invalidateConfirmedAnchor?.(
+          targetPromptId,
+          targetPromptIndex
+        );
+        onDiagnosticEvent?.({
+          eventName: "EXACT_ANCHOR_INVALIDATED",
+          details: {
+            targetPromptId,
+            targetPromptIndex,
+            observedLogicalPosition: logicalPosition
+          }
+        });
+      }
+      machine = advanceVirtualSearchMachine(
+        machine,
+        targetResponseLocated
+      );
+      const madeProgress = currentDistance !== null && (previousDistance === null || currentDistance < previousDistance);
+      if (attempts > 0 && machine.phase !== "mount-prompt") {
+        unproductiveAttempts = madeProgress ? 0 : unproductiveAttempts + 1;
+        if (unproductiveAttempts >= Math.max(1, maxUnproductiveAttempts)) {
+          return finish(
+            logicalPosition === null ? "unresolved" : "exhausted"
+          );
+        }
+      }
+      let plan;
+      let phase = machine.phase;
+      let relativePlanningDetails = {};
+      const currentSample = logicalPosition === null ? null : {
+        logicalPosition,
+        scrollTop: metrics.scrollTop
+      };
+      if (machine.phase === "mount-prompt") {
+        if (machine.mountAttempts >= APP_CONFIG.navigation.search.maximumPromptMountAttempts) {
+          onDiagnosticEvent?.({
+            eventName: "PROMPT_MOUNT_EXHAUSTED",
+            details: {
+              targetPromptId,
+              targetPromptIndex,
+              mountAttempts: machine.mountAttempts,
+              mountDirection: machine.mountDirection,
+              mountStepViewportRatio: machine.mountStepViewportRatio,
+              lastPosition: getPositionDiagnosticDetails(
+                lastPosition,
+                observation.anchors.length
+              )
+            }
+          });
+          return finish("exhausted");
+        }
+        const searchConfig = APP_CONFIG.navigation.search;
+        machine = updatePromptMountFeedback(machine, {
+          targetPromptIndex,
+          logicalPosition,
+          initialDirection: targetDomRecoveryDirection ?? -1,
+          initialStepViewportRatio: searchConfig.promptMountScanViewportRatio,
+          minimumStepViewportRatio: searchConfig.minimumPromptMountViewportRatio,
+          maximumStepViewportRatio: searchConfig.maximumPromptMountViewportCount,
+          growthRatio: searchConfig.promptMountStepGrowthRatio,
+          crossingRatio: searchConfig.promptMountCrossingStepRatio
+        });
+        phase = "mount-prompt";
+        plan = planPromptMountScan({
+          targetPromptIndex,
+          currentScrollTop: metrics.scrollTop,
+          maximumScrollTop: metrics.maximumScrollTop,
+          viewportHeight: metrics.viewportHeight,
+          direction: machine.mountDirection,
+          viewportRatio: machine.mountStepViewportRatio
+        });
+      } else if (attempts === 0) {
+        plan = planVirtualSearch({
+          targetPromptIndex,
+          promptCount,
+          maximumScrollTop: metrics.maximumScrollTop,
+          viewportWidth: metrics.viewportWidth,
+          observedAnchors: getObservedAnchors(),
+          confirmedAnchors
+        });
+        phase = "initial-estimate";
+        if (logicalPosition === null && isSameScrollTop(plan.scrollTop, metrics.scrollTop)) {
+          plan = createRelativePlan2(
+            targetPromptIndex,
+            metrics.scrollTop,
+            metrics.maximumScrollTop,
+            metrics.viewportHeight,
+            getInteriorRecoveryDirection(
+              targetPromptIndex,
+              promptCount
+            )
+          );
+          phase = "initial-mount-recovery";
+        }
+      } else if (currentSample) {
+        const relativePlan = planRelativeSearch({
+          targetPromptIndex,
+          currentSample,
+          previousSample,
+          lastScrollDelta,
+          maximumScrollTop: metrics.maximumScrollTop,
+          viewportHeight: metrics.viewportHeight
+        });
+        plan = relativePlan;
+        relativePlanningDetails = {
+          planningBasis: relativePlan.planningBasis,
+          estimatedPixelsPerPrompt: relativePlan.estimatedPixelsPerPrompt,
+          movementLimit: relativePlan.movementLimit
+        };
+        phase = "seek-response";
+        lastDirection = targetPromptIndex >= currentSample.logicalPosition ? 1 : -1;
+      } else {
+        const recoveryDirection = getUnresolvedRecoveryDirection({
+          scrollTop: metrics.scrollTop,
+          maximumScrollTop: metrics.maximumScrollTop,
+          lastDirection,
+          targetPromptIndex,
+          promptCount
+        });
+        plan = createRelativePlan2(
+          targetPromptIndex,
+          metrics.scrollTop,
+          metrics.maximumScrollTop,
+          metrics.viewportHeight,
+          recoveryDirection
+        );
+        lastDirection = recoveryDirection;
+        phase = "unresolved-recovery";
+      }
+      if (isSameScrollTop(plan.scrollTop, metrics.scrollTop)) {
+        const atScrollEdge = plan.scrollTop <= SCROLL_POSITION_TOLERANCE_PX || plan.scrollTop >= metrics.maximumScrollTop - SCROLL_POSITION_TOLERANCE_PX;
+        if (atScrollEdge && !isTargetRendered()) {
+          const slideDirection = plan.scrollTop <= SCROLL_POSITION_TOLERANCE_PX ? -1 : 1;
+          onDiagnosticEvent?.({
+            eventName: "EDGE_BACKFILL_WAIT",
+            details: {
+              phase,
+              scrollTop: metrics.scrollTop,
+              maximumScrollTop: metrics.maximumScrollTop,
+              targetPromptIndex
+            }
+          });
+          if (!networkBackfillDone) {
+            networkBackfillDone = true;
+            const backfillLanded = await waitForTargetBackfill({
+              signal,
+              isTargetRendered,
+              getScrollMetrics
+            });
+            onDiagnosticEvent?.({
+              eventName: "BACKFILL_RESULT",
+              details: {
+                backfillLanded,
+                maximumScrollTop: getScrollMetrics().maximumScrollTop,
+                targetPromptIndex
+              }
+            });
+          }
+          const slideCycles = APP_CONFIG.navigation.search.maximumWindowSlideCycles;
+          for (let cycle = 0; cycle < slideCycles; cycle++) {
+            if (signal?.aborted || isTargetRendered()) break;
+            const slideMetrics = getScrollMetrics();
+            const edge = slideDirection === -1 ? 0 : slideMetrics.maximumScrollTop;
+            const inward = slideDirection === -1 ? Math.min(
+              slideMetrics.maximumScrollTop,
+              slideMetrics.scrollTop + slideMetrics.viewportHeight
+            ) : Math.max(
+              0,
+              slideMetrics.scrollTop - slideMetrics.viewportHeight
+            );
+            scrollTo(inward);
+            await waitForRender();
+            scrollTo(edge);
+            await waitForRender();
+            onDiagnosticEvent?.({
+              eventName: "WINDOW_SLIDE_STEP",
+              details: {
+                cycle: cycle + 1,
+                direction: slideDirection,
+                inward: Math.round(inward),
+                edge: Math.round(edge),
+                targetPromptIndex
+              }
+            });
+          }
+          attempts += 1;
+          continue;
+        }
+        lastPlan = plan;
+        return finish("exhausted");
+      }
+      onDiagnosticEvent?.({
+        eventName: "SEARCH_PLAN",
+        details: {
+          phase,
+          method: plan.method,
+          scrollTop: plan.scrollTop,
+          logicalPosition,
+          currentDistance,
+          madeProgress,
+          unproductiveAttempts,
+          mountAttempt: machine.phase === "mount-prompt" ? machine.mountAttempts : null,
+          mountDirection: machine.phase === "mount-prompt" ? machine.mountDirection : null,
+          mountStepViewportRatio: machine.phase === "mount-prompt" ? machine.mountStepViewportRatio : null,
+          ...relativePlanningDetails,
+          relativeDelta: plan.scrollTop - metrics.scrollTop
+        }
+      });
+      lastPlan = plan;
+      lastScrollDelta = plan.scrollTop - metrics.scrollTop;
+      previousSample = currentSample;
+      previousDistance = currentDistance;
+      scrollTo(plan.scrollTop);
+      onDiagnosticEvent?.({
+        eventName: "SCROLL_APPLIED",
+        details: {
+          phase,
+          plannedScrollTop: plan.scrollTop,
+          scrollTopBefore: metrics.scrollTop,
+          scrollTopAfter: getScrollMetrics().scrollTop,
+          maximumScrollTop: metrics.maximumScrollTop
+        }
+      });
+      attempts += 1;
+      await waitForRender();
+      if (isTargetRendered()) return finish("found");
+    }
+    return finish("exhausted");
+  }
+  function waitForVirtualRender() {
+    return new Promise((resolve) => {
+      setTimeout(resolve, APP_CONFIG.navigation.search.renderWaitMs);
+    });
+  }
+  async function waitForTargetBackfill({
+    signal,
+    isTargetRendered,
+    getScrollMetrics
+  }) {
+    const deadline = performance.now() + APP_CONFIG.navigation.search.edgeBackfillWaitMs;
+    let previousMaximumScrollTop = getScrollMetrics().maximumScrollTop;
+    let sawChange = false;
+    let stableRounds = 0;
+    while (performance.now() < deadline) {
+      if (signal?.aborted || isTargetRendered()) return sawChange;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+      const currentMaximumScrollTop = getScrollMetrics().maximumScrollTop;
+      if (Math.abs(currentMaximumScrollTop - previousMaximumScrollTop) > SCROLL_POSITION_TOLERANCE_PX) {
+        previousMaximumScrollTop = currentMaximumScrollTop;
+        sawChange = true;
+        stableRounds = 0;
+      } else {
+        stableRounds += 1;
+        if (sawChange && stableRounds >= 2) return true;
+      }
+    }
+    return sawChange;
+  }
+  function getClosestLogicalPosition(targetPromptIndex, position) {
+    const positions = getMatchedLogicalPositions(position);
+    if (positions.length === 0) return null;
+    return positions.reduce(
+      (closest, candidate) => Math.abs(targetPromptIndex - candidate) < Math.abs(targetPromptIndex - closest) ? candidate : closest
+    );
+  }
+  function getMatchedLogicalPositions(position) {
+    if (position.status !== "located") return [];
+    return position.matchedBlocks.length > 0 ? position.matchedBlocks.map(
+      ({ promptIndex, source, positionRatio = 0 }) => promptIndex + (source === "segment" ? positionRatio : 0)
+    ) : position.matchedPromptIndexes;
+  }
+  function getInteriorRecoveryDirection(targetPromptIndex, promptCount) {
+    return targetPromptIndex >= Math.max(0, promptCount - 1) / 2 ? -1 : 1;
+  }
+  function getUnresolvedRecoveryDirection({
+    scrollTop,
+    maximumScrollTop,
+    lastDirection,
+    targetPromptIndex,
+    promptCount
+  }) {
+    if (scrollTop <= SCROLL_POSITION_TOLERANCE_PX) return 1;
+    if (maximumScrollTop - scrollTop <= SCROLL_POSITION_TOLERANCE_PX) {
+      return -1;
+    }
+    return lastDirection ?? getInteriorRecoveryDirection(targetPromptIndex, promptCount);
+  }
+  function createRelativePlan2(targetPromptIndex, currentScrollTop, maximumScrollTop, viewportHeight, direction) {
+    return {
+      method: "linear-probe",
+      targetPromptIndex,
+      scrollTop: clamp4(
+        currentScrollTop + direction * Math.max(1, viewportHeight),
+        0,
+        maximumScrollTop
+      ),
+      lowerAnchor: null,
+      upperAnchor: null
+    };
+  }
+  function getPositionDiagnosticDetails(position, anchorCount) {
+    if (position.status !== "located") {
+      return { status: position.status, anchorCount };
+    }
+    return {
+      status: position.status,
+      firstPromptIndex: position.firstPromptIndex,
+      lastPromptIndex: position.lastPromptIndex,
+      matchedBlocks: position.matchedBlocks,
+      matchSource: position.matchedBlocks[0]?.source || null,
+      anchorCount
+    };
+  }
+  function getTerminalStatus({
+    signal,
+    startedAt,
+    currentTime,
+    maxDurationMs,
+    isTargetRendered
+  }) {
+    if (signal?.aborted) return "cancelled";
+    if (isTargetRendered()) return "found";
+    if (currentTime - startedAt >= Math.max(0, maxDurationMs)) {
+      return "timed-out";
+    }
+    return null;
+  }
+  function isSameScrollTop(first, second) {
+    return Math.abs(first - second) <= SCROLL_POSITION_TOLERANCE_PX;
+  }
+  function clamp4(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+
+  // vendor/luna-navigation/src/navigation/fingerprint/comparableText.ts
+  function stripMarkdownPayloads(text) {
+    return text.replace(/!\[[^\]]*]\([^)]*\)/g, " ").replace(/!\[[^\]]*]\[[^\]]*]/g, " ").replace(/\[([^\]]+)]\([^)]*\)/g, "$1").replace(/\[([^\]]+)]\[[^\]]*]/g, "$1").replace(/^[ \t]*\[[^\]]+]:\s+\S+.*$/gm, " ").replace(/^[ \t]*(?:```|~~~)[^\r\n]*$/gm, " ").replace(/(?:https?|ftp):\/\/[^\s<>)\]]+/giu, " ").replace(/<[^>]*>/g, " ");
+  }
+  function normalizeWhitespace(text) {
+    return text.replace(/\s+/g, " ").trim();
+  }
+  function normalizeComparableText(text) {
+    const textWithoutPayloads = stripMarkdownPayloads(text.normalize("NFKC"));
+    const lettersAndNumbers = textWithoutPayloads.replace(
+      /[^\p{L}\p{N}]+/gu,
+      " "
+    );
+    return normalizeWhitespace(lettersAndNumbers);
+  }
+
+  // vendor/luna-navigation/src/navigation/fingerprint/generator.ts
+  function calculateFingerprintOffsets(textLength, options) {
+    if (textLength <= 0 || options.countPerAssistant <= 0) return [];
+    const sampleWindowLength = options.probeLength + options.verificationLength;
+    const sampleCount = Math.min(
+      options.countPerAssistant,
+      Math.max(1, Math.ceil(textLength / sampleWindowLength))
+    );
+    const maximumOffset = Math.max(0, textLength - sampleWindowLength);
+    if (sampleCount === 1) return [0];
+    return Array.from(
+      { length: sampleCount },
+      (_, index) => Math.round(maximumOffset * index / (sampleCount - 1))
+    );
+  }
+  async function createSha256(text) {
+    const bytes = new TextEncoder().encode(text);
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return Array.from(
+      new Uint8Array(digest),
+      (byte) => byte.toString(16).padStart(2, "0")
+    ).join("");
+  }
+  async function createResponseFingerprints(response, options = APP_CONFIG.navigation.fingerprint) {
+    const text = normalizeComparableText(response.text);
+    const offsets = calculateFingerprintOffsets(text.length, options);
+    return Promise.all(
+      offsets.map(async (textOffset, sampleIndex) => {
+        const probeText = text.slice(
+          textOffset,
+          textOffset + options.probeLength
+        );
+        const verificationText = text.slice(
+          textOffset + probeText.length,
+          textOffset + probeText.length + options.verificationLength
+        );
+        const hashSource = verificationText || probeText;
+        return {
+          responseId: response.id,
+          sampleIndex,
+          textOffset,
+          probeText,
+          verificationHash: await createSha256(hashSource),
+          verificationLength: verificationText.length
+        };
+      })
+    );
+  }
+
+  // vendor/luna-navigation/src/navigation/fingerprint/index.ts
+  function flattenResponseTasks(turns) {
+    return turns.flatMap(
+      (turn) => turn.responses.map((response) => ({
+        promptIndex: turn.promptIndex,
+        response
+      }))
+    );
+  }
+  function yieldToMainThread() {
+    return new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+  }
+  async function buildFingerprintIndex(turns, quality = "derived", options = APP_CONFIG.navigation.fingerprint, yieldControl = yieldToMainThread) {
+    const index = [];
+    const tasks = flattenResponseTasks(turns);
+    const batchSize = Math.max(1, options.buildBatchSize);
+    const timeBudgetMs = Math.max(0, options.buildTimeBudgetMs);
+    let batchStartedAt = performance.now();
+    let batchTaskCount = 0;
+    for (const [taskIndex, task] of tasks.entries()) {
+      const fingerprints = await createResponseFingerprints(
+        task.response,
+        options
+      );
+      if (fingerprints.length > 0) {
+        index.push({
+          responseId: task.response.id,
+          promptIndex: task.promptIndex,
+          quality,
+          fingerprints
+        });
+      }
+      batchTaskCount += 1;
+      const hasMoreTasks = taskIndex < tasks.length - 1;
+      const reachedBatchSize = batchTaskCount >= batchSize;
+      const reachedTimeBudget = performance.now() - batchStartedAt >= timeBudgetMs;
+      if (hasMoreTasks && (reachedBatchSize || reachedTimeBudget)) {
+        await yieldControl();
+        batchStartedAt = performance.now();
+        batchTaskCount = 0;
+      }
+    }
+    return index;
+  }
+
+  // vendor/luna-navigation/src/navigation/fingerprint/segments.ts
+  function calculateDerivedSegmentRanges(text, options = APP_CONFIG.navigation.fingerprint) {
+    if (!normalizeComparableText(text)) return [];
+    const units = createEstimatedVisualUnits(
+      text,
+      options.estimatedCharsPerVisualLine
+    );
+    if (units.length === 0) return [];
+    const rowsPerSegment = Math.max(
+      1,
+      options.estimatedRowsPerViewport * options.segmentViewportRatio
+    );
+    const segmentCount = Math.min(
+      Math.max(1, Math.trunc(options.maximumSegmentsPerAssistant)),
+      Math.max(1, Math.ceil(units.length / rowsPerSegment))
+    );
+    const unitsPerSegment = Math.ceil(units.length / segmentCount);
+    const overlapUnits = Math.max(
+      0,
+      Math.round(unitsPerSegment * options.segmentOverlapRatio)
+    );
+    return Array.from({ length: segmentCount }, (_, segmentIndex) => {
+      const coreStartIndex = Math.min(
+        units.length - 1,
+        segmentIndex * unitsPerSegment
+      );
+      const coreEndIndex = Math.min(
+        units.length,
+        (segmentIndex + 1) * unitsPerSegment
+      );
+      const startIndex = Math.max(0, coreStartIndex - overlapUnits);
+      const endIndex = Math.min(
+        units.length,
+        coreEndIndex + overlapUnits
+      );
+      return {
+        startOffset: units[startIndex].startOffset,
+        endOffset: units[endIndex - 1].endOffset,
+        positionRatio: units.length === 1 ? 0 : coreStartIndex / (units.length - 1)
+      };
+    });
+  }
+  async function createDerivedResponseSegments(response, promptIndex, options = APP_CONFIG.navigation.fingerprint) {
+    const ranges = calculateDerivedSegmentRanges(response.text, options);
+    const candidates = ranges.map((range) => ({
+      range,
+      comparableText: normalizeComparableText(
+        response.text.slice(range.startOffset, range.endOffset)
+      )
+    })).filter(({ comparableText }) => comparableText.length > 0);
+    return Promise.all(
+      candidates.map(async ({ range, comparableText }, segmentIndex) => {
+        const probeText = comparableText.slice(0, options.probeLength);
+        const verificationText = comparableText.slice(
+          probeText.length,
+          probeText.length + options.verificationLength
+        );
+        return {
+          responseId: response.id,
+          promptIndex,
+          segmentIndex,
+          segmentCount: candidates.length,
+          positionRatio: range.positionRatio,
+          probeText,
+          verificationHash: await createSha256(
+            verificationText || probeText
+          ),
+          verificationLength: verificationText.length,
+          quality: "derived"
+        };
+      })
+    );
+  }
+  async function buildDerivedSegmentIndex(turns, options = APP_CONFIG.navigation.fingerprint, yieldControl = yieldSegmentBuild) {
+    const tasks = turns.flatMap(
+      (turn) => turn.responses.map((response) => ({
+        promptIndex: turn.promptIndex,
+        response
+      }))
+    );
+    const index = [];
+    const batchSize = Math.max(1, options.buildBatchSize);
+    const timeBudgetMs = Math.max(0, options.buildTimeBudgetMs);
+    let batchStartedAt = performance.now();
+    let batchTaskCount = 0;
+    for (const [taskIndex, task] of tasks.entries()) {
+      index.push(
+        ...await createDerivedResponseSegments(
+          task.response,
+          task.promptIndex,
+          options
+        )
+      );
+      batchTaskCount += 1;
+      const hasMoreTasks = taskIndex < tasks.length - 1;
+      const reachedBatchSize = batchTaskCount >= batchSize;
+      const reachedTimeBudget = performance.now() - batchStartedAt >= timeBudgetMs;
+      if (hasMoreTasks && (reachedBatchSize || reachedTimeBudget)) {
+        await yieldControl();
+        batchStartedAt = performance.now();
+        batchTaskCount = 0;
+      }
+    }
+    return index;
+  }
+  function extractRenderedTextWithinVerticalBounds(contentElements, top, bottom) {
+    if (bottom <= top) return "";
+    const textNodes = collectTextNodes(
+      contentElements.filter((element) => element.isConnected)
+    );
+    if (textNodes.length === 0) return "";
+    const start = findObservedTextPosition(textNodes, top);
+    const end = findObservedTextPosition(textNodes, bottom);
+    if (!start || !end) return "";
+    return getTextBetweenObservedPositions(textNodes, start, end);
+  }
+  function createEstimatedVisualUnits(text, estimatedCharsPerVisualLine) {
+    const safeLineLength = Math.max(
+      1,
+      Math.trunc(estimatedCharsPerVisualLine)
+    );
+    const units = [];
+    let lineStartOffset = 0;
+    for (const line of text.split(/\r\n|\r|\n/)) {
+      if (line.length === 0) {
+        units.push({
+          startOffset: lineStartOffset,
+          endOffset: lineStartOffset
+        });
+      } else {
+        for (let lineOffset = 0; lineOffset < line.length; lineOffset += safeLineLength) {
+          units.push({
+            startOffset: lineStartOffset + lineOffset,
+            endOffset: lineStartOffset + Math.min(line.length, lineOffset + safeLineLength)
+          });
+        }
+      }
+      lineStartOffset += line.length + 1;
+    }
+    return units;
+  }
+  function collectTextNodes(elements) {
+    return elements.flatMap((element) => {
+      const walker = document.createTreeWalker(
+        element,
+        NodeFilter.SHOW_TEXT
+      );
+      const nodes = [];
+      let currentNode = walker.nextNode();
+      while (currentNode) {
+        if (currentNode.textContent?.trim()) {
+          nodes.push(currentNode);
+        }
+        currentNode = walker.nextNode();
+      }
+      return nodes;
+    });
+  }
+  function findObservedTextPosition(textNodes, targetY) {
+    for (const [nodeIndex, textNode] of textNodes.entries()) {
+      const textLength = textNode.data.length;
+      if (textLength === 0) continue;
+      const nodeRect = measureTextRange(textNode, 0, textLength);
+      if (nodeRect.bottom < targetY) continue;
+      let lowerOffset = 0;
+      let upperOffset = textLength - 1;
+      while (lowerOffset < upperOffset) {
+        const middleOffset = Math.floor((lowerOffset + upperOffset) / 2);
+        const characterRect = measureTextRange(
+          textNode,
+          middleOffset,
+          middleOffset + 1
+        );
+        if (characterRect.bottom < targetY) {
+          lowerOffset = middleOffset + 1;
+        } else {
+          upperOffset = middleOffset;
+        }
+      }
+      return {
+        nodeIndex,
+        characterOffset: lowerOffset
+      };
+    }
+    const lastNode = textNodes.at(-1);
+    if (!lastNode) return null;
+    return {
+      nodeIndex: textNodes.length - 1,
+      characterOffset: Math.max(0, lastNode.data.length - 1)
+    };
+  }
+  function getTextBetweenObservedPositions(textNodes, start, end) {
+    return textNodes.slice(start.nodeIndex, end.nodeIndex + 1).map((node, relativeIndex, selectedNodes) => {
+      const isFirst = relativeIndex === 0;
+      const isLast = relativeIndex === selectedNodes.length - 1;
+      const startOffset = isFirst ? start.characterOffset : 0;
+      const endOffset = isLast ? end.characterOffset + 1 : node.data.length;
+      return node.data.slice(startOffset, endOffset);
+    }).join(" ");
+  }
+  function measureTextRange(textNode, startOffset, endOffset) {
+    const range = document.createRange();
+    range.setStart(textNode, startOffset);
+    range.setEnd(textNode, endOffset);
+    return range.getBoundingClientRect();
+  }
+  function yieldSegmentBuild() {
+    return new Promise((resolve) => setTimeout(resolve, 0));
+  }
+
+  // vendor/luna-navigation/src/navigation/fingerprint/matcher.ts
+  async function verifyFingerprintMatch(renderedText, fingerprint) {
+    const normalizedText = normalizeComparableText(renderedText);
+    const probeText = fingerprint.probeText;
+    const offsets = findProbeOffsetsInNormalizedText(
+      normalizedText,
+      probeText
+    );
+    for (const offset of offsets) {
+      const verificationStart = offset + probeText.length;
+      const verificationText = normalizedText.slice(
+        verificationStart,
+        verificationStart + fingerprint.verificationLength
+      );
+      if (fingerprint.verificationLength > 0 && verificationText.length !== fingerprint.verificationLength) {
+        continue;
+      }
+      const hashSource = verificationText || probeText;
+      if (await createSha256(hashSource) === fingerprint.verificationHash) {
+        return true;
+      }
+    }
+    return false;
+  }
+  async function matchFingerprintIndex(blocks, fingerprintIndex) {
+    const normalizedBlocks = blocks.map((block2) => ({
+      id: block2.id,
+      text: normalizeComparableText(block2.text)
+    }));
+    const matchesByPrompt = /* @__PURE__ */ new Map();
+    for (const record of fingerprintIndex) {
+      const promptMatch = matchesByPrompt.get(record.promptIndex) || {
+        matchedFingerprintCount: 0,
+        responseIds: /* @__PURE__ */ new Set(),
+        blockIds: /* @__PURE__ */ new Set()
+      };
+      let matchedFingerprintCount = 0;
+      const matchingResponseBlockIds = /* @__PURE__ */ new Set();
+      for (const fingerprint of record.fingerprints) {
+        const matchingBlockIds = [];
+        for (const block2 of normalizedBlocks) {
+          if (await verifyFingerprintMatch(block2.text, fingerprint)) {
+            matchingBlockIds.push(block2.id);
+          }
+        }
+        if (matchingBlockIds.length === 0) continue;
+        matchedFingerprintCount += 1;
+        matchingBlockIds.forEach(
+          (blockId) => matchingResponseBlockIds.add(blockId)
+        );
+      }
+      if (matchedFingerprintCount === 0) continue;
+      promptMatch.matchedFingerprintCount += matchedFingerprintCount;
+      promptMatch.responseIds.add(record.responseId);
+      matchingResponseBlockIds.forEach(
+        (blockId) => promptMatch.blockIds.add(blockId)
+      );
+      matchesByPrompt.set(record.promptIndex, promptMatch);
+    }
+    const matches = Array.from(
+      matchesByPrompt,
+      ([
+        promptIndex,
+        { matchedFingerprintCount, responseIds, blockIds }
+      ]) => ({
+        promptIndex,
+        matchedFingerprintCount,
+        responseIds: [...responseIds],
+        blockIds: [...blockIds]
+      })
+    );
+    return matches.sort(
+      (first, second) => second.matchedFingerprintCount - first.matchedFingerprintCount || first.promptIndex - second.promptIndex
+    );
+  }
+  function selectBestPromptMatch(matches) {
+    if (matches.length === 0) return { status: "none" };
+    const highestScore = Math.max(
+      ...matches.map(({ matchedFingerprintCount }) => matchedFingerprintCount)
+    );
+    const strongestMatches = matches.filter(
+      ({ matchedFingerprintCount }) => matchedFingerprintCount === highestScore
+    );
+    if (strongestMatches.length > 1) {
+      return {
+        status: "ambiguous",
+        matches: strongestMatches
+      };
+    }
+    return {
+      status: "matched",
+      match: strongestMatches[0]
+    };
+  }
+  function findProbeOffsetsInNormalizedText(normalizedText, normalizedProbe) {
+    if (!normalizedText || !normalizedProbe) return [];
+    const offsets = [];
+    let searchStart = 0;
+    while (searchStart <= normalizedText.length - normalizedProbe.length) {
+      const offset = normalizedText.indexOf(normalizedProbe, searchStart);
+      if (offset === -1) break;
+      offsets.push(offset);
+      searchStart = offset + 1;
+    }
+    return offsets;
+  }
+
+  // vendor/luna-navigation/src/navigation/fingerprint/segmentMatcher.ts
+  async function matchSegmentIndex(blocks, segmentIndex) {
+    const matches = [];
+    for (const segment of segmentIndex) {
+      const blockIds = [];
+      for (const block2 of blocks) {
+        if (await verifyFingerprintMatch(block2.text, segment)) {
+          blockIds.push(block2.id);
+        }
+      }
+      if (blockIds.length === 0) continue;
+      matches.push({
+        responseId: segment.responseId,
+        promptIndex: segment.promptIndex,
+        segmentIndex: segment.segmentIndex,
+        segmentCount: segment.segmentCount,
+        positionRatio: segment.positionRatio,
+        quality: segment.quality,
+        blockIds
+      });
+    }
+    return matches.sort(
+      (first, second) => getQualityScore(second.quality) - getQualityScore(first.quality) || first.promptIndex - second.promptIndex || first.segmentIndex - second.segmentIndex
+    );
+  }
+  function selectBestSegmentMatch(matches) {
+    if (matches.length === 0) return { status: "none" };
+    const highestQuality = Math.max(
+      ...matches.map(({ quality }) => getQualityScore(quality))
+    );
+    const strongestMatches = matches.filter(
+      ({ quality }) => getQualityScore(quality) === highestQuality
+    );
+    const uniqueMatches = strongestMatches.filter(
+      (match, index, candidates) => candidates.findIndex(
+        (candidate) => candidate.responseId === match.responseId && candidate.promptIndex === match.promptIndex && candidate.segmentIndex === match.segmentIndex
+      ) === index
+    );
+    if (uniqueMatches.length !== 1) {
+      return {
+        status: "ambiguous",
+        matches: uniqueMatches
+      };
+    }
+    return {
+      status: "matched",
+      match: uniqueMatches[0]
+    };
+  }
+  function getQualityScore(quality) {
+    return quality === "observed" ? 2 : 1;
+  }
+
+  // vendor/luna-navigation/src/navigation/jump/visiblePositionResolver.ts
+  async function resolveVisiblePromptPosition(blocks, fingerprintIndex, segmentIndex = [], segmentBlocks = blocks) {
+    if (blocks.length === 0 || fingerprintIndex.length === 0 && segmentIndex.length === 0) {
+      return { status: "none" };
+    }
+    const promptIndexesByResponseId = indexPromptIndexesByResponseId(
+      fingerprintIndex,
+      segmentIndex
+    );
+    const matchedPromptIndexes = /* @__PURE__ */ new Set();
+    const matchedBlockIds = /* @__PURE__ */ new Set();
+    const matchedBlocks = [];
+    const candidatePromptIndexes = /* @__PURE__ */ new Set();
+    const ambiguousBlockIds = /* @__PURE__ */ new Set();
+    const segmentBlocksById = new Map(
+      segmentBlocks.map((block2) => [block2.id, block2])
+    );
+    for (const block2 of blocks) {
+      const segmentBlock = segmentBlocksById.get(block2.id);
+      const segmentSelection = selectBestSegmentMatch(
+        segmentBlock ? await matchSegmentIndex([segmentBlock], segmentIndex) : []
+      );
+      if (segmentSelection.status === "matched") {
+        const segment = segmentSelection.match;
+        matchedPromptIndexes.add(segment.promptIndex);
+        matchedBlockIds.add(block2.id);
+        matchedBlocks.push({
+          blockId: block2.id,
+          promptIndex: segment.promptIndex,
+          source: "segment",
+          segmentIndex: segment.segmentIndex,
+          segmentCount: segment.segmentCount,
+          positionRatio: segment.positionRatio,
+          segmentQuality: segment.quality
+        });
+        continue;
+      }
+      const selection = selectBestPromptMatch(
+        await matchFingerprintIndex([block2], fingerprintIndex)
+      );
+      if (selection.status === "matched") {
+        matchedPromptIndexes.add(selection.match.promptIndex);
+        matchedBlockIds.add(block2.id);
+        matchedBlocks.push({
+          blockId: block2.id,
+          promptIndex: selection.match.promptIndex,
+          source: "fingerprint"
+        });
+        continue;
+      }
+      const directPromptIndexes = promptIndexesByResponseId.get(block2.id);
+      if (directPromptIndexes?.size === 1) {
+        const promptIndex = [...directPromptIndexes][0];
+        matchedPromptIndexes.add(promptIndex);
+        matchedBlockIds.add(block2.id);
+        matchedBlocks.push({
+          blockId: block2.id,
+          promptIndex,
+          source: "response-id"
+        });
+        continue;
+      }
+      if (directPromptIndexes && directPromptIndexes.size > 1) {
+        directPromptIndexes.forEach((index) => candidatePromptIndexes.add(index));
+        ambiguousBlockIds.add(block2.id);
+        continue;
+      }
+      if (selection.status === "ambiguous") {
+        selection.matches.forEach(
+          ({ promptIndex }) => candidatePromptIndexes.add(promptIndex)
+        );
+        ambiguousBlockIds.add(block2.id);
+      }
+      if (segmentSelection.status === "ambiguous") {
+        segmentSelection.matches.forEach(
+          ({ promptIndex }) => candidatePromptIndexes.add(promptIndex)
+        );
+        ambiguousBlockIds.add(block2.id);
+      }
+    }
+    if (ambiguousBlockIds.size > 0) {
+      matchedPromptIndexes.forEach((index) => candidatePromptIndexes.add(index));
+      return {
+        status: "ambiguous",
+        candidatePromptIndexes: [...candidatePromptIndexes].sort(
+          (first, second) => first - second
+        ),
+        ambiguousBlockIds: [...ambiguousBlockIds]
+      };
+    }
+    const sortedPromptIndexes = [...matchedPromptIndexes].sort(
+      (first, second) => first - second
+    );
+    if (sortedPromptIndexes.length === 0) return { status: "none" };
+    return {
+      status: "located",
+      firstPromptIndex: sortedPromptIndexes[0],
+      lastPromptIndex: sortedPromptIndexes.at(-1),
+      matchedPromptIndexes: sortedPromptIndexes,
+      matchedBlockIds: [...matchedBlockIds],
+      matchedBlocks
+    };
+  }
+  function indexPromptIndexesByResponseId(fingerprintIndex, segmentIndex) {
+    const promptIndexesByResponseId = /* @__PURE__ */ new Map();
+    fingerprintIndex.forEach(({ responseId, promptIndex }) => {
+      const promptIndexes = promptIndexesByResponseId.get(responseId) || /* @__PURE__ */ new Set();
+      promptIndexes.add(promptIndex);
+      promptIndexesByResponseId.set(responseId, promptIndexes);
+    });
+    segmentIndex.forEach(({ responseId, promptIndex }) => {
+      const promptIndexes = promptIndexesByResponseId.get(responseId) || /* @__PURE__ */ new Set();
+      promptIndexes.add(promptIndex);
+      promptIndexesByResponseId.set(responseId, promptIndexes);
+    });
+    return promptIndexesByResponseId;
+  }
+  function resolvePromptIndexesFromIds(ids, prompts) {
+    const promptIndexById = /* @__PURE__ */ new Map();
+    prompts.forEach((prompt, index) => {
+      if (!promptIndexById.has(prompt.id)) {
+        promptIndexById.set(prompt.id, index);
+      }
+    });
+    const matchedPromptIndexes = /* @__PURE__ */ new Set();
+    const matchedBlockIds = /* @__PURE__ */ new Set();
+    const matchedBlocks = [];
+    for (const id of ids) {
+      if (!id) continue;
+      const promptIndex = promptIndexById.get(id);
+      if (promptIndex === void 0) continue;
+      if (matchedBlockIds.has(id)) continue;
+      matchedBlockIds.add(id);
+      matchedPromptIndexes.add(promptIndex);
+      matchedBlocks.push({
+        blockId: id,
+        promptIndex,
+        source: "user-message-id"
+      });
+    }
+    if (matchedPromptIndexes.size === 0) return null;
+    const sortedPromptIndexes = [...matchedPromptIndexes].sort(
+      (first, second) => first - second
+    );
+    return {
+      status: "located",
+      firstPromptIndex: sortedPromptIndexes[0],
+      lastPromptIndex: sortedPromptIndexes.at(-1),
+      matchedPromptIndexes: sortedPromptIndexes,
+      matchedBlockIds: [...matchedBlockIds],
+      matchedBlocks
+    };
+  }
+
+  // vendor/luna-navigation/src/platforms/chatgpt/renderedTextAdapter.ts
+  var ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
+  var MARKDOWN_SELECTOR = ".markdown";
+  function getRenderedAssistantEntries(root = document) {
+    return Array.from(
+      root.querySelectorAll(ASSISTANT_SELECTOR)
+    ).flatMap((assistantElement, index) => {
+      const text = getAssistantMarkdownText(assistantElement);
+      if (!text) return [];
+      return [
+        {
+          element: assistantElement,
+          block: {
+            id: getAssistantBlockId(assistantElement, index),
+            text
+          }
+        }
+      ];
+    });
+  }
+  function getVisibleAssistantViewportSamples(scrollContainer, root = document) {
+    const viewport2 = scrollContainer.getBoundingClientRect();
+    return getRenderedAssistantEntries(root).flatMap(
+      ({ block: block2, element }) => {
+        const contentElements = getAssistantMarkdownContainers(element);
+        const intersectsViewport = contentElements.some((contentElement) => {
+          const rect = contentElement.getBoundingClientRect();
+          return rect.bottom > viewport2.top && rect.top < viewport2.bottom;
+        });
+        if (!intersectsViewport) return [];
+        const text = extractRenderedTextWithinVerticalBounds(
+          contentElements,
+          viewport2.top,
+          viewport2.bottom
+        );
+        return text ? [{ id: block2.id, text }] : [];
+      }
+    );
+  }
+  function getAssistantBlockId(assistantElement, index) {
+    return assistantElement.dataset.messageId || assistantElement.closest("[data-message-id]")?.dataset.messageId || `chatgpt-assistant-${index}`;
+  }
+  function getAssistantMarkdownText(assistantElement) {
+    return getAssistantMarkdownContainers(assistantElement).map((container) => container.innerText || container.textContent || "").map((text) => text.trim()).filter(Boolean).join("\n");
+  }
+  function getAssistantMarkdownContainers(assistantElement) {
+    return Array.from(
+      assistantElement.querySelectorAll(MARKDOWN_SELECTOR)
+    ).filter((container) => {
+      const owningMessage = container.closest(
+        "[data-message-author-role]"
+      );
+      const nestedMarkdown = container.parentElement?.closest(MARKDOWN_SELECTOR);
+      return owningMessage === assistantElement && !nestedMarkdown;
+    });
+  }
+
+  // vendor/luna-navigation/src/platforms/chatgpt/virtualSearchAdapter.ts
+  var USER_MESSAGE_SELECTOR = '[data-message-author-role="user"]';
+  var ASSISTANT_MESSAGE_SELECTOR = '[data-message-author-role="assistant"]';
+  function getChatGptScrollContainer(root = document) {
+    const sampleMessage = root.querySelector(USER_MESSAGE_SELECTOR) || root.querySelector(ASSISTANT_MESSAGE_SELECTOR);
+    let parent = sampleMessage?.parentElement || null;
+    while (parent && parent !== document.body) {
+      if (isVerticallyScrollable(parent)) return parent;
+      parent = parent.parentElement;
+    }
+    const selectorFallback = root.querySelector("main div.overflow-y-auto") || root.querySelector('[class*="react-scroll-to-bottom"]') || root.querySelector('main [class*="react-scroll-to-bottom"]');
+    if (selectorFallback) return selectorFallback;
+    const main = root.querySelector("main");
+    if (!main) return null;
+    return Array.from(main.querySelectorAll("div")).find(
+      isVerticallyScrollable
+    ) || null;
+  }
+  function findRenderedChatGptPrompt(promptId, root = document) {
+    return Array.from(root.querySelectorAll(USER_MESSAGE_SELECTOR)).find(
+      (element) => getChatGptMessageId(element) === promptId
+    ) || null;
+  }
+  function getChatGptScrollMetrics(container) {
+    return {
+      scrollTop: container.scrollTop,
+      maximumScrollTop: Math.max(
+        0,
+        container.scrollHeight - container.clientHeight
+      ),
+      viewportWidth: container.clientWidth || window.innerWidth,
+      viewportHeight: container.clientHeight || window.innerHeight
+    };
+  }
+  function getVisibleUserMessages(root, scrollContainer) {
+    const containerRect = scrollContainer.getBoundingClientRect();
+    return Array.from(root.querySelectorAll(USER_MESSAGE_SELECTOR)).filter((element) => isElementWithinScrollViewport(element, containerRect));
+  }
+  function resolveVisiblePromptPositionByUserMessageId(prompts, scrollContainer, root) {
+    const visibleUserMessages = getVisibleUserMessages(root, scrollContainer);
+    return resolvePromptIndexesFromIds(
+      visibleUserMessages.map((element) => getChatGptMessageId(element)),
+      prompts
+    );
+  }
+  async function observeChatGptVirtualPosition({
+    conversationKey,
+    prompts,
+    fingerprintIndex,
+    segmentIndex,
+    root = document,
+    scrollContainer = getChatGptScrollContainer(root)
+  }) {
+    if (!scrollContainer) {
+      return {
+        position: { status: "none" },
+        anchors: []
+      };
+    }
+    const directPosition = resolveVisiblePromptPositionByUserMessageId(
+      prompts,
+      scrollContainer,
+      root
+    );
+    if (directPosition) {
+      const visibleUserMessages = getVisibleUserMessages(root, scrollContainer);
+      const elementsByBlockId2 = /* @__PURE__ */ new Map();
+      for (const element of visibleUserMessages) {
+        const id = getChatGptMessageId(element);
+        if (id) elementsByBlockId2.set(id, element);
+      }
+      const anchors2 = directPosition.matchedBlocks.flatMap(
+        ({ blockId, promptIndex }) => {
+          const element = elementsByBlockId2.get(blockId);
+          const prompt = prompts[promptIndex];
+          if (!element || !prompt) return [];
+          return [
+            createChatGptElementNavigationAnchor({
+              conversationKey,
+              promptId: prompt.id,
+              promptIndex,
+              element,
+              scrollContainer
+            })
+          ];
+        }
+      );
+      return { position: directPosition, anchors: anchors2 };
+    }
+    const entries = getRenderedAssistantEntries(root);
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const visibleEntries = entries.filter(
+      ({ element }) => isElementWithinScrollViewport(element, containerRect)
+    );
+    const validFingerprintIndex = fingerprintIndex.filter(
+      ({ promptIndex }) => promptIndex >= 0 && promptIndex < prompts.length
+    );
+    const validDerivedSegmentIndex = segmentIndex.filter(
+      ({ promptIndex, quality }) => quality === "derived" && promptIndex >= 0 && promptIndex < prompts.length
+    );
+    const viewportSamples = getVisibleAssistantViewportSamples(
+      scrollContainer,
+      root
+    );
+    const position = await resolveVisiblePromptPosition(
+      visibleEntries.map(({ block: block2 }) => block2),
+      validFingerprintIndex,
+      validDerivedSegmentIndex,
+      viewportSamples
+    );
+    if (position.status !== "located") {
+      return {
+        position,
+        anchors: []
+      };
+    }
+    const elementsByBlockId = new Map(
+      visibleEntries.map(({ block: block2, element }) => [block2.id, element])
+    );
+    const anchors = position.matchedBlocks.flatMap(
+      ({ blockId, promptIndex }) => {
+        const element = elementsByBlockId.get(blockId);
+        const prompt = prompts[promptIndex];
+        if (!element || !prompt) return [];
+        return [
+          createChatGptElementNavigationAnchor({
+            conversationKey,
+            promptId: prompt.id,
+            promptIndex,
+            element,
+            scrollContainer
+          })
+        ];
+      }
+    );
+    return {
+      position,
+      anchors
+    };
+  }
+  function createChatGptElementNavigationAnchor({
+    conversationKey,
+    promptId,
+    promptIndex,
+    element,
+    scrollContainer
+  }) {
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const elementRect = element.getBoundingClientRect();
+    const anchorScrollTop = scrollContainer.scrollTop + elementRect.top - containerRect.top;
+    return createNavigationAnchor({
+      conversationKey,
+      promptId,
+      promptIndex,
+      scrollTop: anchorScrollTop,
+      scrollHeight: scrollContainer.scrollHeight,
+      viewportWidth: scrollContainer.clientWidth || window.innerWidth,
+      viewportHeight: scrollContainer.clientHeight || window.innerHeight
+    });
+  }
+  function getChatGptMessageId(element) {
+    return element.dataset.messageId || element.closest("[data-message-id]")?.dataset.messageId || null;
+  }
+  function isVerticallyScrollable(element) {
+    const overflowY = window.getComputedStyle(element).overflowY;
+    return overflowY === "auto" || overflowY === "scroll";
+  }
+  function isElementWithinScrollViewport(element, containerRect) {
+    const elementRect = element.getBoundingClientRect();
+    return elementRect.bottom > containerRect.top && elementRect.top < containerRect.bottom;
+  }
+
+  // vendor/luna-navigation/src/navigation/navigationData.ts
+  function createNavigationTurns(messages) {
+    const turns = [];
+    let currentTurn = null;
+    messages.forEach((message) => {
+      const normalizedMessage = createNavigationTextMessage(message);
+      if (!normalizedMessage) return;
+      if (message.kind === "prompt") {
+        currentTurn = {
+          promptIndex: turns.length,
+          prompt: normalizedMessage,
+          responses: []
+        };
+        turns.push(currentTurn);
+        return;
+      }
+      currentTurn?.responses.push(normalizedMessage);
+    });
+    return turns;
+  }
+  function createNavigationTextMessage(message) {
+    const text = message.text.trim();
+    if (!text) return null;
+    return {
+      id: message.id,
+      text
+    };
+  }
+
+  // src/navigation/conversationAdapter.ts
+  function toLunaPrompts(turns) {
+    return turns.map((turn) => ({ id: turn.userMessageId ?? turn.id }));
+  }
+  function toLunaNavigationTurns(turns) {
+    return createNavigationTurns(
+      turns.flatMap((turn) => {
+        const promptId = turn.userMessageId ?? turn.id;
+        const promptText = turn.userMarkdown || turn.userPreview || promptId;
+        const responseId = turn.assistantMessageId;
+        const responseText = turn.assistantMarkdown || turn.assistantPreview;
+        const prompt = { id: promptId, kind: "prompt", text: promptText };
+        if (!responseId || !responseText.trim()) return [prompt];
+        return [prompt, { id: responseId, kind: "response", text: responseText }];
+      })
+    );
+  }
+  function findTurn(turns, turnId) {
+    return turns.find(
+      (turn) => turn.id === turnId || turn.userMessageId === turnId || turn.assistantMessageId === turnId
+    );
+  }
+
+  // src/navigation/officialFastPath.ts
+  var OFFICIAL_BUTTON_SELECTOR = "button[data-toc-item-index], button[data-toc-active]";
+  function officialButtons(root = document) {
+    return [...root.querySelectorAll(OFFICIAL_BUTTON_SELECTOR)];
+  }
+  function tryOfficialFastPath(turnIndex, turnCount, conversationId) {
+    if (!conversationId || getConversationIdFromUrl() !== conversationId) return false;
+    if (turnCount <= 0 || turnIndex < 0 || turnIndex >= turnCount) return false;
+    const buttons = officialButtons();
+    if (buttons.length !== turnCount) return false;
+    const button = buttons[turnIndex];
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  // src/navigation/navigationPort.ts
+  var PROMPT_TOP_OFFSET_PX = 16;
+  var ANCHOR_KEY = "chatgpt-yada:nav-anchors:v1";
+  var CANCEL_KEYS = /* @__PURE__ */ new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Space", " "]);
+  var NavigationPort = class {
+    transaction = null;
+    anchors = createNavigationAnchorStore({
+      storage: {
+        async read() {
+          if (typeof chrome === "undefined" || !chrome.storage?.local) return void 0;
+          const data = await chrome.storage.local.get(ANCHOR_KEY);
+          return data[ANCHOR_KEY];
+        },
+        async write(value) {
+          if (typeof chrome === "undefined" || !chrome.storage?.local) return;
+          await chrome.storage.local.set({ [ANCHOR_KEY]: value });
+        }
+      }
+    });
+    interrupt = null;
+    async navigateTo(turnId, turns, conversationId, options = {}) {
+      this.cancel();
+      const turn = findTurn(turns, turnId);
+      if (!turn) return { ok: false, status: "failed" };
+      const controller = new AbortController();
+      this.transaction = controller;
+      const abort = () => controller.abort();
+      if (options.signal) {
+        if (options.signal.aborted) controller.abort();
+        else options.signal.addEventListener("abort", abort, { once: true });
+      }
+      this.attachInterrupt(abort);
+      try {
+        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
+        if (await this.jumpDirect(turn, controller.signal)) {
+          return { ok: true, status: "found", path: "direct" };
+        }
+        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
+        if (tryOfficialFastPath(turn.index, turns.length, conversationId)) {
+          await wait(80);
+          if (controller.signal.aborted) return { ok: false, status: "cancelled" };
+          if (await this.jumpDirect(turn, controller.signal)) {
+            return { ok: true, status: "found", path: "official" };
+          }
+        }
+        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
+        return await this.jumpVirtual(turn, turns, conversationId, controller.signal);
+      } catch (error) {
+        if (controller.signal.aborted || isAbortError3(error)) return { ok: false, status: "cancelled" };
+        return { ok: false, status: "failed" };
+      } finally {
+        options.signal?.removeEventListener("abort", abort);
+        this.detachInterrupt();
+        if (this.transaction === controller) this.transaction = null;
+      }
+    }
+    cancel() {
+      this.transaction?.abort();
+      this.transaction = null;
+      this.detachInterrupt();
+    }
+    dispose() {
+      this.cancel();
+    }
+    async jumpDirect(turn, signal) {
+      const ids = [turn.userMessageId, turn.assistantMessageId, turn.id].filter((id) => !!id);
+      for (const id of ids) {
+        if (signal.aborted) return false;
+        const element = findRenderedById(id);
+        const container = getChatGptScrollContainer();
+        if (!element || !container) continue;
+        if (readMessageId(element) !== id) continue;
+        scrollElementIntoContainer(element, container);
+        await wait(32);
+        if (signal.aborted) return false;
+        const still = findRenderedById(id);
+        if (still && readMessageId(still) === id) return true;
+      }
+      return false;
+    }
+    async jumpVirtual(turn, turns, conversationId, signal) {
+      const prompts = toLunaPrompts(turns);
+      const lunaTurns = toLunaNavigationTurns(turns);
+      const fingerprintIndex = await buildFingerprintIndex(lunaTurns);
+      const segmentIndex = await buildDerivedSegmentIndex(lunaTurns);
+      const targetPromptId = turn.userMessageId ?? turn.id;
+      const container = () => getChatGptScrollContainer();
+      const result = await searchVirtualPrompt({
+        targetPromptId,
+        targetPromptIndex: turn.index,
+        promptCount: turns.length,
+        getConfirmedAnchors: () => this.anchors.getConfirmedAnchors(conversationId),
+        invalidateConfirmedAnchor: (promptId) => this.anchors.removeConfirmed(conversationId, promptId).then(() => void 0),
+        getObservedAnchors: () => this.anchors.getObservedAnchors(conversationId),
+        recordObservation: (anchor) => {
+          this.anchors.recordObservation(anchor);
+        },
+        getScrollMetrics: () => {
+          const node = container();
+          return node ? getChatGptScrollMetrics(node) : { scrollTop: 0, maximumScrollTop: 0, viewportWidth: innerWidth, viewportHeight: innerHeight };
+        },
+        observePosition: () => observeChatGptVirtualPosition({
+          conversationKey: conversationId,
+          prompts,
+          fingerprintIndex,
+          segmentIndex
+        }),
+        isTargetRendered: () => {
+          const element = findRenderedById(targetPromptId);
+          const node = container();
+          return Boolean(element && node && readMessageId(element) === targetPromptId);
+        },
+        scrollTo: (scrollTop) => {
+          const node = container();
+          if (node) node.scrollTop = scrollTop;
+        },
+        signal
+      });
+      if (result.status === "found") {
+        const element = findRenderedById(targetPromptId);
+        const node = container();
+        if (element && node) {
+          scrollElementIntoContainer(element, node);
+          const metrics = getChatGptScrollMetrics(node);
+          await this.anchors.recordConfirmed({
+            conversationKey: conversationId,
+            promptId: targetPromptId,
+            promptIndex: turn.index,
+            scrollTop: metrics.scrollTop,
+            scrollHeight: node.scrollHeight,
+            viewportWidth: metrics.viewportWidth,
+            viewportHeight: metrics.viewportHeight
+          });
+        }
+        return { ok: true, status: "found", path: "virtual", attempts: result.attempts };
+      }
+      if (result.status === "cancelled") return { ok: false, status: "cancelled", path: "virtual", attempts: result.attempts };
+      if (result.status === "timed-out") return { ok: false, status: "timed-out", path: "virtual", attempts: result.attempts };
+      if (result.status === "exhausted") return { ok: false, status: "exhausted", path: "virtual", attempts: result.attempts };
+      return { ok: false, status: "unresolved", path: "virtual", attempts: result.attempts };
+    }
+    attachInterrupt(abort) {
+      this.detachInterrupt();
+      const onWheel = () => abort();
+      const onTouch = () => abort();
+      const onPointer = (event) => {
+        if (event.pointerType === "mouse" && event.buttons === 0) return;
+        const target = event.target;
+        if (target instanceof Element && target.closest("[data-yada-root]")) return;
+        abort();
+      };
+      const onKey = (event) => {
+        if (CANCEL_KEYS.has(event.key)) abort();
+      };
+      window.addEventListener("wheel", onWheel, { passive: true, capture: true });
+      window.addEventListener("touchmove", onTouch, { passive: true, capture: true });
+      window.addEventListener("pointerdown", onPointer, { capture: true });
+      window.addEventListener("keydown", onKey, { capture: true });
+      this.interrupt = () => {
+        window.removeEventListener("wheel", onWheel, true);
+        window.removeEventListener("touchmove", onTouch, true);
+        window.removeEventListener("pointerdown", onPointer, true);
+        window.removeEventListener("keydown", onKey, true);
+      };
+    }
+    detachInterrupt() {
+      this.interrupt?.();
+      this.interrupt = null;
+    }
+  };
+  function findRenderedById(id) {
+    return findRenderedChatGptPrompt(id) ?? document.querySelector(`[data-message-id="${cssEscape(id)}"]`);
+  }
+  function readMessageId(element) {
+    return element.dataset.messageId ?? element.closest("[data-message-id]")?.dataset.messageId ?? null;
+  }
+  function scrollElementIntoContainer(element, container) {
+    const top = element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - PROMPT_TOP_OFFSET_PX;
+    container.scrollTop = Math.max(0, top);
+  }
+  function wait(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
+  }
+  function isAbortError3(error) {
+    return error instanceof DOMException && error.name === "AbortError";
+  }
+  function cssEscape(value) {
+    return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"');
+  }
+
+  // src/navigation/navigatorController.ts
+  var NavigatorController = class {
+    constructor(repository) {
+      this.repository = repository;
+    }
+    port = new NavigationPort();
+    snapshot = null;
+    unsubscribe = null;
+    mount() {
+      this.unsubscribe = this.repository.subscribe((snapshot) => {
+        this.snapshot = snapshot;
+      });
+    }
+    async navigateTo(turnId, signal) {
+      const snapshot = this.snapshot ?? this.repository.getSnapshot();
+      if (!snapshot) return { ok: false, status: "failed" };
+      return this.port.navigateTo(turnId, snapshot.activeTurns, snapshot.conversationId, { signal });
+    }
+    cancel() {
+      this.port.cancel();
+    }
+    currentTurns() {
+      return this.snapshot?.activeTurns ?? [];
+    }
+    dispose() {
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+      this.port.dispose();
+    }
+  };
+
+  // src/quota/account.ts
+  function readAccountContext(conversationWorkspaceKind) {
+    const accountId = getChatGptAccountId();
+    const workspace = readWorkspaceFromAccountStore();
+    let workspaceKind = workspace.kind;
+    if (conversationWorkspaceKind && conversationWorkspaceKind !== "unknown") {
+      workspaceKind = conversationWorkspaceKind;
+    }
+    if (workspaceKind === "unknown" && workspace.kind !== "unknown") workspaceKind = workspace.kind;
+    const workspaceId = workspace.id;
+    const accountKey = [
+      accountId ?? "account-unknown",
+      workspaceKind === "work" ? workspaceId ?? "work" : workspaceKind
+    ].join(":");
+    return { accountId, workspaceId, workspaceKind, accountKey };
+  }
+  function readWorkspaceFromAccountStore() {
+    try {
+      const raw = window.localStorage.getItem("_account");
+      if (!raw) return { id: null, kind: "unknown" };
+      if (/^account-[a-z0-9_-]+$/i.test(raw)) return { id: null, kind: "unknown" };
+      const parsed = JSON.parse(raw);
+      return findWorkspace(parsed);
+    } catch {
+      return { id: null, kind: "unknown" };
+    }
+  }
+  function findWorkspace(value, depth = 0) {
+    if (!value || typeof value !== "object" || depth > 6) return { id: null, kind: "unknown" };
+    const record = value;
+    const id = readId(record);
+    const kind = readKind(record);
+    if (kind !== "unknown" || id) {
+      if (kind !== "unknown") return { id, kind };
+    }
+    for (const nested of Object.values(record)) {
+      const found = findWorkspace(nested, depth + 1);
+      if (found.kind !== "unknown" || found.id) return found;
+    }
+    return { id, kind };
+  }
+  function readId(record) {
+    for (const key of ["workspaceId", "workspace_id", "orgId", "org_id", "organization_id"]) {
+      const value = record[key];
+      if (typeof value === "string" && value.trim()) return value.trim();
+    }
+    return null;
+  }
+  function readKind(record) {
+    const tokens = [
+      record.workspaceType,
+      record.workspace_type,
+      record.accountType,
+      record.account_type,
+      record.planType,
+      record.plan_type,
+      record.structure,
+      record.isWorkspace,
+      record.is_workspace,
+      record.isBusiness,
+      record.product
+    ].map((value) => typeof value === "string" ? value.toLowerCase() : value);
+    if (tokens.includes(true) || tokens.some((value) => typeof value === "string" && /(work|team|business|enterprise|workspace)/.test(value))) {
+      return "work";
+    }
+    if (tokens.some((value) => typeof value === "string" && /(personal|plus|pro|free|consumer)/.test(value))) {
+      return "personal";
+    }
+    return "unknown";
+  }
+
+  // src/quota/rules.ts
+  var WEEK_MS = 7 * 24 * 60 * 60 * 1e3;
+  var DAY_MS = 24 * 60 * 60 * 1e3;
+
+  // src/quota/modelDetector.ts
+  var GPT6_PRO_ALIASES = /* @__PURE__ */ new Set([
+    "gpt-6-pro",
+    "gpt6-pro",
+    "gpt-6pro",
+    "chatgpt-gpt-6-pro",
+    "gpt-6-pro-2026"
+  ]);
+  var SOL_PRO_ALIASES = /* @__PURE__ */ new Set([
+    "gpt-5.6-sol-pro",
+    "gpt-5-6-sol-pro",
+    "gpt-5.6-thinking-pro",
+    "gpt-5.6-pro",
+    "gpt56-sol-pro",
+    "chatgpt-gpt-5.6-sol-pro"
+  ]);
+  function detectProModel(slug) {
+    if (!slug || !slug.trim()) return { kind: "unknown", slug: slug ?? null };
+    const normalized = normalizeSlug(slug);
+    if (GPT6_PRO_ALIASES.has(normalized) || /^gpt-?6(?:\.0)?-pro(?:-|$)/.test(normalized)) {
+      return { kind: "gpt-6-pro", slug };
+    }
+    if (SOL_PRO_ALIASES.has(normalized) || /^gpt-?5(?:\.|-)6(?:-sol)?-pro(?:-|$)/.test(normalized)) {
+      return { kind: "gpt-5.6-sol-pro", slug };
+    }
+    if (normalized.includes("pro") && (normalized.includes("gpt") || normalized.includes("o1") || normalized.includes("o3") || normalized.includes("sol"))) {
+      return { kind: "unknown", slug };
+    }
+    if (normalized.includes("pro") && !KNOWN_OTHER.has(normalized)) {
+      return { kind: "unknown", slug };
+    }
+    return { kind: "other", slug };
+  }
+  var KNOWN_OTHER = /* @__PURE__ */ new Set(["gpt-5.4", "gpt-4o", "gpt-4.1", "gpt-5", "o3", "o4-mini"]);
+  function normalizeSlug(slug) {
+    return slug.trim().toLowerCase().replace(/_/g, "-");
+  }
+
+  // src/quota/usageScanner.ts
+  function toQuotaEvents(events, accountKey, source) {
+    return events.map((event) => {
+      const createdMs = toOccurredAt(event.createdAt);
+      const occurredAt = createdMs ?? event.observedAt;
+      const detected = detectProModel(event.modelSlug);
+      return {
+        id: event.assistantMessageId,
+        accountKey,
+        conversationId: event.conversationId,
+        occurredAt,
+        observedAt: event.observedAt,
+        timeSource: createdMs == null ? "observed" : "message",
+        model: detected.kind,
+        source,
+        workspaceKind: event.workspaceKind,
+        modelSlug: detected.slug ?? void 0
+      };
+    });
+  }
+  function toOccurredAt(createdAt) {
+    if (createdAt == null || !Number.isFinite(createdAt) || createdAt <= 0) return null;
+    return createdAt < 1e12 ? Math.round(createdAt * 1e3) : Math.round(createdAt);
+  }
+
+  // src/quota/types.ts
+  var BACKFILL_KEY = "chatgpt-yada:quota-backfill:v1";
+  var EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1e3;
+
+  // src/quota/historyBackfill.ts
+  var WEEK_MS2 = 7 * DAY_MS;
+  var MAX_CONCURRENCY = 2;
+  var PAGE_LIMIT = 28;
+  var GAP_MS = 180;
+  var MAX_RETRIES = 3;
+  var HistoryBackfill = class {
+    aborted = false;
+    async run() {
+      const state = await readBackfillState();
+      if (state.status === "complete" || state.status === "unavailable") return state.status;
+      this.aborted = false;
+      const cutoffAt = state.cutoffAt || Date.now() - WEEK_MS2;
+      state.cutoffAt = cutoffAt;
+      state.status = "running";
+      state.updatedAt = Date.now();
+      await writeBackfillState(state);
+      try {
+        let offset = state.cursorOffset;
+        while (!this.aborted) {
+          if (document.visibilityState === "hidden") {
+            state.status = "paused";
+            await writeBackfillState(state);
+            return "paused";
+          }
+          const page = await fetchConversationList(offset);
+          if (page === "unavailable") {
+            state.status = "unavailable";
+            await writeBackfillState(state);
+            return "unavailable";
+          }
+          if (!page.items.length) {
+            state.status = "complete";
+            await writeBackfillState(state);
+            return "complete";
+          }
+          const due = page.items.filter((item) => item.updateTime >= cutoffAt);
+          if (!due.length) {
+            state.status = "complete";
+            await writeBackfillState(state);
+            return "complete";
+          }
+          await this.scanItems(due, state);
+          offset += page.items.length;
+          state.cursorOffset = offset;
+          await writeBackfillState(state);
+          if (!page.hasMore || due.length < page.items.length) {
+            state.status = "complete";
+            await writeBackfillState(state);
+            return "complete";
+          }
+        }
+        state.status = "paused";
+        await writeBackfillState(state);
+        return "paused";
+      } catch {
+        state.status = "error";
+        await writeBackfillState(state);
+        return "error";
+      }
+    }
+    pause() {
+      this.aborted = true;
+    }
+    async scanItems(items, state) {
+      const pending = items.filter((item) => state.scanned[item.id] == null);
+      for (let i = 0; i < pending.length; i += MAX_CONCURRENCY) {
+        if (this.aborted) return;
+        const batch = pending.slice(i, i + MAX_CONCURRENCY);
+        await Promise.all(batch.map((item) => this.scanOne(item, state)));
+        await sleep(GAP_MS);
+      }
+    }
+    async scanOne(item, state) {
+      for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+        try {
+          const conversation = await fetchConversation(item.id);
+          const events = extractAssistantUsageEvents(conversation);
+          const account = readAccountContext();
+          const quotaEvents = toQuotaEvents(events, account.accountKey, "history");
+          if (quotaEvents.length) {
+            await chrome.runtime.sendMessage({ type: "quota/ingest", events: quotaEvents });
+          }
+          state.scanned[item.id] = conversation.update_time ?? Date.now();
+          state.updatedAt = Date.now();
+          return;
+        } catch {
+          await sleep(GAP_MS * (attempt + 1));
+        }
+      }
+    }
+  };
+  async function fetchConversationList(offset) {
+    try {
+      const response = await fetch(`/backend-api/conversations?offset=${offset}&limit=${PAGE_LIMIT}&order=updated`, {
+        credentials: "include",
+        headers: { Accept: "application/json" }
+      });
+      if (response.status === 401 || response.status === 403 || response.status === 404) return "unavailable";
+      if (!response.ok) throw new Error(`list ${response.status}`);
+      const data = await response.json();
+      const items = (data.items ?? []).map((item) => ({ id: item.id ?? item.conversation_id ?? "", updateTime: (item.update_time ?? 0) * (item.update_time && item.update_time < 1e12 ? 1e3 : 1) })).filter((item) => item.id);
+      return { items, hasMore: items.length === PAGE_LIMIT };
+    } catch {
+      return "unavailable";
+    }
+  }
+  async function readBackfillState() {
+    const data = await chrome.storage.local.get(BACKFILL_KEY);
+    const value = data[BACKFILL_KEY];
+    if (!value || value.version !== 1) {
+      return { version: 1, status: "idle", cutoffAt: Date.now() - WEEK_MS2, scanned: {}, cursorOffset: 0, updatedAt: Date.now() };
+    }
+    return value;
+  }
+  async function writeBackfillState(state) {
+    await chrome.storage.local.set({ [BACKFILL_KEY]: state });
+  }
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  // src/quota/tracker.ts
+  var REFRESH_AFTER_ANSWER_MS = 1100;
+  var QuotaTracker = class {
+    constructor(repository) {
+      this.repository = repository;
+    }
+    unsubscribe = null;
+    conversationId = null;
+    backfill = new HistoryBackfill();
+    answerTimer = 0;
+    mutation = null;
+    disposed = false;
+    mount() {
+      this.unsubscribe = this.repository.subscribe((snapshot) => {
+        void this.onSnapshot(snapshot);
+      });
+      this.mutation = new MutationObserver(() => this.observeAnswerLifecycle());
+      this.mutation.observe(document.documentElement, { subtree: true, childList: true, attributes: true, attributeFilter: ["data-is-streaming"] });
+      document.addEventListener("visibilitychange", this.onVisibility);
+      void this.backfill.run();
+    }
+    setConversationId(conversationId) {
+      this.conversationId = conversationId;
+    }
+    async refreshCurrent() {
+      if (!this.conversationId) return;
+      await this.repository.refresh(this.conversationId, "popup");
+    }
+    dispose() {
+      this.disposed = true;
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+      this.mutation?.disconnect();
+      this.mutation = null;
+      window.clearTimeout(this.answerTimer);
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.backfill.pause();
+    }
+    async onSnapshot(snapshot) {
+      if (this.disposed || !snapshot) return;
+      this.conversationId = snapshot.conversationId;
+      const account = readAccountContext(snapshot.assistantEvents[0]?.workspaceKind);
+      const events = toQuotaEvents(snapshot.assistantEvents, account.accountKey, "live").map((event) => account.workspaceKind === "work" || event.workspaceKind === "work" ? { ...event, workspaceKind: "work", accountKey: account.accountKey } : { ...event, accountKey: account.accountKey, workspaceKind: account.workspaceKind === "personal" ? event.workspaceKind === "unknown" ? account.workspaceKind : event.workspaceKind : event.workspaceKind });
+      if (!events.length) return;
+      await chrome.runtime.sendMessage({ type: "quota/ingest", events });
+    }
+    observeAnswerLifecycle() {
+      if (this.disposed || !this.conversationId) return;
+      const streaming = document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming');
+      if (streaming) {
+        window.clearTimeout(this.answerTimer);
+        this.answerTimer = 0;
+        return;
+      }
+      if (this.answerTimer) return;
+      this.answerTimer = window.setTimeout(() => {
+        this.answerTimer = 0;
+        if (this.conversationId) void this.repository.refresh(this.conversationId, "answer-complete");
+      }, REFRESH_AFTER_ANSWER_MS);
+    }
+    onVisibility = () => {
+      if (document.visibilityState === "hidden") this.backfill.pause();
+      else void this.backfill.run();
+    };
+  };
+
+  // src/navigation/officialNavSuppressor.ts
+  var STYLE_ID = "chatgpt-yada-official-nav-suppressor";
+  var OfficialNavSuppressor = class {
+    style = null;
+    enable() {
+      if (this.style?.isConnected) return;
+      document.getElementById(STYLE_ID)?.remove();
+      this.style = document.createElement("style");
+      this.style.id = STYLE_ID;
+      this.style.textContent = `${OFFICIAL_BUTTON_SELECTOR}{opacity:0!important;pointer-events:none!important;}`;
+      document.documentElement.append(this.style);
+    }
+    disable() {
+      this.style?.remove();
+      document.getElementById(STYLE_ID)?.remove();
+      this.style = null;
+    }
+    dispose() {
+      this.disable();
+    }
+  };
+
+  // src/rail/active.ts
+  function viewport(root) {
+    if (root === document.scrollingElement || root === document.documentElement) {
+      return { top: 0, height: innerHeight };
+    }
+    const rect = root.getBoundingClientRect();
+    const top = Math.max(0, rect.top + root.clientTop);
+    return { top, height: Math.max(0, Math.min(innerHeight, rect.bottom) - top) };
+  }
+  function findScrollRoot() {
+    const sample = document.querySelector('[data-message-author-role="user"], [data-message-author-role="assistant"]');
+    let parent = sample?.parentElement ?? null;
+    while (parent && parent !== document.body) {
+      const overflowY = getComputedStyle(parent).overflowY;
+      if (overflowY === "auto" || overflowY === "scroll") return parent;
+      parent = parent.parentElement;
+    }
+    return document.scrollingElement ?? document.documentElement;
+  }
+  function readVisibleUserMessageId(root) {
+    const area = viewport(root);
+    const nodes = [...document.querySelectorAll('[data-message-author-role="user"][data-message-id], [data-message-author-role="user"]')];
+    let best = null;
+    for (const node of nodes) {
+      const id = node.dataset.messageId ?? node.closest("[data-message-id]")?.dataset.messageId;
+      if (!id) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom < area.top || rect.top > area.top + area.height) continue;
+      const distance = Math.abs(rect.top - (area.top + 80));
+      if (!best || distance < best.distance) best = { id, distance };
+    }
+    return best?.id ?? null;
+  }
+
+  // src/rail/layout.ts
+  function placeRail(host, root, count) {
+    const main = document.querySelector("main");
+    const bounds = [main, root === document.scrollingElement ? null : root].filter((element) => !!element).map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 100 && rect.height > 100);
+    let right = 60;
+    if (bounds.length) {
+      right = Math.max(44, innerWidth - Math.min(...bounds.map((rect) => rect.right)) + 24);
+    } else {
+      for (const panel of document.querySelectorAll('aside, [role="complementary"], [data-testid*="panel"]')) {
+        const rect = panel.getBoundingClientRect();
+        if (["fixed", "sticky"].includes(getComputedStyle(panel).position) && rect.width > 100 && rect.height > 150 && rect.left > innerWidth / 2 && rect.right > innerWidth - 80) {
+          right = Math.max(right, innerWidth - rect.left + 24);
+        }
+      }
+    }
+    const composer = document.querySelector("#prompt-textarea, form textarea, [data-testid*='composer' i]");
+    const composerTop = composer?.getBoundingClientRect().top ?? innerHeight - 80;
+    const area = viewport(root);
+    const top = Math.max(90, area.top + 50);
+    const bottomLimit = Math.min(area.top + area.height - 24, composerTop - 24, innerHeight - 24);
+    const available = Math.max(30, bottomLimit - top);
+    const height = Math.min(available, Math.max(count * 4, Math.min(count * 17, available)));
+    host.style.right = `${Math.min(Math.max(8, innerWidth - 70), right)}px`;
+    host.style.top = `${top + Math.max(0, (available - height) / 2)}px`;
+    host.style.height = `${height}px`;
+  }
+
+  // src/ui/theme.ts
+  function detectYadaTheme() {
+    const html = document.documentElement;
+    const themeAttr = safeGetAttribute(html, "data-theme") ?? safeGetAttribute(document.body, "data-theme");
+    if (themeAttr?.toLowerCase().includes("dark")) return "dark";
+    if (themeAttr?.toLowerCase().includes("light")) return "light";
+    if (html.classList.contains("dark")) return "dark";
+    if (html.classList.contains("light")) return "light";
+    const colorScheme = getComputedStyle(html).colorScheme;
+    if (colorScheme.includes("dark")) return "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function safeGetAttribute(node, name) {
+    return node instanceof Element ? node.getAttribute(name) : null;
+  }
+  function observeYadaTheme(onChange) {
+    const applyTheme = () => onChange(detectYadaTheme());
+    const observer = new MutationObserver(applyTheme);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", applyTheme);
+    applyTheme();
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", applyTheme);
+    };
+  }
+
+  // src/rail/preview.ts
+  function formatPreviewTime(seconds) {
+    if (seconds === void 0 || !Number.isFinite(seconds)) return "";
+    const date = new Date(seconds * 1e3);
+    if (!Number.isFinite(date.getTime())) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+  function renderPreviewContent(preview, turn, assistant) {
+    const title = document.createElement("strong");
+    title.textContent = `第 ${turn.index + 1} 轮`;
+    const heading = document.createElement("div");
+    heading.className = "preview-header";
+    heading.append(title);
+    const timestamp = formatPreviewTime(turn.userCreatedAt);
+    if (timestamp) {
+      const time = document.createElement("time");
+      time.textContent = timestamp;
+      heading.append(time);
+    }
+    preview.replaceChildren(heading, block("Harson", turn.userPreview));
+    if (assistant) preview.append(block("ChatGPT", turn.assistantPreview || "该轮暂无 ChatGPT 回复"));
+  }
+  function block(role, text) {
+    const section = document.createElement("section");
+    section.dataset.previewRole = role;
+    const label = document.createElement("strong");
+    label.textContent = role;
+    const summary = document.createElement("p");
+    summary.textContent = text;
+    section.append(label, summary);
+    return section;
+  }
+
+  // src/rail/view.ts
+  var RAIL_HOST_ID = "chatgpt-yada-rail-host";
+  var RailView = class {
+    host = document.createElement("div");
+    marks = document.createElement("div");
+    preview = document.createElement("div");
+    turns = [];
+    buttons = [];
+    active = -1;
+    hovered = -1;
+    assistant = false;
+    timer = 0;
+    statusTimer = 0;
+    themeDispose = null;
+    constructor(onJump) {
+      document.querySelectorAll(`[id="${RAIL_HOST_ID}"]`).forEach((node) => node.remove());
+      this.host.id = RAIL_HOST_ID;
+      this.host.dataset.yadaRoot = "true";
+      this.host.setAttribute("data-yada-theme", detectYadaTheme());
+      const shadow = this.host.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = `
+      :host { position: fixed; width: 58px; z-index: 2147483400; font: 12px/1.5 system-ui; --text:#303030; --bg:#fff; --bar:#aaa8; color:var(--text); background: transparent; }
+      :host([hidden]) { display:none; }
+      :host([data-yada-theme="dark"]) { --text:#eee; --bg:#272727; --bar:#aaa7; color-scheme:dark; }
+      .marks { height:100%; display:flex; flex-direction:column; background: transparent; }
+      .mark { position:relative; flex:1 1 0; min-height:0; padding:0; border:0; width:58px; background:transparent; display:flex; align-items:center; justify-content:flex-end; cursor:pointer; outline-offset:2px; }
+      .mark-bar { display:block; height:1px; width:16px; border-radius:2px; background:var(--bar); transition:width .12s, background .12s; }
+      .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
+      .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
+      .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
+      .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
+      .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
+      .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
+      .mark[data-distance="0"] .mark-bar { width:33px; background:#10a37f; height:2px; }
+      .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
+      .preview[hidden] { display:none; }
+      .preview strong { display:block; margin-bottom:4px; font-size:11px; }
+      .preview section strong { color:#10a37f; font-weight:700; }
+      .preview-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; }
+      .preview-header strong { margin:0; white-space:nowrap; }
+      .preview time { white-space:nowrap; opacity:.7; }
+      .preview section + section { margin-top:8px; }
+      .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+      .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
+      @media (prefers-reduced-motion:reduce) { .mark-bar { transition:none; } }
+    `;
+      this.marks.className = "marks";
+      this.marks.dataset.marks = "true";
+      this.marks.setAttribute("role", "navigation");
+      this.marks.setAttribute("aria-label", "对话轮次");
+      this.preview.className = "preview";
+      this.preview.hidden = true;
+      this.preview.style.pointerEvents = "none";
+      shadow.append(style, this.marks, this.preview);
+      document.documentElement.append(this.host);
+      this.host.hidden = true;
+      this.marks.addEventListener("pointermove", (event) => {
+        const rect = this.marks.getBoundingClientRect();
+        if (!rect.height || !this.turns.length) return;
+        this.hover(Math.max(0, Math.min(this.turns.length - 1, Math.floor((event.clientY - rect.top) / rect.height * this.turns.length))));
+      });
+      this.marks.addEventListener("pointerleave", () => this.clearHover());
+      this.marks.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        const turn = button && this.turns[Number(button.dataset.index)];
+        if (turn) onJump(turn.userMessageId ?? turn.id);
+      });
+      this.marks.addEventListener("focusin", (event) => {
+        const button = event.target.closest("button");
+        if (button) this.hover(Number(button.dataset.index));
+      });
+      this.marks.addEventListener("focusout", () => this.clearHover());
+      this.themeDispose = observeYadaTheme((theme) => this.host.setAttribute("data-yada-theme", theme));
+    }
+    setTurns(turns) {
+      const changed = turns.length !== this.turns.length || turns.some((turn, index) => (turn.userMessageId ?? turn.id) !== (this.turns[index]?.userMessageId ?? this.turns[index]?.id));
+      this.turns = turns;
+      if (!changed) {
+        if (this.hovered >= 0) this.showPreview();
+        this.host.hidden = !turns.length;
+        return;
+      }
+      this.clearHover();
+      this.active = -1;
+      this.buttons = turns.map((turn) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "mark";
+        button.dataset.index = String(turn.index);
+        button.setAttribute("aria-label", `跳到第 ${turn.index + 1} 轮`);
+        const number = document.createElement("span");
+        number.className = "number";
+        number.textContent = String(turn.index + 1);
+        const bar = document.createElement("span");
+        bar.className = "mark-bar";
+        button.append(number, bar);
+        return button;
+      });
+      this.marks.replaceChildren(...this.buttons);
+      this.host.hidden = !turns.length;
+    }
+    setStatus(message) {
+      window.clearTimeout(this.statusTimer);
+      this.host.title = message;
+      let status = this.host.shadowRoot.querySelector('[role="status"]');
+      if (!status) {
+        status = document.createElement("div");
+        status.setAttribute("role", "status");
+        status.style.cssText = "position:absolute;right:64px;top:0;white-space:nowrap;background:var(--bg);padding:4px 8px;border-radius:6px;pointer-events:none";
+        this.host.shadowRoot.append(status);
+      }
+      status.textContent = message;
+      status.hidden = !message;
+      if (message && message !== "定位中") this.statusTimer = window.setTimeout(() => this.setStatus(""), 1800);
+    }
+    setActive(index) {
+      if (this.active === index) return;
+      const old = this.buttons[this.active];
+      if (old) {
+        delete old.dataset.active;
+        old.removeAttribute("aria-current");
+      }
+      this.active = index;
+      const next = this.buttons[index];
+      if (next) {
+        next.dataset.active = "true";
+        next.setAttribute("aria-current", "step");
+      }
+    }
+    setPreviewMode(assistant) {
+      this.assistant = assistant;
+      if (this.hovered >= 0) this.showPreview();
+    }
+    clearHover() {
+      window.clearTimeout(this.timer);
+      this.timer = 0;
+      for (const button of this.buttons.slice(Math.max(0, this.hovered - 3), this.hovered + 4)) delete button.dataset.distance;
+      this.hovered = -1;
+      this.preview.hidden = true;
+    }
+    dispose() {
+      window.clearTimeout(this.statusTimer);
+      this.clearHover();
+      this.themeDispose?.();
+      this.host.remove();
+    }
+    previewIndex(index) {
+      this.hover(index);
+    }
+    hover(index) {
+      if (index === this.hovered || !this.turns[index]) return;
+      this.clearHover();
+      this.hovered = index;
+      for (let n = Math.max(0, index - 3); n <= Math.min(this.buttons.length - 1, index + 3); n++) {
+        this.buttons[n].dataset.distance = String(Math.abs(n - index));
+      }
+      this.preview.dataset.expanded = "false";
+      this.showPreview();
+      this.timer = window.setTimeout(() => {
+        this.preview.dataset.expanded = "true";
+        this.showPreview();
+      }, 1e3);
+    }
+    showPreview() {
+      const turn = this.turns[this.hovered];
+      const button = this.buttons[this.hovered];
+      if (!turn || !button) return;
+      renderPreviewContent(this.preview, turn, this.assistant);
+      this.preview.hidden = false;
+      const rect = button.getBoundingClientRect();
+      const width = this.preview.getBoundingClientRect().width || Math.min(340, innerWidth - 24);
+      this.preview.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.left - width - 12))}px`;
+      this.preview.style.maxHeight = `${innerHeight - 16}px`;
+      const height = this.preview.getBoundingClientRect().height;
+      this.preview.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, rect.top + rect.height / 2 - height / 2))}px`;
+    }
+  };
+
+  // src/rail/controller.ts
+  var YadaRailController = class {
+    constructor(repository, navigator2) {
+      this.repository = repository;
+      this.navigator = navigator2;
+      this.view = new RailView((id) => {
+        void this.jump(id);
+      });
+    }
+    view;
+    suppressor = new OfficialNavSuppressor();
+    unsubscribe = null;
+    snapshot = null;
+    root = null;
+    disposed = false;
+    raf = 0;
+    jumping = false;
+    mount() {
+      this.unsubscribe = this.repository.subscribe((snapshot) => this.onSnapshot(snapshot));
+      window.addEventListener("resize", this.onLayout, { passive: true });
+      window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
+      this.root = findScrollRoot();
+      this.root.addEventListener("scroll", this.onScroll, { passive: true });
+    }
+    setPreviewMode(assistant) {
+      this.view.setPreviewMode(assistant);
+    }
+    clear() {
+      this.snapshot = null;
+      this.view.setTurns([]);
+      this.view.clearHover();
+      this.suppressor.disable();
+    }
+    dispose() {
+      this.disposed = true;
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+      window.cancelAnimationFrame(this.raf);
+      window.removeEventListener("resize", this.onLayout);
+      window.removeEventListener("scroll", this.onScroll, true);
+      this.root?.removeEventListener("scroll", this.onScroll);
+      this.suppressor.dispose();
+      this.view.dispose();
+    }
+    onSnapshot(snapshot) {
+      if (this.disposed) return;
+      this.snapshot = snapshot;
+      const turns = snapshot?.activeTurns ?? [];
+      this.view.setTurns(turns);
+      if (turns.length) {
+        this.suppressor.enable();
+        this.layout();
+        this.syncActive();
+      } else {
+        this.suppressor.disable();
+      }
+    }
+    async jump(turnId) {
+      if (this.jumping) this.navigator.cancel();
+      this.jumping = true;
+      this.view.setStatus("定位中");
+      try {
+        const result = await this.navigator.navigateTo(turnId);
+        if (result.status === "cancelled") {
+          this.view.setStatus("");
+          return;
+        }
+        if (!result.ok) {
+          this.view.setStatus("定位失败");
+          return;
+        }
+        this.view.setStatus("");
+        this.syncActive();
+      } finally {
+        this.jumping = false;
+      }
+    }
+    onLayout = () => {
+      this.layout();
+    };
+    onScroll = () => {
+      if (this.raf) return;
+      this.raf = window.requestAnimationFrame(() => {
+        this.raf = 0;
+        this.syncActive();
+      });
+    };
+    layout() {
+      this.root = findScrollRoot();
+      placeRail(this.view.host, this.root, this.snapshot?.activeTurns.length ?? 0);
+    }
+    syncActive() {
+      const turns = this.snapshot?.activeTurns ?? [];
+      if (!turns.length) return;
+      this.root = findScrollRoot();
+      const visibleId = readVisibleUserMessageId(this.root);
+      const index = visibleId ? turns.findIndex((turn) => turn.userMessageId === visibleId || turn.id === visibleId) : -1;
+      if (index >= 0) this.view.setActive(index);
+    }
+  };
+
+  // inline-css:/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-optimization-20260916/gpt/src/prompts/panel.css
+  var panel_default = '/* Modal adapted from GPT Conversation Toolkit. Copyright (c) 2026 bujue3709.\n * MIT; see THIRD_PARTY_NOTICES.md. Compact copy-only UI is a Yada adapter. */\n:host { font:13px/1.5 system-ui; color-scheme:light; }\n:host([hidden]), [hidden] { display:none !important; }\n* { box-sizing:border-box; }\n.yada-prompt-modal { position:fixed; inset:0; z-index:2147483647; --bg:#fff; --text:#303030; --muted:#666; --border:#8884; --hover:#8881; color:var(--text); overscroll-behavior:contain; }\n.yada-prompt-modal[data-toolkit-theme="dark"] { --bg:#272727; --text:#eee; --muted:#bbb; --hover:#fff1; color-scheme:dark; }\n.yada-prompt-backdrop { position:absolute; inset:0; background:#0006; touch-action:none; }\n.yada-prompt-panel { position:absolute; right:20px; bottom:20px; width:min(620px, calc(100vw - 24px)); min-height:0; height:auto; max-height:min(72vh, 680px); display:flex; flex-direction:column; gap:12px; padding:16px; overflow:hidden; background:var(--bg); border:1px solid var(--border); border-radius:16px; box-shadow:0 12px 40px #0003; }\n.yada-prompt-header, .yada-prompt-item-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }\n.yada-prompt-header { flex-shrink:0; }\n.yada-prompt-header strong { font-size:16px; }\n.yada-prompt-header-actions, .yada-prompt-item-actions { display:flex; gap:4px; flex-shrink:0; }\nbutton { font:inherit; color:inherit; background:transparent; border:1px solid var(--border); border-radius:8px; padding:5px 9px; cursor:pointer; }\nbutton:hover { background:var(--hover); }\nbutton:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px solid #10a37f; outline-offset:2px; }\n[data-prompt-action="add"], .yada-prompt-add { color:#fff; background:#10a37f; border-color:#10a37f; }\n[data-prompt-action="add"]:hover, .yada-prompt-add:hover { background:#0c8567; }\n.yada-prompt-list { min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:10px; scrollbar-width:thin; }\n.yada-prompt-item { border:1px solid var(--border); border-radius:10px; padding:10px 12px; flex-shrink:0; cursor:default; }\n.yada-prompt-item-title { margin:0; font-size:13px; overflow-wrap:anywhere; min-width:0; }\n.yada-prompt-icon { width:30px; height:30px; padding:6px; border-color:transparent; display:grid; place-items:center; }\n.yada-prompt-icon[data-prompt-action="delete"] { color:#c86464; }\n.yada-prompt-item-content { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }\n.yada-prompt-empty { margin:0; padding:12px; text-align:center; color:var(--muted); }\n.yada-prompt-editor { display:grid; grid-template-columns:1fr 1fr; gap:10px; min-height:0; flex-shrink:0; }\n.yada-prompt-editor input, .yada-prompt-editor textarea { grid-column:1 / -1; width:100%; background:var(--bg); color:inherit; border:1px solid var(--border); border-radius:8px; padding:8px; font:inherit; }\n.yada-prompt-editor textarea { height:clamp(50px, 20vh, 180px); min-height:0; resize:none; overscroll-behavior:contain; }\n[role="alert"] { margin:0; color:#c86464; }\n.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }\n@media (max-width:640px) { .yada-prompt-panel { right:12px; bottom:12px; } .yada-prompt-header { gap:6px; } }\n';
+
+  // src/export/clipboard.ts
+  async function writeTextToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      fallbackCopy(text);
+    }
+  }
+  function fallbackCopy(text) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-1000px";
+    textarea.style.left = "-1000px";
+    document.documentElement.append(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    textarea.remove();
+    if (!ok) throw new Error("Clipboard fallback failed");
+  }
+
+  // src/prompts/storage.ts
+  var PROMPT_KEY = "chatgpt-yada:prompt-library:v1";
+  var PREVIEW_KEY = "chatgpt-yada:preview-assistant:v1";
+  function parseLibrary(value) {
+    if (value === void 0) return { version: 1, prompts: [] };
+    if (!value || typeof value !== "object") throw new Error("提示词数据无效");
+    const data = value;
+    if (data.version !== 1 || !Array.isArray(data.prompts)) throw new Error("提示词版本不支持");
+    const ids = /* @__PURE__ */ new Set();
+    for (const p of data.prompts) {
+      if (!p || typeof p.id !== "string" || !p.id || ids.has(p.id) || typeof p.title !== "string" || typeof p.content !== "string" || !Number.isFinite(p.createdAt) || !Number.isFinite(p.updatedAt)) throw new Error("提示词数据无效");
+      ids.add(p.id);
+    }
+    return data;
+  }
+  async function readLibrary() {
+    return parseLibrary((await chrome.storage.local.get(PROMPT_KEY))[PROMPT_KEY]);
+  }
+  async function saveLibrary(library) {
+    await chrome.storage.local.set({ [PROMPT_KEY]: parseLibrary(library) });
+  }
+
+  // src/prompts/panel.ts
+  var svg = (body) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  var ICONS = {
+    copy: svg('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),
+    edit: svg('<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>'),
+    delete: svg('<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>'),
+    check: svg('<path d="m5 12 4 4L19 6"/>')
+  };
+  var PROMPT_HOST_ID = "chatgpt-yada-prompt-host";
+  var PromptPanel = class {
+    constructor(button) {
+      this.button = button;
+      document.getElementById(PROMPT_HOST_ID)?.remove();
+      this.host.id = PROMPT_HOST_ID;
+      this.host.dataset.yadaRoot = "true";
+      this.host.hidden = true;
+      this.root = this.host.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = panel_default;
+      this.modal = document.createElement("section");
+      this.modal.className = "yada-prompt-modal is-visible";
+      this.modal.innerHTML = `
       <div class="yada-prompt-backdrop" data-prompt-action="close"></div>
       <div class="yada-prompt-panel" role="dialog" aria-modal="true" aria-label="提示词收藏库">
         <div class="yada-prompt-header"><strong>提示词收藏库</strong>
@@ -45,23 +3979,362 @@ ${n}
         </form>
         <p class="sr-only" role="status" aria-live="polite"></p>
         <p role="alert" hidden></p>
-      </div>`,this.root.append(e,this.modal),document.body.append(this.host),this.modal.dataset.toolkitTheme=E(),this.disposeTheme=P(i=>{this.modal.dataset.toolkitTheme=i}),t.addEventListener("click",this.toggle),this.modal.addEventListener("click",this.handleClick),this.query("form").addEventListener("submit",i=>{i.preventDefault(),this.saveEditor()}),document.addEventListener("pointerdown",this.outside,!0),document.addEventListener("keydown",this.keydown,!0),this.modal.addEventListener("wheel",this.stopPageScroll,{passive:!1}),this.modal.addEventListener("touchmove",this.stopPageScroll,{passive:!1})}query(t){return this.root.querySelector(t)}dispose(){this.disposed=!0,this.close(),this.disposeTheme(),this.host.remove(),this.button.removeEventListener("click",this.toggle),document.removeEventListener("pointerdown",this.outside,!0),document.removeEventListener("keydown",this.keydown,!0)}renderList(){const t=[...this.library.prompts].sort((i,o)=>o.updatedAt-i.updatedAt),e=this.query(".yada-prompt-list");e.replaceChildren(),e.hidden=!1,this.query(".yada-prompt-empty").hidden=t.length>0;const n=document.createDocumentFragment();for(const i of t){const o=document.createElement("article");o.className="yada-prompt-item",o.dataset.promptId=i.id;const s=document.createElement("div");s.className="yada-prompt-item-header";const d=document.createElement("h4");d.className="yada-prompt-item-title",d.textContent=i.title;const c=document.createElement("p");c.className="yada-prompt-item-content",c.textContent=i.content;const u=document.createElement("div");u.className="yada-prompt-item-actions",u.append(this.action("复制提示词","copy",i.id),this.action("编辑提示词","edit",i.id),this.action("删除提示词","delete",i.id)),s.append(d,u),o.append(s,c),n.append(o)}e.append(n)}action(t,e,n){const i=document.createElement("button");return i.type="button",i.className="yada-prompt-icon",i.setAttribute("aria-label",t),i.title=t,i.innerHTML=C[e],i.dataset.promptAction=e,i.dataset.promptId=n,i}edit(t){this.editing=t??null,this.query("form").hidden=!1,this.query(".yada-prompt-list").hidden=!0,this.query(".yada-prompt-empty").hidden=!0,this.query('[name="title"]').value=(t==null?void 0:t.title)??"",this.query('[name="content"]').value=(t==null?void 0:t.content)??"",this.query('[name="title"]').focus()}async saveEditor(){const t=this.query('[name="title"]').value.trim(),e=this.query('[name="content"]').value;if(!t||!e.trim()||this.busy)return;const n=this.editing,i=Date.now(),o={id:(n==null?void 0:n.id)??crypto.randomUUID(),title:t,content:e,createdAt:(n==null?void 0:n.createdAt)??i,updatedAt:i};await this.persist({version:1,prompts:n?this.library.prompts.map(s=>s.id===n.id?o:s):[...this.library.prompts,o]})}async persist(t){if(this.busy)return;this.busy=!0;const e=this.generation;try{await Ht(t),this.library=t,!this.disposed&&e===this.generation&&(this.renderList(),this.query("form").hidden=!0)}catch{e===this.generation&&this.error("保存失败，内容仍保留，请重试。")}finally{this.busy=!1}}async copy(t,e){const n=this.generation;try{if(await Y(t.content),this.disposed||n!==this.generation||!e.isConnected)return;clearTimeout(this.copyTimers.get(e)),e.innerHTML=C.check,this.query('[role="status"]').textContent="提示词已复制",this.copyTimers.set(e,window.setTimeout(()=>{e.innerHTML=C.copy,this.copyTimers.delete(e),this.query('[role="status"]').textContent=""},1300))}catch{n===this.generation&&this.error("复制失败，请重试。")}}error(t){const e=this.query('[role="alert"]');e.textContent=t,e.hidden=!1}}function jt(r){const t=r.map(Gt).filter(Boolean).join(`
+      </div>`;
+      this.root.append(style, this.modal);
+      document.body.append(this.host);
+      this.modal.dataset.toolkitTheme = detectYadaTheme();
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.modal.dataset.toolkitTheme = theme;
+      });
+      button.addEventListener("click", this.toggle);
+      this.modal.addEventListener("click", this.handleClick);
+      this.query("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        void this.saveEditor();
+      });
+      document.addEventListener("pointerdown", this.outside, true);
+      document.addEventListener("keydown", this.keydown, true);
+      this.modal.addEventListener("wheel", this.stopPageScroll, { passive: false });
+      this.modal.addEventListener("touchmove", this.stopPageScroll, { passive: false });
+    }
+    host = document.createElement("div");
+    root;
+    modal;
+    library = { version: 1, prompts: [] };
+    copyTimers = /* @__PURE__ */ new Map();
+    generation = 0;
+    busy = false;
+    disposed = false;
+    editing = null;
+    disposeTheme;
+    stopPageScroll = (event) => {
+      const node = event.target instanceof Element ? event.target : null;
+      const scrollable = node?.closest(".yada-prompt-list, textarea");
+      if (!scrollable || scrollable.scrollHeight <= scrollable.clientHeight) {
+        event.preventDefault();
+        return;
+      }
+      if (event instanceof WheelEvent && (event.deltaY < 0 && scrollable.scrollTop <= 0 || event.deltaY > 0 && scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight)) event.preventDefault();
+    };
+    query(selector) {
+      return this.root.querySelector(selector);
+    }
+    close = () => {
+      this.generation++;
+      for (const [button, timer] of this.copyTimers) {
+        clearTimeout(timer);
+        button.innerHTML = ICONS.copy;
+      }
+      this.copyTimers.clear();
+      this.host.hidden = true;
+      this.button.setAttribute("aria-expanded", "false");
+    };
+    dispose() {
+      this.disposed = true;
+      this.close();
+      this.disposeTheme();
+      this.host.remove();
+      this.button.removeEventListener("click", this.toggle);
+      document.removeEventListener("pointerdown", this.outside, true);
+      document.removeEventListener("keydown", this.keydown, true);
+    }
+    toggle = async () => {
+      if (!this.host.hidden) {
+        this.close();
+        return;
+      }
+      const generation = ++this.generation;
+      if (!this.host.isConnected) document.body.append(this.host);
+      this.host.hidden = false;
+      this.button.setAttribute("aria-expanded", "true");
+      this.query('[role="alert"]').hidden = true;
+      this.query("form").hidden = true;
+      try {
+        const library = await readLibrary();
+        if (this.disposed || generation !== this.generation) return;
+        this.library = library;
+        this.renderList();
+        this.query('[data-prompt-action="add"]').focus();
+      } catch {
+        if (generation === this.generation) this.error("无法读取提示词，请重新打开重试。");
+      }
+    };
+    outside = (event) => {
+      if (!this.host.hidden && !event.composedPath().includes(this.host) && !event.composedPath().includes(this.button)) this.close();
+    };
+    keydown = (event) => {
+      if (this.host.hidden) return;
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        this.close();
+        this.button.focus();
+      }
+      if (event.key === "Tab") {
+        const items = [...this.modal.querySelectorAll("button, input, textarea")].filter((e) => e.getClientRects().length && !e.disabled);
+        const first = items[0], last = items.at(-1), active = this.root.activeElement;
+        if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    handleClick = (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const action = target?.closest("[data-prompt-action]");
+      if (!action || this.host.hidden) return;
+      const kind = action.dataset.promptAction;
+      if (kind === "close") {
+        this.close();
+        this.button.focus();
+        return;
+      }
+      if (this.busy) return;
+      const prompt = this.library.prompts.find((item) => item.id === action.dataset.promptId);
+      if (kind === "add") this.edit();
+      if (kind === "cancel") {
+        this.query("form").hidden = true;
+        this.renderList();
+      }
+      if (kind === "edit" && prompt) this.edit(prompt);
+      if (kind === "delete" && prompt) void this.persist({ version: 1, prompts: this.library.prompts.filter((item) => item.id !== prompt.id) });
+      if (kind === "copy" && prompt) void this.copy(prompt, action);
+    };
+    renderList() {
+      const items = [...this.library.prompts].sort((a, b) => b.updatedAt - a.updatedAt);
+      const list = this.query(".yada-prompt-list");
+      list.replaceChildren();
+      list.hidden = false;
+      this.query(".yada-prompt-empty").hidden = items.length > 0;
+      const fragment = document.createDocumentFragment();
+      for (const item of items) {
+        const article = document.createElement("article");
+        article.className = "yada-prompt-item";
+        article.dataset.promptId = item.id;
+        const header = document.createElement("div");
+        header.className = "yada-prompt-item-header";
+        const title = document.createElement("h4");
+        title.className = "yada-prompt-item-title";
+        title.textContent = item.title;
+        const content = document.createElement("p");
+        content.className = "yada-prompt-item-content";
+        content.textContent = item.content;
+        const actions = document.createElement("div");
+        actions.className = "yada-prompt-item-actions";
+        actions.append(this.action("复制提示词", "copy", item.id), this.action("编辑提示词", "edit", item.id), this.action("删除提示词", "delete", item.id));
+        header.append(title, actions);
+        article.append(header, content);
+        fragment.append(article);
+      }
+      list.append(fragment);
+    }
+    action(text, action, id) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "yada-prompt-icon";
+      button.setAttribute("aria-label", text);
+      button.title = text;
+      button.innerHTML = ICONS[action];
+      button.dataset.promptAction = action;
+      button.dataset.promptId = id;
+      return button;
+    }
+    edit(prompt) {
+      this.editing = prompt ?? null;
+      this.query("form").hidden = false;
+      this.query(".yada-prompt-list").hidden = true;
+      this.query(".yada-prompt-empty").hidden = true;
+      this.query('[name="title"]').value = prompt?.title ?? "";
+      this.query('[name="content"]').value = prompt?.content ?? "";
+      this.query('[name="title"]').focus();
+    }
+    async saveEditor() {
+      const title = this.query('[name="title"]').value.trim();
+      const content = this.query('[name="content"]').value;
+      if (!title || !content.trim() || this.busy) return;
+      const previous = this.editing, now = Date.now();
+      const item = { id: previous?.id ?? crypto.randomUUID(), title, content, createdAt: previous?.createdAt ?? now, updatedAt: now };
+      await this.persist({ version: 1, prompts: previous ? this.library.prompts.map((p) => p.id === previous.id ? item : p) : [...this.library.prompts, item] });
+    }
+    async persist(next) {
+      if (this.busy) return;
+      this.busy = true;
+      const generation = this.generation;
+      try {
+        await saveLibrary(next);
+        this.library = next;
+        if (!this.disposed && generation === this.generation) {
+          this.renderList();
+          this.query("form").hidden = true;
+        }
+      } catch {
+        if (generation === this.generation) this.error("保存失败，内容仍保留，请重试。");
+      } finally {
+        this.busy = false;
+      }
+    }
+    async copy(prompt, button) {
+      const generation = this.generation;
+      try {
+        await writeTextToClipboard(prompt.content);
+        if (this.disposed || generation !== this.generation || !button.isConnected) return;
+        clearTimeout(this.copyTimers.get(button));
+        button.innerHTML = ICONS.check;
+        this.query('[role="status"]').textContent = "提示词已复制";
+        this.copyTimers.set(button, window.setTimeout(() => {
+          button.innerHTML = ICONS.copy;
+          this.copyTimers.delete(button);
+          this.query('[role="status"]').textContent = "";
+        }, 1300));
+      } catch {
+        if (generation === this.generation) this.error("复制失败，请重试。");
+      }
+    }
+    error(message) {
+      const alert = this.query('[role="alert"]');
+      alert.textContent = message;
+      alert.hidden = false;
+    }
+  };
 
-`).replace(/\n{4,}/g,`
+  // src/export/markdownFormatter.ts
+  function formatTurnsAsMarkdown(turns) {
+    const markdown = turns.map(formatTurn).filter(Boolean).join("\n\n").replace(/\n{4,}/g, "\n\n\n").trim();
+    return markdown ? `${markdown}
+` : "";
+  }
+  function formatTurn(turn) {
+    const sections = [
+      formatSection("User", turn.userMarkdown, turn.userCreatedAt),
+      formatSection("ChatGPT", turn.assistantMarkdown, turn.assistantCreatedAt)
+    ].filter(Boolean);
+    return sections.join("\n\n");
+  }
+  function formatSection(role, markdown, createdAt) {
+    const content = markdown.trim();
+    if (!content) return "";
+    const timestamp = formatTimestamp(createdAt);
+    return `# ${role}
 
+${timestamp ? `${timestamp}
 
-`).trim();return t?`${t}
-`:""}function Gt(r){return[K("User",r.userMarkdown,r.userCreatedAt),K("ChatGPT",r.assistantMarkdown,r.assistantCreatedAt)].filter(Boolean).join(`
+` : ""}${content}`;
+  }
+  function formatTimestamp(seconds) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "";
+    const date = new Date(seconds * 1e3);
+    if (!Number.isFinite(date.getTime())) return "";
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${String(date.getFullYear()).padStart(4, "0")}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
 
-`)}function K(r,t,e){const n=t.trim();if(!n)return"";const i=Yt(e);return`# ${r}
+  // src/styles.ts
+  var YADA_ACCENT = "#10A37F";
+  var YADA_ACCENT_SOFT = "rgba(16, 163, 127, 0.14)";
+  var YADA_TOOLBAR_HOST_ID = "chatgpt-yada-toolbar-host";
 
-${i?`${i}
-
-`:""}${n}`}function Yt(r){if(typeof r!="number"||!Number.isFinite(r))return"";const t=new Date(r*1e3);if(!Number.isFinite(t.getTime()))return"";const e=n=>String(n).padStart(2,"0");return`${String(t.getFullYear()).padStart(4,"0")}-${e(t.getMonth()+1)}-${e(t.getDate())} ${e(t.getHours())}:${e(t.getMinutes())}:${e(t.getSeconds())}`}class Vt{constructor(t=()=>{}){a(this,"host",null);a(this,"shadow",null);a(this,"disposeTheme",null);a(this,"copyResetTimer",0);a(this,"copyBusy",!1);a(this,"placementObserver",null);a(this,"placementTimer",0);a(this,"prompts",null);a(this,"previewAssistant",!1);a(this,"handleViewportChange",()=>{this.ensurePlacement()});this.onPreviewMode=t}closePanels(){var t;(t=this.prompts)==null||t.close()}mount(){var i,o,s;if((i=this.host)!=null&&i.isConnected)return;(o=document.getElementById(U))==null||o.remove(),this.host=document.createElement("div"),this.host.id=U,this.host.dataset.yadaRoot="true",this.host.dataset.placement="fixed",this.host.dataset.visible="false",this.host.setAttribute("data-yada-theme",E()),this.shadow=this.host.attachShadow({mode:"open"}),document.documentElement.append(this.host),this.render(),(s=this.query("[data-copy-all]"))==null||s.addEventListener("click",()=>{this.copyAll()}),this.prompts=new Ut(this.query("[data-prompts]"));const t=this.query("[data-preview-mode]"),e=()=>{t.setAttribute("aria-pressed",String(this.previewAssistant)),t.title=this.previewAssistant?"预览：User + ChatGPT":"预览：User",t.setAttribute("aria-label",t.title),this.onPreviewMode(this.previewAssistant)};let n=!1;chrome.storage.local.get(L).then(d=>{!this.host||n||(this.previewAssistant=d[L]===!0,e())}).catch(()=>e()),t.addEventListener("click",()=>{n=!0,this.previewAssistant=!this.previewAssistant,e(),chrome.storage.local.set({[L]:this.previewAssistant}).catch(()=>{t.title="预览模式保存失败，下次打开将恢复旧设置"})}),this.disposeTheme=P(d=>{var c;(c=this.host)==null||c.setAttribute("data-yada-theme",d)}),this.placementObserver=new MutationObserver(()=>this.schedulePlacement()),this.placementObserver.observe(document.body,{childList:!0,subtree:!0}),window.addEventListener("resize",this.handleViewportChange,{passive:!0}),this.ensurePlacement()}setVisible(t){var e;(e=this.host)==null||e.setAttribute("data-visible",t?"true":"false")}ensurePlacement(){if(!this.host)return;const t=Wt();if(t){this.host.parentElement!==t&&t.insertBefore(this.host,t.firstElementChild),this.host.dataset.placement="inline";return}this.host.parentElement!==document.documentElement&&document.documentElement.append(this.host),this.host.dataset.placement="fixed"}dispose(){var t,e,n,i;(t=this.prompts)==null||t.dispose(),window.clearTimeout(this.copyResetTimer),window.clearTimeout(this.placementTimer),(e=this.placementObserver)==null||e.disconnect(),(n=this.disposeTheme)==null||n.call(this),window.removeEventListener("resize",this.handleViewportChange),(i=this.host)==null||i.remove(),this.host=null,this.shadow=null}render(){this.shadow&&(this.shadow.innerHTML=`
+  // src/ui/toolbar.ts
+  var YadaToolbar = class {
+    constructor(onPreviewMode = () => {
+    }, repository = null) {
+      this.onPreviewMode = onPreviewMode;
+      this.repository = repository;
+    }
+    host = null;
+    shadow = null;
+    disposeTheme = null;
+    copyResetTimer = 0;
+    copyBusy = false;
+    placementObserver = null;
+    placementTimer = 0;
+    prompts = null;
+    previewAssistant = false;
+    closePanels() {
+      this.prompts?.close();
+    }
+    mount() {
+      if (this.host?.isConnected) return;
+      document.getElementById(YADA_TOOLBAR_HOST_ID)?.remove();
+      this.host = document.createElement("div");
+      this.host.id = YADA_TOOLBAR_HOST_ID;
+      this.host.dataset.yadaRoot = "true";
+      this.host.dataset.placement = "fixed";
+      this.host.dataset.visible = "false";
+      this.host.setAttribute("data-yada-theme", detectYadaTheme());
+      this.shadow = this.host.attachShadow({ mode: "open" });
+      document.documentElement.append(this.host);
+      this.render();
+      this.query("[data-copy-all]")?.addEventListener("click", () => {
+        void this.copyAll();
+      });
+      this.prompts = new PromptPanel(this.query("[data-prompts]"));
+      const mode = this.query("[data-preview-mode]");
+      const applyMode = () => {
+        mode.setAttribute("aria-pressed", String(this.previewAssistant));
+        mode.title = this.previewAssistant ? "预览：User + ChatGPT" : "预览：User";
+        mode.setAttribute("aria-label", mode.title);
+        this.onPreviewMode(this.previewAssistant);
+      };
+      let modeTouched = false;
+      void chrome.storage.local.get(PREVIEW_KEY).then((data) => {
+        if (!this.host || modeTouched) return;
+        this.previewAssistant = data[PREVIEW_KEY] === true;
+        applyMode();
+      }).catch(() => applyMode());
+      mode.addEventListener("click", () => {
+        modeTouched = true;
+        this.previewAssistant = !this.previewAssistant;
+        applyMode();
+        void chrome.storage.local.set({ [PREVIEW_KEY]: this.previewAssistant }).catch(() => {
+          mode.title = "预览模式保存失败，下次打开将恢复旧设置";
+        });
+      });
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.host?.setAttribute("data-yada-theme", theme);
+      });
+      this.placementObserver = new MutationObserver(() => this.schedulePlacement());
+      this.placementObserver.observe(document.body, { childList: true, subtree: true });
+      window.addEventListener("resize", this.handleViewportChange, { passive: true });
+      this.ensurePlacement();
+    }
+    setVisible(visible) {
+      this.host?.setAttribute("data-visible", visible ? "true" : "false");
+    }
+    ensurePlacement() {
+      if (!this.host) return;
+      const target = findHeaderActions();
+      if (target) {
+        if (this.host.parentElement !== target) {
+          target.insertBefore(this.host, target.firstElementChild);
+        }
+        this.host.dataset.placement = "inline";
+        return;
+      }
+      if (this.host.parentElement !== document.documentElement) {
+        document.documentElement.append(this.host);
+      }
+      this.host.dataset.placement = "fixed";
+    }
+    dispose() {
+      this.prompts?.dispose();
+      window.clearTimeout(this.copyResetTimer);
+      window.clearTimeout(this.placementTimer);
+      this.placementObserver?.disconnect();
+      this.disposeTheme?.();
+      window.removeEventListener("resize", this.handleViewportChange);
+      this.host?.remove();
+      this.host = null;
+      this.shadow = null;
+    }
+    render() {
+      if (!this.shadow) return;
+      this.shadow.innerHTML = `
       <style>
         :host {
-          --yada-primary: ${Mt};
-          --yada-primary-soft: ${It};
+          --yada-primary: ${YADA_ACCENT};
+          --yada-primary-soft: ${YADA_ACCENT_SOFT};
           --yada-text: #202123;
           --yada-muted: rgba(32, 33, 35, 0.64);
           --yada-button-bg: rgba(255, 255, 255, 0.68);
@@ -147,4 +4420,185 @@ ${i?`${i}
       <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
-    `)}async copyAll(){if(!this.copyBusy){this.copyBusy=!0,this.setCopyState("pending","复制中...",0);try{const t=await N(),e=jt(t.turns);if(!e){this.setCopyState("empty","没有可复制内容");return}await Y(e),this.setCopyState("success",`已复制 ${t.turns.length} 轮`)}catch(t){console.error("ChatGPT Yada: copy all failed",t),this.setCopyState("error","复制失败")}finally{this.copyBusy=!1;const t=this.query("[data-copy-all]");(t==null?void 0:t.dataset.state)!=="pending"&&(t==null||t.removeAttribute("disabled"))}}}setCopyState(t,e="复制全部",n=1800){window.clearTimeout(this.copyResetTimer);const i=this.query("[data-copy-all]");i&&(i.dataset.state=t,i.textContent=e,i.disabled=t==="pending",n>0&&t!=="idle"&&(this.copyResetTimer=window.setTimeout(()=>{i.isConnected&&(i.dataset.state="idle",i.textContent="复制全部",i.disabled=!1)},n)))}schedulePlacement(){window.clearTimeout(this.placementTimer),this.placementTimer=window.setTimeout(()=>this.ensurePlacement(),180)}query(t){var e;return((e=this.shadow)==null?void 0:e.querySelector(t))??null}}function Wt(){const r=document.querySelector("#page-header #conversation-header-actions");if(r)return r;const t=["#conversation-header-actions",'[data-testid="conversation-header-actions"]','header [aria-label*="Share" i]','header [data-testid*="share" i]',"main ~ div header button"];for(const i of t){const o=document.querySelector(i),s=o==null?void 0:o.parentElement;if(s&&X(s))return s}const e=document.querySelector("header"),n=e==null?void 0:e.querySelector('button, [role="button"]');return n!=null&&n.parentElement&&X(n.parentElement)?n.parentElement:null}function X(r){const t=r.getBoundingClientRect();return t.width>0&&t.height>0&&t.top<120&&t.right>window.innerWidth*.45}function Kt(r){let t=location.href,e=0;const n=()=>{const o=location.href;if(o!==t){const s=t;t=o,r(o,s)}},i=()=>{n(),e=requestAnimationFrame(i)};return e=requestAnimationFrame(i),window.addEventListener("popstate",n),window.addEventListener("hashchange",n),()=>{cancelAnimationFrame(e),window.removeEventListener("popstate",n),window.removeEventListener("hashchange",n)}}class Xt{constructor(){a(this,"nativePreview",null);a(this,"toolbar",null);a(this,"routeDispose",null);a(this,"dispose",()=>{var t,e,n;(t=this.routeDispose)==null||t.call(this),this.routeDispose=null,(e=this.nativePreview)==null||e.dispose(),this.nativePreview=null,(n=this.toolbar)==null||n.dispose(),this.toolbar=null})}mount(){this.nativePreview=new Dt,this.toolbar=new Vt(t=>{var e;return(e=this.nativePreview)==null?void 0:e.setPreviewMode(t)}),this.toolbar.mount(),this.syncPageState(),this.routeDispose=Kt(()=>{var t;(t=this.toolbar)==null||t.closePanels(),this.syncPageState()})}syncPageState(){var e,n,i,o,s;(e=this.toolbar)==null||e.ensurePlacement(),(n=this.toolbar)==null||n.setVisible(f());const t=(o=(i=document.getElementById("chatgpt-yada-toolbar-host"))==null?void 0:i.shadowRoot)==null?void 0:o.querySelector("[data-copy-all]");t&&(t.hidden=!w()),(s=this.nativePreview)==null||s.syncRoute()}}if(f()){const r="__chatgptYadaDispose",t=globalThis;(J=t[r])==null||J.call(t);const e=new Xt;e.mount();const n=()=>e.dispose(),i=o=>{o.persisted&&(e.dispose(),e.mount())};window.addEventListener("pagehide",n),window.addEventListener("pageshow",i),t[r]=()=>{e.dispose(),window.removeEventListener("pagehide",n),window.removeEventListener("pageshow",i)}}})();
+    `;
+    }
+    async copyAll() {
+      if (this.copyBusy) return;
+      this.copyBusy = true;
+      this.setCopyState("pending", "复制中...", 0);
+      try {
+        const id = getConversationIdFromUrl();
+        const cached = id ? this.repository?.getSnapshot(id) : this.repository?.getSnapshot();
+        const snapshot = cached ?? (this.repository && id ? await this.repository.load(id) : null) ?? (this.repository ? null : await loadCurrentConversationSnapshot());
+        if (!snapshot) throw new Error("No conversation snapshot");
+        const turns = "activeTurns" in snapshot ? snapshot.activeTurns : snapshot.turns;
+        const markdown = formatTurnsAsMarkdown(turns);
+        if (!markdown) {
+          this.setCopyState("empty", "没有可复制内容");
+          return;
+        }
+        await writeTextToClipboard(markdown);
+        this.setCopyState("success", `已复制 ${turns.length} 轮`);
+      } catch (error) {
+        console.error("ChatGPT Yada: copy all failed", error);
+        this.setCopyState("error", "复制失败");
+      } finally {
+        this.copyBusy = false;
+        const button = this.query("[data-copy-all]");
+        if (button?.dataset.state !== "pending") button?.removeAttribute("disabled");
+      }
+    }
+    setCopyState(state, label = "复制全部", resetAfterMs = 1800) {
+      window.clearTimeout(this.copyResetTimer);
+      const button = this.query("[data-copy-all]");
+      if (!button) return;
+      button.dataset.state = state;
+      button.textContent = label;
+      button.disabled = state === "pending";
+      if (resetAfterMs > 0 && state !== "idle") {
+        this.copyResetTimer = window.setTimeout(() => {
+          if (!button.isConnected) return;
+          button.dataset.state = "idle";
+          button.textContent = "复制全部";
+          button.disabled = false;
+        }, resetAfterMs);
+      }
+    }
+    schedulePlacement() {
+      window.clearTimeout(this.placementTimer);
+      this.placementTimer = window.setTimeout(() => this.ensurePlacement(), 180);
+    }
+    handleViewportChange = () => {
+      this.ensurePlacement();
+    };
+    query(selector) {
+      return this.shadow?.querySelector(selector) ?? null;
+    }
+  };
+  function findHeaderActions() {
+    const direct = document.querySelector("#page-header #conversation-header-actions");
+    if (direct) return direct;
+    const candidates = [
+      "#conversation-header-actions",
+      '[data-testid="conversation-header-actions"]',
+      'header [aria-label*="Share" i]',
+      'header [data-testid*="share" i]',
+      "main ~ div header button"
+    ];
+    for (const selector of candidates) {
+      const element = document.querySelector(selector);
+      const parent = element?.parentElement;
+      if (parent && isUsableHeaderTarget(parent)) return parent;
+    }
+    const header = document.querySelector("header");
+    const button = header?.querySelector('button, [role="button"]');
+    return button?.parentElement && isUsableHeaderTarget(button.parentElement) ? button.parentElement : null;
+  }
+  function isUsableHeaderTarget(element) {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.top < 120 && rect.right > window.innerWidth * 0.45;
+  }
+
+  // src/utils/route.ts
+  function observeRouteChange(onChange) {
+    let previousUrl = location.href, raf = 0;
+    const check = () => {
+      const currentUrl = location.href;
+      if (currentUrl !== previousUrl) {
+        const old = previousUrl;
+        previousUrl = currentUrl;
+        onChange(currentUrl, old);
+      }
+    };
+    const frame = () => {
+      check();
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    window.addEventListener("popstate", check);
+    window.addEventListener("hashchange", check);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("popstate", check);
+      window.removeEventListener("hashchange", check);
+    };
+  }
+
+  // src/content.ts
+  var ChatGptYadaApp = class {
+    repository = new ConversationRepository();
+    navigator = null;
+    rail = null;
+    toolbar = null;
+    quota = null;
+    routeDispose = null;
+    messageDispose = null;
+    mount() {
+      this.navigator = new NavigatorController(this.repository);
+      this.navigator.mount();
+      this.rail = new YadaRailController(this.repository, this.navigator);
+      this.rail.mount();
+      this.quota = new QuotaTracker(this.repository);
+      this.quota.mount();
+      this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.repository);
+      this.toolbar.mount();
+      this.syncPageState();
+      this.routeDispose = observeRouteChange(() => {
+        this.toolbar?.closePanels();
+        this.rail?.clear();
+        this.navigator?.cancel();
+        this.syncPageState();
+      });
+      const onMessage = (message) => {
+        if (message?.type === "quota/refresh-current") void this.quota?.refreshCurrent();
+      };
+      chrome.runtime.onMessage.addListener(onMessage);
+      this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
+    }
+    dispose = () => {
+      this.routeDispose?.();
+      this.routeDispose = null;
+      this.messageDispose?.();
+      this.messageDispose = null;
+      this.quota?.dispose();
+      this.quota = null;
+      this.rail?.dispose();
+      this.rail = null;
+      this.navigator?.dispose();
+      this.navigator = null;
+      this.toolbar?.dispose();
+      this.toolbar = null;
+      this.repository.dispose();
+    };
+    syncPageState() {
+      this.toolbar?.ensurePlacement();
+      this.toolbar?.setVisible(isChatGptPage());
+      const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
+      if (copy) copy.hidden = !isChatGptConversationPage();
+      const id = getConversationIdFromUrl();
+      this.quota?.setConversationId(id);
+      this.repository.setActiveConversation(id);
+    }
+  };
+  if (isChatGptPage()) {
+    const key = "__chatgptYadaDispose";
+    const state = globalThis;
+    state[key]?.();
+    const app = new ChatGptYadaApp();
+    app.mount();
+    const onPageHide = () => app.dispose();
+    const onPageShow = (event) => {
+      if (event.persisted) {
+        app.dispose();
+        app.mount();
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
+    state[key] = () => {
+      app.dispose();
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }
+})();

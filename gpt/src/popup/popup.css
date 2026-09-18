@@ -1,0 +1,102 @@
+:root {
+  color-scheme: light dark;
+  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+html, body {
+  margin: 0;
+  width: 300px;
+  background: #111;
+  color: #f4f4f5;
+}
+
+#app {
+  padding: 14px 14px 12px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 10px;
+}
+
+.header h1 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.header time {
+  font-size: 11px;
+  opacity: 0.65;
+}
+
+.rings {
+  display: flex;
+  justify-content: center;
+  margin: 8px 0 14px;
+}
+
+.rings canvas {
+  width: 148px;
+  height: 148px;
+}
+
+.metric {
+  margin-bottom: 12px;
+}
+
+.metric-title {
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.bar {
+  height: 6px;
+  border-radius: 99px;
+  background: #2a2a2a;
+  overflow: hidden;
+  margin: 6px 0 4px;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  background: #1ad6d0;
+}
+
+.note, .warn, .rule {
+  font-size: 11px;
+  opacity: 0.75;
+  line-height: 1.45;
+}
+
+.warn {
+  color: #f5c542;
+  opacity: 1;
+}
+
+button {
+  width: 100%;
+  margin-top: 10px;
+  height: 32px;
+  border: 0;
+  border-radius: 8px;
+  background: #10a37f;
+  color: white;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

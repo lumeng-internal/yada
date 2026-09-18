@@ -1,8 +1,15 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Yada",
-  "version": "3.0.1",
-  "description": "Complete ChatGPT Markdown copy with timestamps, official navigation hover preview and a local prompt library.",
+  "version": "4.0.0",
+  "description": "Complete ChatGPT long-thread navigation, hover preview, copy-all timestamps, prompt library, and local Pro quota estimates.",
+  "action": {
+    "default_title": "ChatGPT Yada Pro 额度",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -15,7 +22,9 @@
     }
   ],
   "permissions": [
-    "storage"
+    "storage",
+    "alarms",
+    "activeTab"
   ],
   "host_permissions": [
     "https://chatgpt.com/*"

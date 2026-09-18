@@ -315,6 +315,18 @@ function main() {
     process.exit(1);
   }
 
+  const repoRoot = path.resolve(projectRoot, "..");
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot, encoding: "utf8" }).stdout.trim();
+  const liveFile = path.join(projectRoot, `artifacts/live-acceptance/${head}.json`);
+  const live = fs.existsSync(liveFile) ? JSON.parse(fs.readFileSync(liveFile, "utf8")) : null;
+  const livePass = live && (live.status === "LIVE_ACCEPTANCE_PASS" || live.status === "PASS") && live.commit === head;
+  if (!livePass) {
+    console.error("Official release blocked: LIVE_ACCEPTANCE must be PASS for the current HEAD.");
+    console.error("A test-branch zip can still be created with `npm run release` / `node scripts/pack.mjs`.");
+    console.error("LIVE_ACCEPTANCE_STATUS=PENDING");
+    process.exit(2);
+  }
+
   for (const warning of plan.warnings) {
     console.warn(`Warning: ${warning}`);
   }

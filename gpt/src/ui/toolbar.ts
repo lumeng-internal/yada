@@ -1,8 +1,10 @@
+import type { ConversationRepository } from "../core/conversationRepository";
 import { PromptPanel } from "../prompts/panel";
 import { PREVIEW_KEY } from "../prompts/storage";
 import { loadCurrentConversationSnapshot } from "../conversation/normalizeConversation";
 import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
+import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import { YADA_ACCENT, YADA_ACCENT_SOFT, YADA_TOOLBAR_HOST_ID } from "../styles";
 import { detectYadaTheme, observeYadaTheme } from "./theme";
 
@@ -19,7 +21,10 @@ export class YadaToolbar {
 
   private prompts: PromptPanel | null = null;
   private previewAssistant = false;
-  constructor(private readonly onPreviewMode: (assistant: boolean) => void = () => {}) {}
+  constructor(
+    private readonly onPreviewMode: (assistant: boolean) => void = () => {},
+    private readonly repository: ConversationRepository | null = null
+  ) {}
 
   closePanels(): void { this.prompts?.close(); }
 
@@ -204,15 +209,21 @@ export class YadaToolbar {
     this.setCopyState("pending", "复制中...", 0);
 
     try {
-      const snapshot = await loadCurrentConversationSnapshot();
-      const markdown = formatTurnsAsMarkdown(snapshot.turns);
+      const id = getConversationIdFromUrl();
+      const cached = id ? this.repository?.getSnapshot(id) : this.repository?.getSnapshot();
+      const snapshot = cached
+        ?? (this.repository && id ? await this.repository.load(id) : null)
+        ?? (this.repository ? null : await loadCurrentConversationSnapshot());
+      if (!snapshot) throw new Error("No conversation snapshot");
+      const turns = "activeTurns" in snapshot ? snapshot.activeTurns : snapshot.turns;
+      const markdown = formatTurnsAsMarkdown(turns);
       if (!markdown) {
         this.setCopyState("empty", "没有可复制内容");
         return;
       }
 
       await writeTextToClipboard(markdown);
-      this.setCopyState("success", `已复制 ${snapshot.turns.length} 轮`);
+      this.setCopyState("success", `已复制 ${turns.length} 轮`);
     } catch (error) {
       console.error("ChatGPT Yada: copy all failed", error);
       this.setCopyState("error", "复制失败");

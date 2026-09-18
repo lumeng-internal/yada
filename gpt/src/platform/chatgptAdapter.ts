@@ -11,9 +11,12 @@ export function getConversationIdFromUrl(url = window.location.href): string | n
     const parsed = new URL(url);
     return parsed.pathname.match(/^\/c\/([a-z0-9-]+)/i)?.[1]
       ?? parsed.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i)?.[1]
+      ?? document.querySelector<HTMLElement>("[data-conversation-id]")?.dataset.conversationId
       ?? null;
   } catch {
-    return url.match(/\/c\/([a-z0-9-]+)/i)?.[1] ?? null;
+    return url.match(/\/c\/([a-z0-9-]+)/i)?.[1]
+      ?? document.querySelector<HTMLElement>("[data-conversation-id]")?.dataset.conversationId
+      ?? null;
   }
 }
 
