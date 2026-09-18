@@ -96,13 +96,7 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
     return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
   };
   const base = `/backend-api/conversation/${encodeURIComponent(id)}`;
-  let activeTip = '';
   let lastError: unknown;
-  try {
-    const full = await request(`${base}?include_full_conversation=true`);
-    activeTip = unwrap(full).current_node ?? unwrap(full).current_node_id ?? '';
-    return complete(full);
-  } catch (error) { lastError = error; if (signal?.aborted) throw error; }
   try {
     const first = unwrap(await request(getPaginatedConversationApiUrl(id)));
     if (!Array.isArray(first.messages)) throw new Error('Paginated conversation API returned no messages');
@@ -120,11 +114,13 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
       cursor = getPaginatedConversationCursor(page); count++;
     }
     if (!messages.length) throw new Error('Paginated conversation is empty');
-    const current = first.current_node ?? first.current_node_id ?? activeTip;
+    const current = first.current_node ?? first.current_node_id ?? '';
     const rebuilt = buildConversationMappingFromMessages(messages, id, current);
     return { ...first, ...rebuilt, messages };
   } catch (error) { lastError = error; if (signal?.aborted) throw error; }
-  // Upstream legacy candidates remain useful, but still require complete active ancestry.
+  try {
+    return complete(await request(`${base}?include_full_conversation=true`));
+  } catch (error) { lastError = error; if (signal?.aborted) throw error; }
   for (const url of [base, `${base}?offset=0&limit=100000`]) {
     try { return complete(await request(url)); }
     catch (error) { lastError = error; if (signal?.aborted) throw error; }

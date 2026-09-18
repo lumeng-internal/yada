@@ -7,7 +7,7 @@
  */
 
 import { identity, isWork, parseConversation } from "./conversationParser";
-import { asObject, parseDate, parseInteger, type JsonObject } from "./json";
+import { asObject, parseDate, type JsonObject } from "./json";
 import type { ChatGPTChatConversation, ChatGPTChatHistoryCache, ChatGPTChatHistorySummary, ChatGPTChatTurn } from "./types";
 
 export const HISTORY_WINDOW_SECONDS = 7 * 86_400;
@@ -73,6 +73,7 @@ export async function readChatHistory(input: {
   detailBudget?: number;
   deadlineMs?: number;
   clock?: () => number;
+  fetchDetail?: (id: string, signal?: AbortSignal) => Promise<unknown>;
 }): Promise<HistoryReadResult> {
   const windowSeconds = input.windowSeconds ?? HISTORY_WINDOW_SECONDS;
   const pageSize = input.pageSize ?? HISTORY_PAGE_SIZE;
@@ -144,7 +145,9 @@ export async function readChatHistory(input: {
             if (fetched < detailBudget && clock() < deadline) {
               fetched += 1;
               try {
-                const detail = await input.transport.request(`/backend-api/conversation/${id}`, input.signal);
+                const detail = await (input.fetchDetail
+                  ? input.fetchDetail(id, input.signal)
+                  : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
                 parsed = await parseConversation(detail, id, updated, cutoff);
                 cache.conversations[key] = parsed;
               } catch (error) {
@@ -165,9 +168,7 @@ export async function readChatHistory(input: {
           }
         }
         offset += items.length;
-        if (!items.length) reachedEnd = true;
-        const total = parseInteger(root.total);
-        if (total != null && offset >= total) reachedEnd = true;
+        if (!items.length || items.length < pageSize) reachedEnd = true;
         if (reachedEnd) break;
         if (seen.size === before) {
           failures += 1;

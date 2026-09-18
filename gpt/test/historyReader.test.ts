@@ -135,4 +135,39 @@ describe("history reader", () => {
     expect(result.turns).toHaveLength(0);
     expect(result.summary.complete).toBe(true);
   });
+
+  it("does not stop a full page when list total undercounts, and uses fetchDetail", async () => {
+    const details: string[] = [];
+    const page0 = Array.from({ length: 50 }, (_, i) => ({
+      id: uuid(i + 1),
+      update_time: NOW / 1000,
+      conversation_origin: "chat"
+    }));
+    const page1 = [{ id: uuid(80), update_time: NOW / 1000, conversation_origin: "chat" }];
+    const result = await readChatHistory({
+      now: NOW,
+      identity: "account",
+      store: createMemoryHistoryStore(),
+      detailBudget: 2,
+      transport: {
+        async request(path) {
+          if (path.includes("is_archived=false") && path.includes("offset=0")) {
+            return { items: page0, total: 2 };
+          }
+          if (path.includes("is_archived=false") && path.includes("offset=50")) {
+            return { items: page1, total: 2 };
+          }
+          if (path.includes("is_archived=true")) return { items: [], total: 0 };
+          throw new Error(path);
+        }
+      },
+      async fetchDetail(id) {
+        details.push(id);
+        return { ...linearConversation(1, id), conversation_id: id, conversation_origin: "chat" };
+      }
+    });
+    expect(details).toEqual([uuid(1), uuid(2)]);
+    expect(result.summary.hitDetailBudget).toBe(true);
+    expect(result.summary.complete).toBe(false);
+  });
 });

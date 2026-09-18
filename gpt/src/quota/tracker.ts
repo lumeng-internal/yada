@@ -1,6 +1,6 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
-import { chatgptApi } from "../conversation/fetchConversation";
+import { chatgptApi, fetchConversation } from "../conversation/fetchConversation";
 import { readChatAccount, readModelLimits } from "./pageClient";
 import type { QuotaClassification, QuotaUsageEvent } from "./types";
 import { createChromeHistoryStore, readChatHistory } from "./vibebar/historyReader";
@@ -70,6 +70,7 @@ export class QuotaTracker {
           return response.json();
         }
       },
+      fetchDetail: (id, signal) => fetchConversation(id, signal),
       store: this.history,
       identity: account.identity,
       now: Date.now()
