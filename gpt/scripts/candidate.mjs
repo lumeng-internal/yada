@@ -16,51 +16,59 @@ const originalTargetIds = new Set();
 const registryPath = resolve(root, "artifacts/candidate/sample-registry.json");
 
 const PAGE_FETCH = `async (path, jsonBody) => {
-  const session = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null);
-  const headers = { Accept: "application/json" };
-  if (session && typeof session.accessToken === "string") headers.Authorization = "Bearer " + session.accessToken;
-  const account = (function accountId() {
-    try {
-      const raw = localStorage.getItem("_account");
-      if (!raw) return null;
-      if (/^account-[a-z0-9_-]+$/i.test(raw)) return raw;
-      const walk = (value) => {
-        if (!value || typeof value !== "object") return null;
-        for (const key of ["accountId", "account_id", "currentAccountId", "current_account_id", "id"]) {
-          const candidate = value[key];
-          if (typeof candidate === "string" && /^account-[a-z0-9_-]+$/i.test(candidate)) return candidate;
-        }
-        for (const nested of Object.values(value)) {
-          const found = walk(nested);
-          if (found) return found;
-        }
+  try {
+    const session = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null);
+    const headers = { Accept: "application/json" };
+    if (session && typeof session.accessToken === "string") headers.Authorization = "Bearer " + session.accessToken;
+    const account = (function accountId() {
+      try {
+        const raw = localStorage.getItem("_account");
+        if (!raw) return null;
+        if (/^account-[a-z0-9_-]+$/i.test(raw)) return raw;
+        const walk = (value) => {
+          if (!value || typeof value !== "object") return null;
+          for (const key of ["accountId", "account_id", "currentAccountId", "current_account_id", "id"]) {
+            const candidate = value[key];
+            if (typeof candidate === "string" && /^account-[a-z0-9_-]+$/i.test(candidate)) return candidate;
+          }
+          for (const nested of Object.values(value)) {
+            const found = walk(nested);
+            if (found) return found;
+          }
+          return null;
+        };
+        return walk(JSON.parse(raw));
+      } catch {
         return null;
-      };
-      return walk(JSON.parse(raw));
-    } catch {
-      return null;
+      }
+    })();
+    if (account) headers["Chatgpt-Account-Id"] = account;
+    const init = { credentials: "include", cache: "no-store", headers };
+    if (jsonBody !== undefined) {
+      headers["Content-Type"] = "application/json";
+      init.method = "POST";
+      init.body = JSON.stringify(jsonBody);
     }
-  })();
-  if (account) headers["Chatgpt-Account-Id"] = account;
-  const init = { credentials: "include", cache: "no-store", headers };
-  if (jsonBody !== undefined) {
-    headers["Content-Type"] = "application/json";
-    init.method = "POST";
-    init.body = JSON.stringify(jsonBody);
+    let response = await fetch(path, init);
+    if (response.status === 429) {
+      await new Promise((resolveWait) => setTimeout(resolveWait, 1000));
+      response = await fetch(path, init);
+    }
+    const data = await response.json().catch(() => null);
+    return { status: response.status, ok: response.ok, data };
+  } catch {
+    return { status: 0, ok: false, data: null };
   }
-  let response = await fetch(path, init);
-  if (response.status === 429) {
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    response = await fetch(path, init);
-  }
-  const data = await response.json().catch(() => null);
-  return { status: response.status, ok: response.ok, data };
 }`;
 
 const SESSION_STATUS = `async () => {
-  const response = await fetch("/api/auth/session", { credentials: "include" });
-  const data = await response.json().catch(() => null);
-  return { ok: response.ok, loggedIn: Boolean(data && ((data.user && data.user.id) || data.accessToken)) };
+  try {
+    const response = await fetch("/api/auth/session", { credentials: "include" });
+    const data = await response.json().catch(() => null);
+    return { ok: response.ok, loggedIn: Boolean(data && ((data.user && data.user.id) || data.accessToken)) };
+  } catch {
+    return { ok: false, loggedIn: false };
+  }
 }`;
 
 const LIST_ITEMS = `async (input) => {
@@ -319,7 +327,7 @@ async function main() {
     createdTargetIds.add(chatTarget);
     await cdp.attach(chatTarget);
     await waitFor(cdp, chatTarget, `() => location.hostname.includes("chatgpt.com") && document.readyState === "complete"`, "ChatGPT did not load");
-    const session = await evaluateFn(cdp, chatTarget, SESSION_STATUS);
+    const session = await evaluateFn(cdp, chatTarget, SESSION_STATUS).catch(() => null);
     if (!session?.loggedIn) throw new SetupRequired("会议浏览器当前 ChatGPT 登录已失效。");
     await waitFor(
       cdp,
@@ -329,7 +337,7 @@ async function main() {
         return Array.isArray(items) && items.length > 0;
       }`,
       "ChatGPT conversation list was empty",
-      20000
+      30000
     );
 
     let personalId = null;
@@ -342,7 +350,7 @@ async function main() {
     if (personalId) {
       const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${personalId}`);
       createdTargetIds.add(liveTarget);
-      await cdp.attach(liveTarget);
+      await cdp.attach(liveTarget, true);
       try {
         report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: personalId, turnCount: 0, userIds: [] });
       } catch (error) {
@@ -517,21 +525,25 @@ async function loadYada(cdp, path) {
 
 async function findLoadedYada(cdp) {
   const targets = await cdp.listTargets();
-  const sw = targets.find((item) => String(item.url || "").startsWith("chrome-extension://") && String(item.url).includes("/background.js"));
-  if (!sw) return null;
-  const id = String(sw.url).slice("chrome-extension://".length).split("/")[0];
-  const manifestId = await cdp.createTarget(`chrome-extension://${id}/manifest.json`);
-  createdTargetIds.add(manifestId);
-  await cdp.attach(manifestId);
-  const manifest = await cdp.evaluate(manifestId, `(() => {
-    const text = document.body && document.body.innerText || "";
-    try { return JSON.parse(text); } catch { return { name: document.title, version: null, raw: text.slice(0, 200) }; }
-  })()`, { awaitPromise: false }).catch(() => null);
-  if (!manifest || manifest.name !== "ChatGPT Yada") return null;
-  if (manifest.version !== "4.0.0") {
-    throw new SetupRequired("会议浏览器已加载其他版本的 ChatGPT Yada，无法自动用本轮 4.0.0 替换。");
+  const workers = targets.filter((item) => String(item.url || "").startsWith("chrome-extension://") && String(item.url).includes("/background.js"));
+  for (const sw of workers) {
+    const id = String(sw.url).slice("chrome-extension://".length).split("/")[0];
+    const manifestId = await cdp.createTarget(`chrome-extension://${id}/manifest.json`);
+    createdTargetIds.add(manifestId);
+    await cdp.attach(manifestId);
+    const manifest = await cdp.evaluate(manifestId, `(() => {
+      const text = document.body && document.body.innerText || "";
+      try { return JSON.parse(text); } catch { return { name: document.title, version: null, raw: text.slice(0, 200) }; }
+    })()`, { awaitPromise: false }).catch(() => null);
+    await cdp.closeTarget(manifestId).catch(() => undefined);
+    createdTargetIds.delete(manifestId);
+    if (!manifest || manifest.name !== "ChatGPT Yada") continue;
+    if (manifest.version !== "4.0.0") {
+      throw new SetupRequired("会议浏览器已加载其他版本的 ChatGPT Yada，无法自动用本轮 4.0.0 替换。");
+    }
+    return { id, name: manifest.name, version: manifest.version, temporaryLoaded: false, path: null };
   }
-  return { id, name: manifest.name, version: manifest.version, temporaryLoaded: false, path: null };
+  return null;
 }
 
 function absorbSample(found, summary) {

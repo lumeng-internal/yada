@@ -39,8 +39,9 @@ export function createCdpClient(wsUrl) {
     return targetId;
   }
 
-  async function attach(targetId) {
-    if (sessions.has(targetId)) return sessions.get(targetId);
+  async function attach(targetId, force = false) {
+    if (!force && sessions.has(targetId)) return sessions.get(targetId);
+    sessions.delete(targetId);
     const { sessionId } = await call("Target.attachToTarget", { targetId, flatten: true });
     sessions.set(targetId, sessionId);
     await call("Page.enable", {}, sessionId).catch(() => undefined);
@@ -49,17 +50,26 @@ export function createCdpClient(wsUrl) {
   }
 
   async function evaluate(targetId, expression, options = {}) {
-    const sessionId = sessions.get(targetId) ?? await attach(targetId);
-    const result = await call("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise: options.awaitPromise !== false,
-      ...options
-    }, sessionId);
-    if (result.exceptionDetails) {
-      throw new Error(result.exceptionDetails.text || result.exceptionDetails.exception?.description || "evaluate failed");
+    const run = async (force) => {
+      const sessionId = await attach(targetId, force);
+      const result = await call("Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+        awaitPromise: options.awaitPromise !== false,
+        ...options
+      }, sessionId);
+      if (result.exceptionDetails) {
+        throw new Error(result.exceptionDetails.text || result.exceptionDetails.exception?.description || "evaluate failed");
+      }
+      return result.result?.value;
+    };
+    try {
+      return await run(false);
+    } catch (error) {
+      const message = String(error.message || error);
+      if (/session|inspect|detached|context/i.test(message)) return run(true);
+      throw error;
     }
-    return result.result?.value;
   }
 
   async function navigate(targetId, url) {
