@@ -250,7 +250,7 @@ async function main() {
     browser: { product: null, version: null, debuggerPort: 9222 },
     extension: { id: null, temporaryLoaded: false, version: null },
     samples: { short: null, medium: null, long: null, duplicate: null },
-    live: { short: null, medium: null, long: null, duplicate: null, cancel: null },
+    live: { short: null, medium: null, long: null, duplicate: null, cancel: null, smoke: null },
     quota: { plan: null, historyStatus: null, classifiedTurns: null, unclassifiedTurns: null },
     popup: null,
     privacy: null,
@@ -350,6 +350,8 @@ async function main() {
       report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
       report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
       report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
+    } else if (samples.best?.conversationId && samples.best.turnCount > 0) {
+      report.live.smoke = await liveSmoke(cdp, chatTarget, samples.best);
     }
 
     report.quota = await liveQuota(cdp, chatTarget);
@@ -460,7 +462,7 @@ async function findLoadedYada(cdp) {
 
 async function discoverSamples(cdp, targetId) {
   const registry = existsSync(registryPath) ? JSON.parse(readFileSync(registryPath, "utf8")) : null;
-  const found = { short: null, medium: null, long: null, duplicate: null };
+  const found = { short: null, medium: null, long: null, duplicate: null, best: null };
   if (registry?.samples) {
     for (const type of ["short", "medium", "long", "duplicate"]) {
       const item = registry.samples[type];
@@ -492,6 +494,7 @@ async function discoverSamples(cdp, targetId) {
   }
   queued.sort((a, b) => Number(Boolean(a?.gizmo)) - Number(Boolean(b?.gizmo)));
   let inspected = 0;
+  let rateLimited = 0;
   for (const item of queued) {
     if (Date.now() >= deadline || inspected >= 200) break;
     const origin = typeof item.origin === "string" ? item.origin : "";
@@ -499,7 +502,14 @@ async function discoverSamples(cdp, targetId) {
     if (typeof item.id !== "string") continue;
     inspected += 1;
     const summary = await readSummary(cdp, targetId, item.id);
+    if (summary === null) {
+      rateLimited += 1;
+      if (rateLimited >= 2) break;
+      continue;
+    }
+    rateLimited = 0;
     if (!summary || summary.isWork || summary.temporary) continue;
+    if (!found.best || summary.turnCount > found.best.turnCount) found.best = summary;
     const type = sampleTypeFor(summary.turnCount);
     if (type && !found[type]) found[type] = { ...summary, sampleType: type };
     if (summary.duplicate && !found.duplicate) found.duplicate = { ...summary, sampleType: "duplicate" };
@@ -544,6 +554,28 @@ async function openConversation(cdp, targetId, conversationId) {
     "ConversationSync did not fill the rail",
     45000
   );
+}
+
+async function liveSmoke(cdp, targetId, sample) {
+  await openConversation(cdp, targetId, sample.conversationId);
+  const railCount = await evaluateFn(cdp, targetId, `() => document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0`);
+  if (railCount !== sample.turnCount) {
+    throw new Error(`smoke: API turns ${sample.turnCount} != rail ${railCount}`);
+  }
+  const last = sample.userIds?.[sample.userIds.length - 1];
+  if (last) {
+    await evaluateFn(cdp, targetId, `(index) => document.getElementById("chatgpt-yada-rail-host").shadowRoot.querySelectorAll("button.mark")[index].click()`, railCount - 1);
+    await sleep(1200);
+    const visible = await evaluateFn(cdp, targetId, `(id) => {
+      const node = document.querySelector('[data-message-id="' + id + '"]');
+      const status = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[role="status"]')?.textContent || "";
+      if (!node) return { ok: false, status };
+      const rect = node.getBoundingClientRect();
+      return { ok: rect.bottom > 80 && rect.top < innerHeight - 40 && status !== "定位失败", status };
+    }`, last);
+    if (!visible?.ok) throw new Error(`smoke jump failed: ${JSON.stringify(visible)}`);
+  }
+  return { ok: true, railCount, turnCount: sample.turnCount };
 }
 
 async function liveNav(cdp, targetId, _extensionId, sample, kind) {
