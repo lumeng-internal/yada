@@ -19,13 +19,40 @@ const PAGE_FETCH = `async (path, jsonBody) => {
   const session = await fetch("/api/auth/session", { credentials: "include" }).then((r) => r.ok ? r.json() : null).catch(() => null);
   const headers = { Accept: "application/json" };
   if (session && typeof session.accessToken === "string") headers.Authorization = "Bearer " + session.accessToken;
+  const account = (function accountId() {
+    try {
+      const raw = localStorage.getItem("_account");
+      if (!raw) return null;
+      if (/^account-[a-z0-9_-]+$/i.test(raw)) return raw;
+      const walk = (value) => {
+        if (!value || typeof value !== "object") return null;
+        for (const key of ["accountId", "account_id", "currentAccountId", "current_account_id", "id"]) {
+          const candidate = value[key];
+          if (typeof candidate === "string" && /^account-[a-z0-9_-]+$/i.test(candidate)) return candidate;
+        }
+        for (const nested of Object.values(value)) {
+          const found = walk(nested);
+          if (found) return found;
+        }
+        return null;
+      };
+      return walk(JSON.parse(raw));
+    } catch {
+      return null;
+    }
+  })();
+  if (account) headers["Chatgpt-Account-Id"] = account;
   const init = { credentials: "include", cache: "no-store", headers };
   if (jsonBody !== undefined) {
     headers["Content-Type"] = "application/json";
     init.method = "POST";
     init.body = JSON.stringify(jsonBody);
   }
-  const response = await fetch(path, init);
+  let response = await fetch(path, init);
+  if (response.status === 429) {
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    response = await fetch(path, init);
+  }
   const data = await response.json().catch(() => null);
   return { status: response.status, ok: response.ok, data };
 }`;
@@ -48,50 +75,90 @@ const LIST_ITEMS = `async (input) => {
 }`;
 
 const READ_SUMMARY = `async (id) => {
-  const result = await (${PAGE_FETCH})("/backend-api/conversation/" + id);
-  if (!result.ok || !result.data) return null;
-  const conversation = result.data;
-  const origin = typeof conversation.conversation_origin === "string" ? conversation.conversation_origin : null;
-  const model = typeof conversation.default_model_slug === "string" ? conversation.default_model_slug : "";
-  const originKey = (origin || "").toLowerCase();
-  const modelKey = model.toLowerCase();
-  const isWork = ["tpp", "flora", "codex"].includes(originKey) || modelKey.endsWith("-wm") || modelKey.includes("codex");
-  const temporary = conversation.is_temporary_chat === true;
-  const mapping = conversation.mapping || {};
-  const users = [];
-  let cursor = conversation.current_node;
-  const seen = new Set();
-  while (cursor && mapping[cursor] && !seen.has(cursor)) {
-    seen.add(cursor);
-    const message = mapping[cursor].message;
-    const role = message && message.author && message.author.role;
-    if (role === "user" && message && message.id) {
-      const parts = message.content && Array.isArray(message.content.parts) ? message.content.parts : [];
-      const text = parts.map((part) => typeof part === "string" ? part : "").join("\\n").replace(/\\s+/g, " ").trim().toLowerCase();
-      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
-      const hex = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
-      users.push({ id: message.id, hash: hex });
-    }
-    cursor = mapping[cursor].parent;
-  }
-  users.reverse();
-  const hashes = new Map();
-  let duplicate = null;
-  for (const user of users) {
-    const prev = hashes.get(user.hash);
-    if (prev && prev !== user.id) { duplicate = { a: prev, b: user.id, hash: user.hash }; break; }
-    hashes.set(user.hash, user.id);
-  }
-  return {
-    conversationId: conversation.id || conversation.conversation_id || id,
-    updateTime: conversation.update_time || null,
-    turnCount: users.length,
-    userIds: users.map((item) => item.id),
-    duplicate,
-    origin,
-    isWork,
-    temporary
+  const fetchJson = ${PAGE_FETCH};
+  const unwrap = (data) => data && data.conversation ? data.conversation : data;
+  const hashText = async (message) => {
+    const parts = message && message.content && Array.isArray(message.content.parts) ? message.content.parts : [];
+    const text = parts.map((part) => typeof part === "string" ? part : "").join("\\n").replace(/\\s+/g, " ").trim().toLowerCase();
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
   };
+  const summarizeMessages = async (conversation, messages) => {
+    const origin = typeof conversation.conversation_origin === "string" ? conversation.conversation_origin : null;
+    const model = typeof conversation.default_model_slug === "string" ? conversation.default_model_slug : "";
+    const originKey = (origin || "").toLowerCase();
+    const modelKey = model.toLowerCase();
+    const users = [];
+    for (const message of messages) {
+      const role = message && message.author && message.author.role;
+      if (role !== "user" || !message.id) continue;
+      users.push({ id: message.id, hash: await hashText(message) });
+    }
+    const hashes = new Map();
+    let duplicate = null;
+    for (const user of users) {
+      const prev = hashes.get(user.hash);
+      if (prev && prev !== user.id) { duplicate = { a: prev, b: user.id, hash: user.hash }; break; }
+      hashes.set(user.hash, user.id);
+    }
+    return {
+      conversationId: conversation.id || conversation.conversation_id || id,
+      updateTime: conversation.update_time || null,
+      turnCount: users.length,
+      userIds: users.map((item) => item.id),
+      duplicate,
+      origin,
+      isWork: ["tpp", "flora", "codex"].includes(originKey) || modelKey.endsWith("-wm") || modelKey.includes("codex"),
+      temporary: conversation.is_temporary_chat === true
+    };
+  };
+  const summarizeMapping = async (conversation) => {
+    const mapping = conversation.mapping || {};
+    const messages = [];
+    let cursor = conversation.current_node || conversation.current_node_id;
+    const seen = new Set();
+    while (cursor && mapping[cursor] && !seen.has(cursor)) {
+      seen.add(cursor);
+      if (mapping[cursor].message) messages.push(mapping[cursor].message);
+      cursor = mapping[cursor].parent;
+    }
+    messages.reverse();
+    return summarizeMessages(conversation, messages);
+  };
+  const pageUrl = (before) => {
+    const path = before ? "/backend-api/conversations/" + encodeURIComponent(id) + "/messages" : "/backend-api/conversations/" + encodeURIComponent(id);
+    return path + "?include_has_versions=true&num_turns=100" + (before ? "&before=" + encodeURIComponent(before) : "");
+  };
+  const firstRaw = await fetchJson(pageUrl(""));
+  if (firstRaw.status === 429) return null;
+  if (!firstRaw.ok || !firstRaw.data) return null;
+  const first = unwrap(firstRaw.data);
+  if (!Array.isArray(first.messages)) return summarizeMapping(first);
+  let messages = first.messages.slice();
+  let page = first.page_info || first.pageInfo || {};
+  let cursor = (page.has_previous_page === true || page.hasPreviousPage === true) ? (page.start_cursor || page.startCursor || "") : "";
+  const seen = new Set();
+  let count = 1;
+  while (cursor && count < 20) {
+    if (seen.has(cursor)) break;
+    seen.add(cursor);
+    const nextRaw = await fetchJson(pageUrl(cursor));
+    if (nextRaw.status === 429 || !nextRaw.ok) break;
+    const next = unwrap(nextRaw.data || {});
+    if (!Array.isArray(next.messages)) break;
+    messages = next.messages.concat(messages);
+    page = next.page_info || next.pageInfo || {};
+    cursor = (page.has_previous_page === true || page.hasPreviousPage === true) ? (page.start_cursor || page.startCursor || "") : "";
+    count += 1;
+  }
+  const unique = [];
+  const ids = new Set();
+  for (const message of messages) {
+    if (!message || !message.id || ids.has(message.id)) continue;
+    ids.add(message.id);
+    unique.push(message);
+  }
+  return summarizeMessages(first, unique);
 }`;
 
 class SetupRequired extends Error {
@@ -127,6 +194,21 @@ function meetingBusy() {
       if (pidAlive(lock.pid)) return true;
     } catch {
       return true;
+    }
+  }
+  const heartbeats = [
+    resolve("/Volumes/AutomationData/10_Workspace/Codex/course-gpt-batch-runner/data/iflyrec_course_asset_collector/data/downloads/.meeting-organizer-2/v3.3/heartbeat.json"),
+    resolve("/Volumes/AutomationData/10_Workspace/Codex/course-gpt-batch-runner/runtime/runs/background/heartbeat.json")
+  ];
+  for (const file of heartbeats) {
+    if (!existsSync(file)) continue;
+    try {
+      const beat = JSON.parse(readFileSync(file, "utf8"));
+      const stage = String(beat.stage || beat.currentStage || "").toUpperCase();
+      if (!pidAlive(beat.pid)) continue;
+      if (stage && stage !== "CLOSED" && stage !== "COMPLETED") return true;
+    } catch {
+      continue;
     }
   }
   return false;
@@ -233,6 +315,16 @@ async function main() {
     await waitFor(cdp, chatTarget, `() => location.hostname.includes("chatgpt.com") && document.readyState === "complete"`, "ChatGPT did not load");
     const session = await evaluateFn(cdp, chatTarget, SESSION_STATUS);
     if (!session?.loggedIn) throw new SetupRequired("会议浏览器当前 ChatGPT 登录已失效。");
+    await waitFor(
+      cdp,
+      chatTarget,
+      `async () => {
+        const items = await (${LIST_ITEMS})({ archived: false, offset: 0 });
+        return Array.isArray(items) && items.length > 0;
+      }`,
+      "ChatGPT conversation list was empty",
+      20000
+    );
 
     const samples = await discoverSamples(cdp, chatTarget);
     report.samples = {
@@ -297,8 +389,10 @@ async function finalize(cdp, report, finish, extensionId, temporaryLoaded, statu
   }
   run("npm", ["run", "build"]);
   const zipName = status === "PASS" ? `ChatGPT-Yada-v${version}-dist_chrome.zip` : `ChatGPT-Yada-v${version}-UNVERIFIED.zip`;
-  const other = status === "PASS" ? `ChatGPT-Yada-v${version}-UNVERIFIED.zip` : `ChatGPT-Yada-v${version}-dist_chrome.zip`;
-  if (existsSync(resolve(root, other))) rmSync(resolve(root, other));
+  if (status === "PASS") {
+    const unverified = resolve(root, `ChatGPT-Yada-v${version}-UNVERIFIED.zip`);
+    if (existsSync(unverified)) rmSync(unverified);
+  }
   const zipped = zipDist({ projectRoot: root, zipName });
   const compared = zipMatchesDist(root, zipName);
   report.zip = { path: zipped.zipPath, sha256: zipped.sha256, distMatchesZip: compared.matches };
