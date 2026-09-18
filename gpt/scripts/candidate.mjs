@@ -238,19 +238,6 @@ function sampleTypeFor(count) {
   return null;
 }
 
-async function createChatTarget(cdp) {
-  const targetId = await cdp.createTarget("https://chatgpt.com/");
-  createdTargetIds.add(targetId);
-  await cdp.attach(targetId);
-  await waitFor(
-    cdp,
-    targetId,
-    `() => location.hostname.includes("chatgpt.com") && document.readyState === "complete"`,
-    "ChatGPT did not load"
-  );
-  return targetId;
-}
-
 async function main() {
   const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repoRoot }).toString().trim();
   const report = {
@@ -368,7 +355,9 @@ async function main() {
       const smokeIds = [...new Set([...(samples.personalIds || []), samples.best?.conversationId, samples.fallback?.conversationId].filter(Boolean))];
       let smokeError = null;
       for (const conversationId of smokeIds) {
-        const liveTarget = await createChatTarget(cdp);
+        const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${conversationId}`);
+        createdTargetIds.add(liveTarget);
+        await cdp.attach(liveTarget);
         try {
           report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId, turnCount: 0, userIds: [] });
           smokeError = null;
@@ -574,29 +563,24 @@ function writeRegistry(found) {
   }, null, 2)}\n`);
 }
 
+async function waitForTargetUrl(cdp, targetId, needle, message, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  let last = "";
+  while (Date.now() < deadline) {
+    const targets = await cdp.listTargets();
+    const target = targets.find((item) => item.targetId === targetId);
+    last = String(target?.url || "");
+    if (last.includes(needle)) return last;
+    await sleep(200);
+  }
+  throw new Error(`${message}: ${last}`);
+}
+
 async function openConversation(cdp, targetId, conversationId) {
   const dest = `https://chatgpt.com/c/${conversationId}`;
-  const href = await evaluateFn(cdp, targetId, `() => location.href`).catch(() => "");
-  if (!String(href).includes("chatgpt.com")) {
-    await cdp.navigate(targetId, "https://chatgpt.com/");
-    await waitFor(cdp, targetId, `() => location.hostname.includes("chatgpt.com") && document.readyState === "complete"`, "ChatGPT home did not load", 20000);
-  }
-  await cdp.evaluate(targetId, `location.assign(${JSON.stringify(dest)})`, { awaitPromise: false }).catch(() => undefined);
+  await cdp.navigate(targetId, dest);
+  await waitForTargetUrl(cdp, targetId, `/c/${conversationId}`, "ChatGPT conversation page did not load", 20000);
   await waitFor(
-    cdp,
-    targetId,
-    `() => location.pathname.includes(${JSON.stringify(`/c/${conversationId}`)}) && document.readyState === "complete"`,
-    "ChatGPT conversation page did not load",
-    30000
-  );
-  await waitFor(
-    cdp,
-    targetId,
-    `() => document.getElementById("chatgpt-yada-rail-host")`,
-    "Yada rail did not mount",
-    20000
-  );
-  const usersReady = await waitFor(
     cdp,
     targetId,
     `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length > 0`,
@@ -607,12 +591,11 @@ async function openConversation(cdp, targetId, conversationId) {
       href: location.href,
       users: document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length,
       roles: document.querySelectorAll("[data-message-author-role]").length,
-      rail: Boolean(document.getElementById("chatgpt-yada-rail-host")),
+      marks: document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0,
       text: (document.body && document.body.innerText || "").replace(/\\s+/g, " ").slice(0, 180)
     })`).catch(() => null);
     throw new Error(`${error.message}: ${JSON.stringify(diag)}`);
   });
-  if (!usersReady) throw new Error("ChatGPT did not render user turns");
   await waitFor(
     cdp,
     targetId,
