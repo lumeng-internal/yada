@@ -338,7 +338,6 @@ async function main() {
       const liveTarget = await cdp.createTarget(`https://chatgpt.com/c/${personalId}`);
       createdTargetIds.add(liveTarget);
       await cdp.attach(liveTarget);
-      await sleep(8000);
       report.live.smoke = await liveSmoke(cdp, liveTarget, { conversationId: personalId, turnCount: 0, userIds: [] });
     }
 
@@ -586,22 +585,22 @@ async function targetUrl(cdp, targetId) {
 async function openConversation(cdp, targetId, conversationId) {
   const needle = `/c/${conversationId}`;
   const deadline = Date.now() + 20000;
-  let url = await targetUrl(cdp, targetId);
-  while (!url.includes(needle) && Date.now() < deadline) {
+  let lastUrl = await targetUrl(cdp, targetId);
+  let users = 0;
+  while (Date.now() < deadline) {
+    lastUrl = await targetUrl(cdp, targetId);
+    if (!lastUrl.includes(needle)) {
+      throw new Error(`ChatGPT conversation page did not stay open: ${lastUrl}`);
+    }
+    users = await evaluateFn(
+      cdp,
+      targetId,
+      `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length`
+    ).catch(() => 0);
+    if (users > 0) break;
     await sleep(250);
-    url = await targetUrl(cdp, targetId);
   }
-  if (!url.includes(needle)) {
-    throw new Error(`ChatGPT conversation page did not load: ${url}`);
-  }
-  await sleep(8000);
-  await waitFor(
-    cdp,
-    targetId,
-    `() => document.querySelectorAll('[data-message-author-role="user"][data-message-id]').length > 0`,
-    `ChatGPT did not render user turns (${await targetUrl(cdp, targetId)})`,
-    15000
-  );
+  if (users < 1) throw new Error(`ChatGPT did not render user turns (${lastUrl})`);
   await waitFor(
     cdp,
     targetId,
