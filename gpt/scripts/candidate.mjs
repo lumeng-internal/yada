@@ -333,22 +333,30 @@ async function main() {
       long: compactSample(samples.long),
       duplicate: compactSample(samples.duplicate)
     };
-    if (!samples.long) throw new SetupRequired("当前 ChatGPT 账号缺少 100+ 轮测试对话。");
-    if (!samples.duplicate) throw new SetupRequired("当前 ChatGPT 账号缺少：同一对话中有两条相同提问的真实样本。");
-    if (!samples.short) throw new SetupRequired("当前 ChatGPT 账号缺少 12～24 轮测试对话。");
-    if (!samples.medium) throw new SetupRequired("当前 ChatGPT 账号缺少 30～50 轮测试对话。");
+    const missingSample = !samples.long
+      ? "当前 ChatGPT 账号缺少 100+ 轮测试对话。"
+      : !samples.duplicate
+        ? "当前 ChatGPT 账号缺少：同一对话中有两条相同提问的真实样本。"
+        : !samples.short
+          ? "当前 ChatGPT 账号缺少 12～24 轮测试对话。"
+          : !samples.medium
+            ? "当前 ChatGPT 账号缺少 30～50 轮测试对话。"
+            : null;
 
-    report.live.short = await liveNav(cdp, chatTarget, extensionId, samples.short, "short");
-    report.live.medium = await liveNav(cdp, chatTarget, extensionId, samples.medium, "medium");
-    report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
-    report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
-    report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
+    if (!missingSample) {
+      report.live.short = await liveNav(cdp, chatTarget, extensionId, samples.short, "short");
+      report.live.medium = await liveNav(cdp, chatTarget, extensionId, samples.medium, "medium");
+      report.live.long = await liveNav(cdp, chatTarget, extensionId, samples.long, "long");
+      report.live.duplicate = await liveDuplicate(cdp, chatTarget, samples.duplicate);
+      report.live.cancel = await liveCancel(cdp, chatTarget, samples.long);
+    }
 
     report.quota = await liveQuota(cdp, chatTarget);
     const popup = await livePopup(cdp, extensionId);
     report.popup = popup.ui;
     report.privacy = popup.privacy;
 
+    if (missingSample) throw new SetupRequired(missingSample);
     report.overall = "PASS";
   } catch (error) {
     const status = error.status === "SETUP_REQUIRED" || error.status === "BUSY" ? error.status : "FAIL";
