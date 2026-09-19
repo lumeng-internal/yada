@@ -25,7 +25,15 @@ type ActiveNavigation = {
   promise: Promise<NavigationResult>;
 };
 
-type DirectJumpResult = "ok" | "miss" | "cancelled" | "stale-target";
+type DirectJumpResult = {
+  status: "ok" | "miss" | "cancelled" | "stale-target";
+  coarseLocates: number;
+  alignmentAttempts: number;
+};
+
+function directJump(status: DirectJumpResult["status"], coarseLocates: number): DirectJumpResult {
+  return { status, coarseLocates, alignmentAttempts: 0 };
+}
 
 function targetKey(conversationId: string, turn: YadaTurn): string {
   return `${conversationId}|${turnUserMessageId(turn)}|${turn.index}`;
@@ -45,30 +53,31 @@ async function jumpDirect(
   signal: AbortSignal,
   timeoutAt: number
 ): Promise<DirectJumpResult> {
-  if (signal.aborted) return "cancelled";
-  if (!pageConversationMatches(conversationId)) return "stale-target";
+  if (signal.aborted) return directJump("cancelled", 0);
+  if (!pageConversationMatches(conversationId)) return directJump("stale-target", 0);
   const node = findMountedUserMessage(userMessageId);
-  if (!node || !node.isConnected || readMessageId(node) !== userMessageId) return "miss";
+  if (!node || !node.isConnected || readMessageId(node) !== userMessageId) return directJump("miss", 0);
   scrollElementIntoView(node);
+  const coarseLocates = 1;
 
   const deadline = Math.min(timeoutAt, Date.now() + NATIVE_NAV_CONFIG.directViewportMs);
   try {
     while (true) {
-      if (signal.aborted) return "cancelled";
-      if (!pageConversationMatches(conversationId)) return "stale-target";
+      if (signal.aborted) return directJump("cancelled", coarseLocates);
+      if (!pageConversationMatches(conversationId)) return directJump("stale-target", coarseLocates);
       const current = findMountedUserMessage(userMessageId);
       if (
         current?.isConnected
         && readMessageId(current) === userMessageId
         && isInViewport(current)
       ) {
-        return "ok";
+        return directJump("ok", coarseLocates);
       }
-      if (Date.now() >= deadline) return "miss";
+      if (Date.now() >= deadline) return directJump("miss", coarseLocates);
       await nextFrame(signal);
     }
   } catch (error) {
-    if (signal.aborted || isAbortError(error)) return "cancelled";
+    if (signal.aborted || isAbortError(error)) return directJump("cancelled", coarseLocates);
     throw error;
   }
 }
@@ -133,6 +142,7 @@ export class NativeNavigationPort {
     const userMessageId = turnUserMessageId(turn);
     const capability = readNativeCapability(turns, conversationId);
     let path: NavigationDiagnostics["path"] = null;
+    let coarseLocates = 0;
     let alignmentAttempts = 0;
     let result: NavigationResult = { ok: false, status: "failed" };
 
@@ -142,16 +152,18 @@ export class NativeNavigationPort {
       const mounted = findMountedUserMessage(userMessageId);
       if (mounted && readMessageId(mounted) === userMessageId) {
         const jumped = await jumpDirect(userMessageId, conversationId, controller.signal, timeoutAt);
-        if (jumped === "ok") {
+        coarseLocates += jumped.coarseLocates;
+        alignmentAttempts += jumped.alignmentAttempts;
+        if (jumped.status === "ok") {
           path = "direct";
           result = { ok: true, path: "direct" };
           return result;
         }
-        if (jumped === "cancelled") {
+        if (jumped.status === "cancelled") {
           result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
           return result;
         }
-        if (jumped === "stale-target") {
+        if (jumped.status === "stale-target") {
           result = { ok: false, status: "stale-target" };
           return result;
         }
@@ -178,7 +190,8 @@ export class NativeNavigationPort {
       if (isStableSlotsComplete(turns)) {
         path = "stable-slot";
         const jumped = await jumpStableSlot(turn, controller.signal, timeoutAt);
-        alignmentAttempts = jumped.alignmentAttempts;
+        coarseLocates += jumped.coarseLocates;
+        alignmentAttempts += jumped.alignmentAttempts;
         if (jumped.status === "ok") result = { ok: true, path: "stable-slot" };
         else if (jumped.status === "cancelled") result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
         else if (jumped.status === "timeout") result = { ok: false, status: "timeout" };
@@ -206,8 +219,9 @@ export class NativeNavigationPort {
         expectedTurnCount: turns.length,
         slotCount: capability.slotCount,
         reloadAttempted: nativePrepReloadAttempted(conversationId),
-        yadaScrollWrites: 0,
+        coarseLocates,
         alignmentAttempts,
+        yadaScrollWrites: coarseLocates + alignmentAttempts,
         result: result.ok ? result.path : result.status,
         duration: Date.now() - started
       };

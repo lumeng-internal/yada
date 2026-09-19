@@ -26,8 +26,9 @@ export type NavigationDiagnostics = {
   expectedTurnCount: number;
   slotCount: number;
   reloadAttempted: boolean;
-  yadaScrollWrites: number;
+  coarseLocates: number;
   alignmentAttempts: number;
+  yadaScrollWrites: number;
   result: NavigationPath | NavigationFailure;
   duration: number;
 };

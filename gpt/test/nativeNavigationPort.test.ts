@@ -28,6 +28,12 @@ describe("NativeNavigationPort", () => {
     const port = new NativeNavigationPort();
     const result = await port.navigateTo("u0", turns(2), "conversation-1");
     expect(result).toEqual({ ok: true, path: "direct" });
+    expect(port.lastDiagnostics).toMatchObject({
+      path: "direct",
+      coarseLocates: 1,
+      alignmentAttempts: 0,
+      yadaScrollWrites: 1
+    });
     port.dispose();
   });
 
@@ -66,6 +72,7 @@ describe("NativeNavigationPort", () => {
     const result = await pending;
     expect(result).toEqual({ ok: false, status: "cancelled" });
     expect(port.lastDiagnostics?.result).toBe("cancelled");
+    expect(port.lastDiagnostics?.yadaScrollWrites).toBe(0);
     port.dispose();
   });
 
@@ -82,29 +89,39 @@ describe("NativeNavigationPort", () => {
     port.dispose();
   });
 
+  it("maps 150 official buttons with consecutive unique indexes", () => {
+    mountMain();
+    mountOfficialButtons(150);
+    const buttons = collectOfficialButtons();
+    expect(buttons).toHaveLength(150);
+    expect(buttons.map((button) => button.index)).toEqual([...Array(150).keys()]);
+    expect(new Set(buttons.map((button) => button.index)).size).toBe(150);
+    expect(buttons[0]?.index).toBe(0);
+    expect(buttons[74]?.index).toBe(74);
+    expect(buttons[149]?.index).toBe(149);
+  });
+
   it("uses official buttons for unmounted targets without writing scrollTop", async () => {
     const scroller = mountMain();
     const writes = installScrollTopCounter(scroller);
     const clicked: number[] = [];
-    mountUserMessages(["u145", "u146", "u147", "u148", "u149"], scroller);
-    mountOfficialButtons(150, (index) => {
+    mountUserMessages(["u6", "u7"], scroller);
+    mountOfficialButtons(8, (index) => {
       clicked.push(index);
       mountUserMessages([`u${index}`], scroller);
     });
     const port = new NativeNavigationPort();
-    const items = turns(150);
-    for (const index of [0, 74]) {
-      clicked.length = 0;
-      const result = await port.navigateTo(items[index]!.userMessageId!, items, "conversation-1");
-      expect(result).toEqual({ ok: true, path: "official-button" });
-      expect(clicked).toEqual([index]);
-      expect(port.lastDiagnostics?.yadaScrollWrites).toBe(0);
-      expect(port.lastDiagnostics?.targetMessageId).toBe(`u${index}`);
-    }
-    clicked.length = 0;
-    const last = await port.navigateTo(items[149]!.userMessageId!, items, "conversation-1");
-    expect(last).toEqual({ ok: true, path: "direct" });
-    expect(clicked).toEqual([]);
+    const items = turns(8);
+    const result = await port.navigateTo(items[2]!.userMessageId!, items, "conversation-1");
+    expect(result).toEqual({ ok: true, path: "official-button" });
+    expect(clicked).toEqual([2]);
+    expect(port.lastDiagnostics).toMatchObject({
+      path: "official-button",
+      targetMessageId: "u2",
+      coarseLocates: 0,
+      alignmentAttempts: 0,
+      yadaScrollWrites: 0
+    });
     expect(writes.writes).toBe(0);
     port.dispose();
   });
@@ -150,7 +167,12 @@ describe("NativeNavigationPort", () => {
     expect(result).toEqual({ ok: true, path: "stable-slot" });
     expect(coarse).toBe(1);
     expect(alignments).toBeLessThanOrEqual(2);
+    expect(port.lastDiagnostics?.path).toBe("stable-slot");
+    expect(port.lastDiagnostics?.coarseLocates).toBe(1);
     expect(port.lastDiagnostics?.alignmentAttempts).toBeLessThanOrEqual(2);
+    expect(port.lastDiagnostics?.yadaScrollWrites).toBe(
+      (port.lastDiagnostics?.coarseLocates ?? 0) + (port.lastDiagnostics?.alignmentAttempts ?? 0)
+    );
     expect(port.lastDiagnostics?.targetMessageId).toBe("u0");
     port.dispose();
   });
@@ -196,7 +218,10 @@ describe("NativeNavigationPort", () => {
       conversationId: "conversation-1",
       targetMessageId: "u0",
       path: "direct",
-      result: "direct"
+      result: "direct",
+      coarseLocates: 1,
+      alignmentAttempts: 0,
+      yadaScrollWrites: 1
     });
     expect(JSON.stringify(globalThis.__YADA_NAV_DIAGNOSTICS__)).not.toMatch(/identical user question|Assistant /);
     port.dispose();
@@ -223,6 +248,8 @@ describe("NativeNavigationPort", () => {
     await vi.advanceTimersByTimeAsync(800);
     await expect(pending).resolves.toEqual({ ok: false, status: "unsupported" });
     expect(port.lastDiagnostics?.path).not.toBe("direct");
+    expect(port.lastDiagnostics?.coarseLocates).toBe(1);
+    expect(port.lastDiagnostics?.yadaScrollWrites).toBe(1);
     port.dispose();
   });
 
@@ -237,6 +264,12 @@ describe("NativeNavigationPort", () => {
     const pending = port.navigateTo("u0", turns(1), "conversation-1");
     await vi.advanceTimersByTimeAsync(800);
     await expect(pending).resolves.toEqual({ ok: true, path: "official-button" });
+    expect(port.lastDiagnostics).toMatchObject({
+      path: "official-button",
+      coarseLocates: 1,
+      alignmentAttempts: 0,
+      yadaScrollWrites: 1
+    });
     port.dispose();
   });
 
@@ -254,6 +287,37 @@ describe("NativeNavigationPort", () => {
     const pending = port.navigateTo("u0", turns(1), "conversation-1");
     await vi.advanceTimersByTimeAsync(800);
     await expect(pending).resolves.toEqual({ ok: true, path: "stable-slot" });
+    expect(port.lastDiagnostics?.coarseLocates).toBeGreaterThanOrEqual(1);
+    expect(port.lastDiagnostics?.yadaScrollWrites).toBe(
+      (port.lastDiagnostics?.coarseLocates ?? 0) + (port.lastDiagnostics?.alignmentAttempts ?? 0)
+    );
+    port.dispose();
+  });
+
+  it("does not count Direct writes when the target node is missing", async () => {
+    mountMain();
+    const port = new NativeNavigationPort();
+    const result = await port.navigateTo("u0", turns(1), "conversation-1");
+    expect(result).toEqual({ ok: false, status: "unsupported" });
+    expect(port.lastDiagnostics).toMatchObject({
+      coarseLocates: 0,
+      alignmentAttempts: 0,
+      yadaScrollWrites: 0
+    });
+    port.dispose();
+  });
+
+  it("keeps Direct scroll writes after a user cancel", async () => {
+    const scroller = mountMain();
+    mountUserMessages(["u0"], scroller);
+    outOfViewportRect(document.querySelector<HTMLElement>('[data-message-id="u0"]')!);
+    const port = new NativeNavigationPort();
+    const pending = port.navigateTo("u0", turns(1), "conversation-1");
+    window.dispatchEvent(new WheelEvent("wheel", { bubbles: true }));
+    await expect(pending).resolves.toEqual({ ok: false, status: "cancelled" });
+    expect(port.lastDiagnostics?.result).toBe("cancelled");
+    expect(port.lastDiagnostics?.yadaScrollWrites).toBe(1);
+    expect(port.lastDiagnostics?.coarseLocates).toBe(1);
     port.dispose();
   });
 });
