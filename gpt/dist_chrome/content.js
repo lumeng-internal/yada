@@ -205,7 +205,13 @@
   function abortError2() {
     return new DOMException("Aborted", "AbortError");
   }
-  async function chatgptApi(path, init = {}) {
+  var ChatGPTApiTimeoutError = class extends Error {
+    constructor() {
+      super("ChatGPT API timed out");
+      this.name = "ChatGPTApiTimeoutError";
+    }
+  };
+  async function chatgptApi(path, init = {}, options = {}) {
     const headers = new Headers(init.headers);
     headers.set("Accept", headers.get("Accept") ?? "application/json");
     const accessToken = await getAccessToken();
@@ -221,13 +227,13 @@
     const abort = () => controller.abort();
     init.signal?.addEventListener("abort", abort, { once: true });
     if (init.signal?.aborted) controller.abort();
-    const timer = setTimeout(abort, 15e3);
+    const timer = setTimeout(abort, options.timeoutMs ?? 15e3);
     try {
       if (controller.signal.aborted && init.signal?.aborted) throw abortError2();
       return await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
     } catch (error) {
       if (init.signal?.aborted) throw abortError2();
-      if (controller.signal.aborted) throw new Error("ChatGPT API timed out");
+      if (controller.signal.aborted) throw new ChatGPTApiTimeoutError();
       throw error;
     } finally {
       clearTimeout(timer);
@@ -811,6 +817,8 @@ ${text}
   var HISTORY_DETAIL_BUDGET = 24;
   var HISTORY_DEADLINE_MS = 25e3;
   var HISTORY_CACHE_KEY = "chatgpt-yada:quota-history:v2";
+  var RetryableHistoryTransportError = class extends Error {
+  };
   var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
   function createChromeHistoryStore() {
     return {
@@ -846,6 +854,8 @@ ${text}
     const seen = /* @__PURE__ */ new Set();
     let streamsFinished = 0;
     let failures = 0;
+    let retryableFailures = 0;
+    let permanentFailures = 0;
     let work = 0;
     let unknown = 0;
     let fetched = 0;
@@ -855,6 +865,11 @@ ${text}
     let hitDetailBudget = false;
     const turns = [];
     const aborted = () => Boolean(input.signal?.aborted);
+    const recordFailure = (error) => {
+      failures += 1;
+      if (error instanceof RetryableHistoryTransportError) retryableFailures += 1;
+      else permanentFailures += 1;
+    };
     try {
       for (const archived of [false, true]) {
         let offset = 0;
@@ -887,6 +902,7 @@ ${text}
             if (item.is_temporary_chat === true) continue;
             if (!UUID.test(id) || updated == null) {
               failures += 1;
+              permanentFailures += 1;
               continue;
             }
             const key = await identity(id);
@@ -900,7 +916,7 @@ ${text}
                   cache.conversations[key] = parsed;
                 } catch (error) {
                   if (isAbortError2(error)) throw error;
-                  failures += 1;
+                  recordFailure(error);
                 }
               } else {
                 if (fetched >= detailBudget) hitDetailBudget = true;
@@ -920,6 +936,7 @@ ${text}
           if (reachedEnd) break;
           if (seen.size === before) {
             failures += 1;
+            permanentFailures += 1;
             break;
           }
         }
@@ -927,7 +944,7 @@ ${text}
       }
     } catch (error) {
       if (isAbortError2(error)) cancelled = true;
-      else failures += 1;
+      else recordFailure(error);
     }
     if (!cancelled) await input.store.save(cache, input.identity);
     const recent = turns.filter((turn) => turn.createdAt >= cutoff && turn.createdAt <= input.now);
@@ -942,6 +959,8 @@ ${text}
         excludedWorkConversations: work,
         unclassifiedTurns: unknown,
         failedConversations: failures,
+        retryableFailures,
+        permanentFailures,
         cancelled,
         hitDetailBudget,
         hitDeadline
@@ -1835,6 +1854,25 @@ ${text}
   var FIRST_HISTORY_DELAY_MS = 4e3;
   var NEXT_HISTORY_SLICE_DELAY_MS = 1500;
   var MAX_HISTORY_PASSES = 20;
+  var HISTORY_LIST_TIMEOUT_MS = 45e3;
+  async function requestHistoryList(path, signal) {
+    try {
+      const response = await chatgptApi(path, { signal }, { timeoutMs: HISTORY_LIST_TIMEOUT_MS });
+      if (response.status === 401 || response.status === 403) {
+        throw Object.assign(new Error("login"), { name: "AbortError" });
+      }
+      if ([408, 500, 502, 503, 504].includes(response.status)) {
+        throw new RetryableHistoryTransportError(`history ${response.status}`);
+      }
+      if (!response.ok) throw new Error(`history ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (!signal?.aborted && (error instanceof ChatGPTApiTimeoutError || error instanceof TypeError)) {
+        throw new RetryableHistoryTransportError("History list transport interrupted");
+      }
+      throw error;
+    }
+  }
   var QuotaTracker = class {
     constructor(sync) {
       this.sync = sync;
@@ -1912,18 +1950,9 @@ ${text}
         this.historyResumePending = false;
       }
       this.historyPass += 1;
-      await this.publishHistoryState(account, [], "backfill", false, 0, null);
+      await this.publishHistoryState(account, [], "backfill", false, void 0, null);
       const result = await readChatHistory({
-        transport: {
-          async request(path, requestSignal) {
-            const response = await chatgptApi(path, { signal: requestSignal });
-            if (response.status === 401 || response.status === 403) {
-              throw Object.assign(new Error("login"), { name: "AbortError" });
-            }
-            if (!response.ok) throw new Error(`history ${response.status}`);
-            return response.json();
-          }
-        },
+        transport: { request: requestHistoryList },
         fetchDetail: (id, requestSignal) => fetchConversation(id, requestSignal),
         store: this.history,
         identity: account.identity,
@@ -1952,7 +1981,7 @@ ${text}
       const account = this.lastAccount;
       if (!account) return;
       const message = conciseError(error);
-      await this.publishHistoryState(account, [], "error", false, 0, message).catch(() => void 0);
+      await this.publishHistoryState(account, [], "error", false, void 0, message).catch(() => void 0);
     }
     async publishHistoryState(account, turns, syncStatus, historyComplete, unclassifiedTurns, historyError) {
       const events = toEvents(turns, account.identity, "personal");
@@ -1979,7 +2008,6 @@ ${text}
         type: "quota/ingest",
         events,
         plan: account.plan,
-        unclassifiedTurns: snapshot.quotaUnclassifiedTurns,
         workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal",
         limits,
         historyComplete: void 0,
@@ -2023,7 +2051,7 @@ ${text}
     return "历史读取失败";
   }
   function historyNeedsAnotherPass(summary) {
-    return !summary.complete && !summary.cancelled && (summary.hitDetailBudget || summary.hitDeadline);
+    return !summary.complete && !summary.cancelled && summary.permanentFailures === 0 && (summary.hitDetailBudget || summary.hitDeadline || summary.retryableFailures > 0);
   }
 
   // inline-css:/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-official-only-20260919/gpt/src/prompts/panel.css

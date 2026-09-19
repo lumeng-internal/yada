@@ -64,6 +64,8 @@ export type ChatGPTChatHistorySummary = {
   excludedWorkConversations: number;
   unclassifiedTurns: number;
   failedConversations: number;
+  retryableFailures: number;
+  permanentFailures: number;
   cancelled: boolean;
   hitDetailBudget: boolean;
   hitDeadline: boolean;

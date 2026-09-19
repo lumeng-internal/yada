@@ -62,6 +62,7 @@ export type QuotaPersistedState = {
   historyComplete: boolean;
   syncStatus: QuotaSyncStatus;
   historyError?: string;
+  // History-wide unresolved turns; only a completed reader pass may update this count.
   unclassifiedTurns: number;
   lastSnapshot?: QuotaSnapshot;
   writeError?: string;

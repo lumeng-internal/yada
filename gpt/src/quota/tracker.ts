@@ -1,16 +1,37 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
-import { chatgptApi, fetchConversation } from "../conversation/fetchConversation";
+import { ChatGPTApiTimeoutError, chatgptApi, fetchConversation } from "../conversation/fetchConversation";
 import { MESSAGE_TIMEOUT_MS, REFRESH_TIMEOUT_MS, sendRuntimeMessage } from "../shared/messages";
 import { withTimeout } from "../shared/timeout";
 import { readChatAccount, readModelLimits, type ChatAccount } from "./pageClient";
 import type { QuotaClassification, QuotaSyncStatus, QuotaUsageEvent } from "./types";
-import { createChromeHistoryStore, readChatHistory } from "./vibebar/historyReader";
+import { createChromeHistoryStore, readChatHistory, RetryableHistoryTransportError } from "./vibebar/historyReader";
 import type { ChatGPTChatHistorySummary, ChatGPTChatTurn } from "./vibebar/types";
 
 const FIRST_HISTORY_DELAY_MS = 4_000;
 const NEXT_HISTORY_SLICE_DELAY_MS = 1_500;
 const MAX_HISTORY_PASSES = 20;
+const HISTORY_LIST_TIMEOUT_MS = 45_000;
+
+export async function requestHistoryList(path: string, signal?: AbortSignal): Promise<unknown> {
+  try {
+    const response = await chatgptApi(path, { signal }, { timeoutMs: HISTORY_LIST_TIMEOUT_MS });
+    if (response.status === 401 || response.status === 403) {
+      throw Object.assign(new Error("login"), { name: "AbortError" });
+    }
+    if ([408, 500, 502, 503, 504].includes(response.status)) {
+      throw new RetryableHistoryTransportError(`history ${response.status}`);
+    }
+    if (!response.ok) throw new Error(`history ${response.status}`);
+    // Body transport interruptions are retryable; JSON SyntaxError and schema failures are not.
+    return await response.json();
+  } catch (error) {
+    if (!signal?.aborted && (error instanceof ChatGPTApiTimeoutError || error instanceof TypeError)) {
+      throw new RetryableHistoryTransportError("History list transport interrupted");
+    }
+    throw error;
+  }
+}
 
 export class QuotaTracker {
   private unsubscribe: (() => void) | null = null;
@@ -97,19 +118,10 @@ export class QuotaTracker {
       this.historyResumePending = false;
     }
     this.historyPass += 1;
-    await this.publishHistoryState(account, [], "backfill", false, 0, null);
+    await this.publishHistoryState(account, [], "backfill", false, undefined, null);
 
     const result = await readChatHistory({
-      transport: {
-        async request(path, requestSignal) {
-          const response = await chatgptApi(path, { signal: requestSignal });
-          if (response.status === 401 || response.status === 403) {
-            throw Object.assign(new Error("login"), { name: "AbortError" });
-          }
-          if (!response.ok) throw new Error(`history ${response.status}`);
-          return response.json();
-        }
-      },
+      transport: { request: requestHistoryList },
       fetchDetail: (id, requestSignal) => fetchConversation(id, requestSignal),
       store: this.history,
       identity: account.identity,
@@ -144,7 +156,7 @@ export class QuotaTracker {
     const account = this.lastAccount;
     if (!account) return;
     const message = conciseError(error);
-    await this.publishHistoryState(account, [], "error", false, 0, message).catch(() => undefined);
+    await this.publishHistoryState(account, [], "error", false, undefined, message).catch(() => undefined);
   }
 
   private async publishHistoryState(
@@ -152,7 +164,7 @@ export class QuotaTracker {
     turns: readonly ChatGPTChatTurn[],
     syncStatus: QuotaSyncStatus,
     historyComplete: boolean,
-    unclassifiedTurns: number,
+    unclassifiedTurns: number | undefined,
     historyError: string | null
   ): Promise<void> {
     const events = toEvents(turns, account.identity, "personal");
@@ -182,7 +194,6 @@ export class QuotaTracker {
       type: "quota/ingest",
       events,
       plan: account.plan,
-      unclassifiedTurns: snapshot.quotaUnclassifiedTurns,
       workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal",
       limits,
       historyComplete: undefined,
@@ -236,5 +247,6 @@ function conciseError(error: unknown): string {
 }
 
 export function historyNeedsAnotherPass(summary: ChatGPTChatHistorySummary): boolean {
-  return !summary.complete && !summary.cancelled && (summary.hitDetailBudget || summary.hitDeadline);
+  return !summary.complete && !summary.cancelled && summary.permanentFailures === 0
+    && (summary.hitDetailBudget || summary.hitDeadline || summary.retryableFailures > 0);
 }

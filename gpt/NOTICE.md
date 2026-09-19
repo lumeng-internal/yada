@@ -21,6 +21,8 @@ ChatGPT Yada GPT 扩展（`gpt/`）使用 GNU Affero General Public License v3.0
 
 未复制 Vibe Bar 的 macOS 应用壳、菜单栏 UI、其他供应商适配器或密钥处理。浏览器侧多轮 warmup 只编排原有 reader 和 cache，不改变额度规则。
 
+浏览器适配为 history list 单独使用 45 秒传输超时，保留 reader 的 25 秒默认调度预算和其他 API 的 15 秒默认超时。Reader 显式区分临时传输失败与永久失败，沿用最多 20 pass、间隔 1.5 秒的有限续跑；历史未分类数仅由 history summary 更新。
+
 ## AI-MarkDone
 
 本目录直接适配了 [zhaoliangbin42/AI-MarkDone](https://github.com/zhaoliangbin42/AI-MarkDone) 的极少量 MIT 结构。

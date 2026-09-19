@@ -21,6 +21,9 @@ export type HistoryTransport = {
   request(path: string, signal?: AbortSignal): Promise<unknown>;
 };
 
+// Browser transport explicitly marks temporary failures; parsing errors are not retryable.
+export class RetryableHistoryTransportError extends Error {}
+
 export type HistoryStore = {
   load(identity: string): Promise<ChatGPTChatHistoryCache>;
   save(cache: ChatGPTChatHistoryCache, identity: string): Promise<void>;
@@ -94,6 +97,8 @@ export async function readChatHistory(input: {
   const seen = new Set<string>();
   let streamsFinished = 0;
   let failures = 0;
+  let retryableFailures = 0;
+  let permanentFailures = 0;
   let work = 0;
   let unknown = 0;
   let fetched = 0;
@@ -104,6 +109,11 @@ export async function readChatHistory(input: {
   const turns: ChatGPTChatTurn[] = [];
 
   const aborted = (): boolean => Boolean(input.signal?.aborted);
+  const recordFailure = (error: unknown): void => {
+    failures += 1;
+    if (error instanceof RetryableHistoryTransportError) retryableFailures += 1;
+    else permanentFailures += 1;
+  };
 
   try {
     for (const archived of [false, true]) {
@@ -137,6 +147,7 @@ export async function readChatHistory(input: {
           if (item.is_temporary_chat === true) continue;
           if (!UUID.test(id) || updated == null) {
             failures += 1;
+            permanentFailures += 1;
             continue;
           }
           const key = await identity(id);
@@ -152,7 +163,7 @@ export async function readChatHistory(input: {
                 cache.conversations[key] = parsed;
               } catch (error) {
                 if (isAbortError(error)) throw error;
-                failures += 1;
+                recordFailure(error);
               }
             } else {
               if (fetched >= detailBudget) hitDetailBudget = true;
@@ -172,6 +183,7 @@ export async function readChatHistory(input: {
         if (reachedEnd) break;
         if (seen.size === before) {
           failures += 1;
+          permanentFailures += 1;
           break;
         }
       }
@@ -179,7 +191,7 @@ export async function readChatHistory(input: {
     }
   } catch (error) {
     if (isAbortError(error)) cancelled = true;
-    else failures += 1;
+    else recordFailure(error);
   }
 
   if (!cancelled) await input.store.save(cache, input.identity);
@@ -199,6 +211,8 @@ export async function readChatHistory(input: {
       excludedWorkConversations: work,
       unclassifiedTurns: unknown,
       failedConversations: failures,
+      retryableFailures,
+      permanentFailures,
       cancelled,
       hitDetailBudget,
       hitDeadline
