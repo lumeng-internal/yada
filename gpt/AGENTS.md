@@ -16,34 +16,41 @@ Current version: **4.0.0**. This is still the pre-release architecture closeout.
 业务事件 → ConversationSync → readConversation() → ConversationSnapshot
   ├─ activeTurns → Rail / Preview / Copy All
   └─ quota source → Vibe Bar parser → Local Ledger → Action rings / Popup
+
+Navigation:
+  NativeNavigationPort
+    ├─ Direct
+    ├─ Official Button
+    └─ Stable Slot
 ```
 
 One current-conversation read. One snapshot. Navigation does not own a second conversation copy. Quota history may read older conversations with the same parser.
 
-Vendored Luna files live in `vendor/luna-navigation/` and are limited to the virtual-navigation core listed in `UPSTREAM.json`.
+Yada Rail always renders `ConversationSnapshot.activeTurns`. Clicking a tick uses ChatGPT native capabilities: a mounted user message, the official Prompt buttons, or persistent `data-turn-id-container` slots. An empty `?message=` reload may run at most once per conversation per tab to ask ChatGPT to build that skeleton.
 
 ## Scope
 
-Allowed: complete Yada rail, hover preview, copy-all, prompt library, local Pro quota estimates.
+Allowed: complete Yada rail, hover preview, copy-all, prompt library, local Pro quota estimates, native ChatGPT navigation (Direct / official button / stable slot).
 
 Forbidden:
 
-- Native bootstrap / official TOC as a product path
-- Playwright, Edge QA, a second Chrome/Edge, cookie/token export
+- Luna fingerprint / segment / virtual scroll search
+- native-bootstrap-page / HistoryTracker / 20-page restore state machines
+- Playwright, Edge QA from this Mac mini, a second Chrome/Edge, cookie/token export
 - debugger / webRequest / cookies permissions
 - ECS / RDS / OSS / analytics
 - Modifying `claude/` or `gemini/`
 - Pushing `main`, force push, PRs, GitHub Actions, Releases
+- Claiming MacBook 100+ conversation acceptance from the meeting browser
 
 ## Verification
 
 ```bash
 npm run check
 npm run build
-npm run candidate
 ```
 
-`npm run candidate` is the only acceptance gate. It reuses the existing meeting browser on port 9222. Hosted CI is disabled.
+`npm run candidate` can reuse the existing meeting browser on port 9222 for short-thread smoke. It is not MacBook native acceptance. Hosted CI is disabled.
 
 ## License
 

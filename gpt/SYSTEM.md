@@ -12,9 +12,13 @@ readConversation()
 ConversationSnapshot
    │
    ├─ activeTurns
-   │    ├─ Rail
+   │    ├─ Rail（完整轮次）
    │    ├─ Preview
-   │    └─ Copy All
+   │    ├─ Copy All
+   │    └─ NativeNavigationPort
+   │         ├─ Direct
+   │         ├─ Official Button
+   │         └─ Stable Slot
    │
    └─ quota source
         ↓
@@ -29,4 +33,4 @@ ConversationSnapshot
 
 完整同步只允许四类事件：路由 `conversationId` 变化、Assistant streaming `true→false`、新的稳定 Assistant `messageId`、Popup「立即刷新」。
 
-导航只有 Direct（目标已渲染）和 Virtual（Luna 最小核心）。没有官方 TOC 路径。
+导航身份是 `userMessageId`，正文只用于预览。官方导航在 Yada Rail 挂载后仅视觉隐藏，DOM 与按钮保留，程序仍可点击。每篇对话、每个标签页最多一次空 `?message=` 原生准备；`sessionStorage` 状态为 unseen / attempted / ready / unsupported。Luna 虚拟搜索已从生产路径删除。

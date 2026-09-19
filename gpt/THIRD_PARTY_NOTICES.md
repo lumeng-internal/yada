@@ -11,6 +11,8 @@ Introduced:
 - Full-conversation / paginated API contracts into `src/conversation/completeConversation.ts` (already present from 3.0.1; pagination now keeps the original `messages` view).
 - Prompt modal interaction patterns already in `src/prompts/`.
 
+Read-only for native navigation: `features/virtualizer-bridge.js`, `features/virtualizer-bridge-page.js`, `features/virtualized-jump.js` were used to understand ChatGPT's virtual list. React Fiber object-graph scanning, private `scrollToIndex` search, and deep React state walks were not ported.
+
 Not introduced: Reader, bookmarks, PDF/PNG export, cloud backup, a second navigation state machine.
 
 ## LunaTOC
@@ -19,12 +21,9 @@ https://github.com/Leo7805/luna-toc
 Commit: 1339969ec25d7c9b63068abd3776ce41780023ed
 License: MIT
 
-Introduced as a read-only module in `vendor/luna-navigation/`:
+Historical source only. The previous `vendor/luna-navigation/` fingerprint / segment / virtual-search core has been removed from production and tests. Yada no longer ships Luna Virtual Search.
 
-- Navigation data, fingerprinting, snapshot/anchor stores, virtual search planner/machine/controller, ChatGPT virtual-search/rendered-text adapters, fetch bumper helpers (not installed as a page hook), and their upstream tests.
-- Copilot stubs exist only because the unmodified platform registry imports them.
-
-Not introduced: sidebar UI, settings page, prompt library UI, application shell, outline UI, MAIN-world page-hook IIFE. Yada does not install Luna's fetch interceptor.
+Not introduced: sidebar UI, settings page, prompt library UI, application shell, outline UI, MAIN-world page-hook IIFE.
 
 ## AI-MarkDone
 
@@ -32,9 +31,9 @@ https://github.com/zhaoliangbin42/AI-MarkDone
 Commit: d6cc562931607f378c48023420f814de1f7c9d60
 License: MIT
 
-Reference only: stable message identity, pending-navigation lifecycle, route cancel, long-thread test standards.
+Ported navigation closure only. File mapping and adaptations are listed in `NOTICE.md`.
 
-Not copied: Reader, bookmarks, annotations, PDF/PNG, cloud backup.
+Not copied: Reader, bookmarks, annotations, PDF/PNG, Google Drive, formulas, cloud backup, settings center, non-ChatGPT platforms, bookmark pending-navigation restorer, or the 200-step monotonic seeker.
 
 ## MKRingProgressView
 
@@ -74,7 +73,7 @@ Design-research only. Not bundled. Users do not install it.
 
 ## Historical note
 
-3.1.1 native bootstrap and “install GPT Navigator Helper so official navigation appears” are obsolete product instructions.
+3.1.1 native bootstrap and “install GPT Navigator Helper so official navigation appears” are obsolete product instructions. The current empty `?message=` preparation is not that bootstrap: it does not paginate history, wrap IntersectionObserver, or loop-refresh.
 
 ## License texts
 

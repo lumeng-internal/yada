@@ -17,13 +17,13 @@
 
 ## 4.0.0
 
-4.0.0 不再依赖 ChatGPT 官方导航。Yada 从完整对话 API 立即画出全部刻度，导航只有 Direct 与 Virtual 两条路径。额度按 User turn 统计，规则与 Vibe Bar Chat Pro 核心对齐。
+4.0.0 由 ConversationSync 画出全部刻度。导航不再使用 Luna 虚拟搜索，改为 Direct、官方 Prompt 按钮和持久消息槽位。必要时每篇对话最多一次使用空 `?message=` 让 ChatGPT 自己生成官方导航骨架。额度按 User turn 统计，规则与 Vibe Bar Chat Pro 核心对齐。
 
 ## 使用
 
 顶部工具条仍为：`预览模式圆点 | 复制全部 | 提示词`。额度不出现在 ChatGPT 顶栏，只出现在浏览器工具栏图标和 popup。
 
-- **导航**：打开 N 轮对话立即生成 N 个刻度。
+- **导航**：打开 N 轮对话立即生成 N 个刻度。点击时优先复用 ChatGPT 已挂载消息或官方按钮 / 持久槽位。
 - **预览**：灰色只显示 Harson；绿色显示 Harson + ChatGPT。时间使用该轮 User 真实时间。
 - **复制全部**：当前活动分支 Markdown，各自真实时间戳。
 - **提示词**：本地 SVG 复制 / 编辑 / 删除。
@@ -31,9 +31,11 @@
 
 ## 安装
 
-需要已登录 ChatGPT 的 Chrome。
+需要已登录 ChatGPT 的 Chrome / Edge。
 
-1. 下载 `ChatGPT-Yada-v4.0.0-dist_chrome.zip`，解压后在扩展管理页加载 `dist_chrome`。
+当前 native-navigation 测试包：
+
+1. 加载 `gpt/dist_chrome`，或解压 `ChatGPT-Yada-v4.0.0-native-nav-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
 2. 已安装时重新加载扩展，再刷新 ChatGPT 标签页。
 
 本机目录：
@@ -42,17 +44,20 @@
 /Volumes/AutomationData/10_Workspace/Codex/yada-gpt-optimization-20260916/gpt/dist_chrome
 ```
 
+`ChatGPT-Yada-v4.0.0-dist_chrome.zip` 仍未生成。MacBook 真实 100+ 对话验收通过前不要把它当作正式发布包。
+
 ## 数据与边界
 
-`chrome.storage.local` 只保存提示词、预览偏好、额度事件元数据（哈希 ID / 时间 / 模型 / 分类），以及导航核心需要的数字锚点。不保存提问/回复正文、附件、Token、Cookie、Authorization 或完整 API 原始响应。不接入 ECS / RDS / OSS / 外部统计。
+`chrome.storage.local` 只保存提示词、预览偏好、额度事件元数据（哈希 ID / 时间 / 模型 / 分类）。不保存提问/回复正文、附件、Token、Cookie、Authorization 或完整 API 原始响应。不接入 ECS / RDS / OSS / 外部统计。
 
 ## 本地验证
 
 ```bash
-npm run candidate
+npm run check
+npm run build
 ```
 
-说明见 `QA.md`。不运行 GitHub CI。不启动第二个浏览器。
+Mac mini 会议浏览器只能做短对话 smoke。100+ 轮原生导航以 MacBook Edge 验收为准，见 `QA.md`。不运行 GitHub CI。不启动第二个浏览器。
 
 ## 许可证
 
