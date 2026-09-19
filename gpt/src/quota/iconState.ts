@@ -1,13 +1,20 @@
 import type { QuotaSnapshot } from "./types";
 import { remainingToRatio, renderQuotaIcons, type RingValues } from "./iconRenderer";
+import { historySyncLabel } from "./presentation";
 
 export function snapshotToRings(snapshot: QuotaSnapshot): RingValues {
-  const incomplete = snapshot.coverageLabel !== "完整" || snapshot.tightestRemainingPercent == null;
+  const center = snapshot.syncStatus === "loading" || snapshot.syncStatus === "backfill"
+    ? "…"
+    : snapshot.syncStatus === "error"
+      ? "!"
+      : snapshot.syncStatus === "partial" || snapshot.tightestRemainingPercent == null
+        ? "—"
+        : String(snapshot.tightestRemainingPercent);
   return {
     outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
     middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
     inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
-    center: incomplete ? "?" : String(snapshot.tightestRemainingPercent ?? 0)
+    center
   };
 }
 
@@ -20,7 +27,7 @@ export function snapshotTitle(snapshot: QuotaSnapshot): string {
     metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
     metricLine("两个 Pro", snapshot.combinedDaily),
     "",
-    `历史同步：${snapshot.historyComplete ? "完整" : "不完整"}`,
+    `历史同步：${historySyncLabel(snapshot)}`,
     `未分类轮次：${snapshot.unclassifiedTurns}`,
     snapshot.updatedLabel,
     workspace

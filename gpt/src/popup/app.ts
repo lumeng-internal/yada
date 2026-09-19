@@ -90,6 +90,12 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
   header.append(el("h1", "", "Pro 模型额度"), el("time", "", snapshot.updatedLabel));
   root.append(header);
 
+  root.append(el(
+    "p",
+    snapshot.syncStatus === "error" ? "warn" : "note",
+    historySyncLabel(snapshot)
+  ));
+
   const rings = el("div", "rings");
   const canvas = document.createElement("canvas");
   canvas.width = 148;
@@ -116,10 +122,10 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
     root.append(metricBlock("两个 Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
   }
 
-  root.append(el("p", "note", "预计剩余"));
+  if (snapshot.syncStatus === "ready") root.append(el("p", "note", "预计剩余"));
+  else root.append(el("p", "note", "历史补齐前不估算剩余"));
   root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
   root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
-  root.append(el("p", "note", historySyncLabel(snapshot)));
   root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
   root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
   if (snapshot.fallbackModel) {
@@ -155,7 +161,7 @@ function metricBlock(title: string, metric: QuotaMetric | null, snapshot: QuotaS
   if (metric.nextReleaseAt) wrap.append(el("p", "note", `下一次释放 ${formatTime(metric.nextReleaseAt)}`));
   if (metric.serverResetAt) wrap.append(el("p", "note", `服务端真实恢复时间 ${formatTime(metric.serverResetAt)}`));
   if (metric.exhausted) wrap.append(el("p", "warn", "该模型已耗尽"));
-  wrap.append(el("p", "note", snapshot.coverageLabel === "完整" ? "统计完整" : snapshot.historyComplete ? "历史估算" : "历史同步不完整"));
+  wrap.append(el("p", "note", snapshot.syncStatus === "ready" ? "统计完整" : "暂不估算剩余"));
   return wrap;
 }
 

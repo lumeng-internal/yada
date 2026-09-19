@@ -27,7 +27,7 @@ export function zipDist({ projectRoot, zipName, distDir = "dist_chrome" }) {
   if (existsSync(zipPath)) rmSync(zipPath);
   execFileSync("zip", ["-qry", zipName, distDir], { cwd: projectRoot });
   const listing = execFileSync("unzip", ["-Z1", zipName], { cwd: projectRoot }).toString();
-  if (!listing.includes(`${distDir}/content.js`) || !listing.includes(`${distDir}/background.js`) || !listing.includes(`${distDir}/popup.html`)) {
+  if (!listing.includes(`${distDir}/native-navigator-main.js`) || !listing.includes(`${distDir}/content.js`) || !listing.includes(`${distDir}/background.js`) || !listing.includes(`${distDir}/popup.html`)) {
     throw new Error("zip missing required extension files");
   }
   if (!listing.includes(`${distDir}/LICENSE`) || !listing.includes(`${distDir}/NOTICE.md`) || !listing.includes(`${distDir}/THIRD_PARTY_NOTICES.md`)) {

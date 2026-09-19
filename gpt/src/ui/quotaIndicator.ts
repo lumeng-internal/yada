@@ -15,9 +15,14 @@ import {
 } from "../quota/presentation";
 import { LEDGER_KEY, STATE_KEY, type QuotaSnapshot } from "../quota/types";
 import { sendRuntimeMessage } from "../shared/messages";
+import { detectYadaTheme, observeYadaTheme, type YadaTheme } from "./theme";
 
 export const QUOTA_INDICATOR_DEBOUNCE_MS = 80;
-export const UNKNOWN_QUOTA_RINGS: RingValues = { outer: 0, middle: 0, inner: 0, center: "?" };
+export const QUOTA_POPOVER_HOST_ID = "chatgpt-yada-quota-popover-host";
+export const UNKNOWN_QUOTA_RINGS: RingValues = { outer: 0, middle: 0, inner: 0, center: "…" };
+const ERROR_QUOTA_RINGS: RingValues = { outer: 0, middle: 0, inner: 0, center: "!" };
+const POPOVER_WIDTH = 312;
+const VIEWPORT_GUTTER = 8;
 
 export type QuotaStateResponse = {
   snapshot?: QuotaSnapshot;
@@ -32,39 +37,46 @@ export type QuotaStateSender = (
 type IndicatorStatus = "loading" | "ready" | "error";
 
 const POPOVER_CSS = `
+  :host {
+    --yada-text: #202123;
+    --yada-muted: rgba(32, 33, 35, 0.64);
+    --yada-border: rgba(32, 33, 35, 0.16);
+    color-scheme: light;
+    pointer-events: none;
+  }
+  :host([data-yada-theme="dark"]) {
+    --yada-text: #ececec;
+    --yada-muted: rgba(236, 236, 236, 0.66);
+    --yada-border: rgba(236, 236, 236, 0.16);
+    color-scheme: dark;
+  }
   [data-quota-popover] {
-    position: absolute;
-    z-index: 30;
+    position: fixed;
+    z-index: 2147483646;
     box-sizing: border-box;
-    width: 260px;
-    max-width: calc(100vw - 16px);
-    padding: 12px;
-    border: 1px solid var(--yada-button-border);
+    width: min(${POPOVER_WIDTH}px, calc(100vw - ${VIEWPORT_GUTTER * 2}px));
+    max-height: calc(100vh - ${VIEWPORT_GUTTER * 2}px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    border: 1px solid var(--yada-border);
     border-radius: 12px;
     background: #fff;
     color: var(--yada-text);
-    box-shadow: 0 10px 28px rgba(15, 15, 15, 0.12);
+    box-shadow: 0 12px 32px rgba(15, 15, 15, 0.18);
     font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     text-align: left;
     white-space: normal;
+    pointer-events: auto;
   }
+  [data-quota-popover][hidden] { display: none !important; }
   :host([data-yada-theme="dark"]) [data-quota-popover] {
     background: #2a2a2a;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
   }
-  [data-quota-popover] h2 {
-    margin: 0 0 8px;
-    font-size: 13px;
-    font-weight: 700;
-  }
-  [data-quota-popover] h3 {
-    margin: 10px 0 2px;
-    font-size: 12px;
-    font-weight: 700;
-  }
-  [data-quota-popover] p {
-    margin: 0;
-  }
+  [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+  [data-quota-popover] h3 { margin: 10px 0 2px; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] p { margin: 0; }
   [data-quota-popover] [data-quota-note],
   [data-quota-popover] [data-quota-warn],
   [data-quota-popover] [data-quota-error] {
@@ -73,24 +85,23 @@ const POPOVER_CSS = `
     color: var(--yada-muted);
   }
   [data-quota-popover] [data-quota-warn],
-  [data-quota-popover] [data-quota-error] {
-    color: var(--yada-text);
-  }
+  [data-quota-popover] [data-quota-error] { color: var(--yada-text); }
 `;
 
 export class QuotaIndicator {
   private readonly send: QuotaStateSender;
   private readonly debounceMs: number;
   private readonly canvas: HTMLCanvasElement;
+  private readonly portalHost: HTMLDivElement;
   private readonly popover: HTMLDivElement;
-  private readonly styleEl: HTMLStyleElement;
-  private readonly themeObserver: MutationObserver;
+  private readonly disposeTheme: () => void;
   private disposed = false;
   private generation = 0;
   private refreshTimer = 0;
   private status: IndicatorStatus = "loading";
   private snapshot: QuotaSnapshot | null = null;
   private rings: RingValues = UNKNOWN_QUOTA_RINGS;
+  private themeValue: YadaTheme;
 
   constructor(
     private readonly button: HTMLButtonElement,
@@ -100,22 +111,35 @@ export class QuotaIndicator {
     this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
     this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
     this.canvas.setAttribute("aria-hidden", "true");
-    const root = this.root();
-    this.styleEl = document.createElement("style");
-    this.styleEl.textContent = POPOVER_CSS;
+
+    document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
+    this.portalHost = document.createElement("div");
+    this.portalHost.id = QUOTA_POPOVER_HOST_ID;
+    this.portalHost.dataset.yadaRoot = "true";
+    this.themeValue = detectYadaTheme();
+    this.portalHost.dataset.yadaTheme = this.themeValue;
+    const portal = this.portalHost.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = POPOVER_CSS;
     this.popover = document.createElement("div");
     this.popover.hidden = true;
     this.popover.dataset.quotaPopover = "true";
     this.popover.setAttribute("role", "dialog");
     this.popover.setAttribute("aria-label", "Pro 模型额度");
-    root.append(this.styleEl, this.popover);
-    this.themeObserver = new MutationObserver(() => this.paint(this.rings));
-    const host = this.host();
-    if (host) this.themeObserver.observe(host, { attributes: true, attributeFilter: ["data-yada-theme"] });
+    portal.append(style, this.popover);
+    (document.body ?? document.documentElement).append(this.portalHost);
+
+    this.disposeTheme = observeYadaTheme((theme) => {
+      this.themeValue = theme;
+      this.portalHost.dataset.yadaTheme = theme;
+      this.paint(this.rings);
+    });
     this.button.setAttribute("aria-haspopup", "dialog");
     this.button.addEventListener("click", this.onClick);
     document.addEventListener("pointerdown", this.onPointerDown, true);
     document.addEventListener("keydown", this.onKeyDown, true);
+    window.addEventListener("resize", this.onViewportChange, { passive: true });
+    window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
     chrome.storage?.onChanged?.addListener(this.onStorageChanged);
     this.apply(null, "loading");
     void this.loadState();
@@ -133,13 +157,14 @@ export class QuotaIndicator {
     this.generation += 1;
     window.clearTimeout(this.refreshTimer);
     this.refreshTimer = 0;
-    this.themeObserver.disconnect();
+    this.disposeTheme();
     this.button.removeEventListener("click", this.onClick);
     document.removeEventListener("pointerdown", this.onPointerDown, true);
     document.removeEventListener("keydown", this.onKeyDown, true);
+    window.removeEventListener("resize", this.onViewportChange);
+    window.removeEventListener("scroll", this.onViewportChange, true);
     chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
-    this.popover.remove();
-    this.styleEl.remove();
+    this.portalHost.remove();
   }
 
   private readonly onClick = (event: MouseEvent): void => {
@@ -152,7 +177,7 @@ export class QuotaIndicator {
   private readonly onPointerDown = (event: PointerEvent): void => {
     if (this.popover.hidden) return;
     const path = event.composedPath();
-    if (path.includes(this.button) || path.includes(this.popover)) return;
+    if (path.includes(this.button) || path.includes(this.popover) || path.includes(this.portalHost)) return;
     this.close();
   };
 
@@ -161,6 +186,10 @@ export class QuotaIndicator {
     event.stopPropagation();
     this.close();
     this.button.focus();
+  };
+
+  private readonly onViewportChange = (): void => {
+    if (!this.popover.hidden) this.positionPopover();
   };
 
   private readonly onStorageChanged = (
@@ -193,7 +222,11 @@ export class QuotaIndicator {
   private apply(snapshot: QuotaSnapshot | null, status: IndicatorStatus): void {
     this.snapshot = snapshot;
     this.status = status;
-    const rings = snapshot ? snapshotToRings(snapshot) : UNKNOWN_QUOTA_RINGS;
+    const rings = status === "error"
+      ? ERROR_QUOTA_RINGS
+      : snapshot
+        ? snapshotToRings(snapshot)
+        : UNKNOWN_QUOTA_RINGS;
     this.paint(rings);
     this.setTitle(
       status === "error"
@@ -217,7 +250,7 @@ export class QuotaIndicator {
     paintQuotaCanvas(
       this.canvas,
       rings,
-      this.theme() === "light" ? LIGHT_ICON_PALETTE : DARK_ICON_PALETTE
+      this.themeValue === "light" ? LIGHT_ICON_PALETTE : DARK_ICON_PALETTE
     );
   }
 
@@ -242,11 +275,16 @@ export class QuotaIndicator {
       this.popover.append(note("无法读取额度账本", "quota-error"));
       return;
     }
-    if (!this.snapshot) return;
+    if (!this.snapshot) {
+      this.popover.append(note("正在读取额度", "quota-note"));
+      return;
+    }
 
+    this.popover.append(note(historySyncLabel(this.snapshot), this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
+    if (this.snapshot.syncStatus === "error") return;
     const planNote = planStatusNote(this.snapshot);
     if (planNote) this.popover.append(note(planNote, "quota-warn"));
-    else {
+    else if (this.snapshot.syncStatus === "ready") {
       for (const bucket of snapshotBucketViews(this.snapshot)) {
         const section = document.createElement("section");
         const title = document.createElement("h3");
@@ -260,8 +298,7 @@ export class QuotaIndicator {
       }
     }
 
-    this.popover.append(note("预计剩余", "quota-note"));
-    this.popover.append(note(historySyncLabel(this.snapshot), "quota-note"));
+    this.popover.append(note("本地估算，不是 ChatGPT 官方余额", "quota-note"));
     this.popover.append(note("只统计个人 Chat，不统计 Work 和 Codex", "quota-note"));
     this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
     const workspace = workspaceStatusNote(this.snapshot);
@@ -269,37 +306,32 @@ export class QuotaIndicator {
   }
 
   private positionPopover(): void {
-    const host = this.host();
-    const width = 260;
-    if (!host) {
-      this.popover.style.width = `${width}px`;
-      return;
-    }
-    const hostRect = host.getBoundingClientRect();
     const buttonRect = this.button.getBoundingClientRect();
-    const minLeft = 8 - hostRect.left;
-    const maxLeft = window.innerWidth - 8 - width - hostRect.left;
-    const preferred = buttonRect.right - hostRect.left - width;
-    const left = Math.min(Math.max(preferred, minLeft), Math.max(minLeft, maxLeft));
+    const width = Math.min(POPOVER_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_GUTTER * 2));
+    const left = clamp(
+      buttonRect.right - width,
+      VIEWPORT_GUTTER,
+      Math.max(VIEWPORT_GUTTER, window.innerWidth - VIEWPORT_GUTTER - width)
+    );
     this.popover.style.width = `${width}px`;
     this.popover.style.left = `${left}px`;
     this.popover.style.right = "auto";
-    this.popover.style.top = `${buttonRect.bottom - hostRect.top + 6}px`;
+    this.popover.style.top = `${VIEWPORT_GUTTER}px`;
+    const rect = this.popover.getBoundingClientRect();
+    const height = Math.min(rect.height, Math.max(0, window.innerHeight - VIEWPORT_GUTTER * 2));
+    const below = buttonRect.bottom + 6;
+    const above = buttonRect.top - height - 6;
+    const top = below + height <= window.innerHeight - VIEWPORT_GUTTER
+      ? below
+      : above >= VIEWPORT_GUTTER
+        ? above
+        : VIEWPORT_GUTTER;
+    this.popover.style.top = `${top}px`;
   }
+}
 
-  private theme(): "light" | "dark" {
-    return this.host()?.getAttribute("data-yada-theme") === "dark" ? "dark" : "light";
-  }
-
-  private host(): HTMLElement | null {
-    const root = this.button.getRootNode();
-    return root instanceof ShadowRoot ? (root.host as HTMLElement) : this.button.parentElement;
-  }
-
-  private root(): ShadowRoot | Document {
-    const root = this.button.getRootNode();
-    return root instanceof ShadowRoot ? root : document;
-  }
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(Math.max(value, minimum), maximum);
 }
 
 function note(text: string, kind: "quota-note" | "quota-warn" | "quota-error"): HTMLParagraphElement {

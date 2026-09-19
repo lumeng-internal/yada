@@ -1,57 +1,48 @@
 # ChatGPT Yada Agent Guide
 
-This file is mandatory reading before every work session in this repository.
+Read this file before every work session in `gpt/`.
 
-## Project
+## Product contract
 
-Project name: ChatGPT Yada
+Current version is **4.0.0**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
-Positioning: a single lightweight ChatGPT extension. Install once to get complete long-thread navigation, hover preview, copy-all with real timestamps, a local prompt library, and local Pro quota estimates.
-
-Current version: **4.0.0**. This is still the pre-release architecture closeout. Do not invent 4.0.1 or 5.0.0 unless a person explicitly changes the version.
+The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
 ## Architecture
 
-```text
-业务事件 → ConversationSync → readConversation() → ConversationSnapshot
-  ├─ activeTurns → Rail / Preview / Copy All
-  └─ quota source → Vibe Bar parser → Local Ledger → Action rings / page toolbar rings / Popup
+- `ConversationSync`: the one current-conversation snapshot for Copy All and current-conversation quota turns.
+- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper; no `chrome.*` API.
+- `nativeNavigator/hydrator.ts`: isolated, bounded host-history hydration with no scrolling or reload.
+- `quota/vibebar/*`: authoritative quota parsing and allowance rules.
+- `QuotaTracker`: progressive browser-lifecycle cache warmup; one flight, bounded passes, pause/cancel/stop.
+- `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
 
-Navigation:
-  NativeNavigationPort
-    ├─ Direct
-    ├─ Official Button
-    └─ Stable Slot
-```
+## Required safety boundaries
 
-One current-conversation read. One snapshot. Navigation does not own a second conversation copy. Quota history may read older conversations with the same parser.
+- Preserve the original fetch Promise/Response; inspect only a clone.
+- Never bridge or persist message bodies, auth data, Cookie, Token, or full payloads.
+- Never scroll, restore-scroll, reload, rewrite a deep link, or manipulate ChatGPT's official Navigator UI.
+- Stop on uncertainty, user input, drift over 8px, unstable layout, streaming, hidden page, route change, or budget exhaustion.
+- Do not add React/Vue, Fiber scanning, private virtualizer calls, debugger/webRequest/cookies permissions, a second extension, analytics, or external services.
+- Do not modify `claude/` or `gemini/`, push `main`, force push, open PRs, run hosted CI, or create Releases.
 
-Yada Rail always renders `ConversationSnapshot.activeTurns`. Clicking a tick uses ChatGPT native capabilities: a mounted user message, the official Prompt buttons, or persistent `data-turn-id-container` slots. An empty `?message=` reload may run at most once per conversation per tab to ask ChatGPT to build that skeleton.
+## Verification contract
 
-## Scope
-
-Allowed: complete Yada rail, hover preview, copy-all, prompt library, local Pro quota estimates, native ChatGPT navigation (Direct / official button / stable slot).
-
-Forbidden:
-
-- Luna fingerprint / segment / virtual scroll search
-- native-bootstrap-page / HistoryTracker / 20-page restore state machines
-- Playwright, Edge QA from this Mac mini, a second Chrome/Edge, cookie/token export
-- debugger / webRequest / cookies permissions
-- ECS / RDS / OSS / analytics
-- Modifying `claude/` or `gemini/`
-- Pushing `main`, force push, PRs, GitHub Actions, Releases
-- Claiming MacBook 100+ conversation acceptance from the meeting browser
-
-## Verification
+The engineering closeout gate is:
 
 ```bash
-npm run check
 npm run build
+git diff --check
+npm run verify:gate
 ```
 
-`npm run candidate` can reuse the existing meeting browser on port 9222 for short-thread smoke. It is not MacBook native acceptance. Hosted CI is disabled.
+Focused or full unit tests may be used for changed pure logic, but `npm run check` and browser automation are not release authority. Do not run candidate/Playwright/Mac mini ChatGPT acceptance, create test conversations, or consume Pro quota. Real product acceptance remains a MacBook manual task.
 
-## License
+## Upstream boundaries
 
-`gpt/` is AGPL-3.0 because it ports Vibe Bar Chat quota code. `claude/` and `gemini/` stay separate programs with their own licenses.
+- Vibe Bar `af26391c5bcc074108072af8f2807fc4c47edf21`, AGPL-3.0: quota source of truth.
+- AI-MarkDone `d6cc562931607f378c48023420f814de1f7c9d60`, MIT: minimal official navigator selectors/structure and stable message identity are adapted.
+- GPT Conversation Toolkit `ca628eeaed87323c195aa7b6d2750d2804e6ac77`, MIT: existing conversation API and prompt library patterns remain; no Fiber virtualizer code.
+- GPT Navigator Helper `2ac38de536dacb0ed1ad25c31396fd62a1c49022`, no project license: behavioral reference only; no source copied.
+
+`gpt/` remains AGPL-3.0-only. Keep `NOTICE.md` and `THIRD_PARTY_NOTICES.md` accurate when upstream-derived code changes.

@@ -16,8 +16,11 @@ if (!manifest.permissions?.includes("storage") || !manifest.permissions?.include
 const forbiddenPermissions = ["debugger", "webRequest", "cookies", "identity"];
 if (manifest.permissions.some((item) => forbiddenPermissions.includes(item))) throw new Error("forbidden permission present");
 const scripts = (manifest.content_scripts ?? []).flatMap((item) => item.js ?? []);
-if (!scripts.includes("content.js") || scripts.includes("native-bootstrap-page.js")) {
-  throw new Error("content scripts must include content.js and must not include native-bootstrap-page.js");
+const mainHook = (manifest.content_scripts ?? []).find((item) =>
+  item.world === "MAIN" && item.run_at === "document_start" && item.js?.includes("native-navigator-main.js")
+);
+if (!scripts.includes("content.js") || !mainHook || scripts.includes("native-bootstrap-page.js")) {
+  throw new Error("content scripts must include content.js and a document_start MAIN native navigator hook");
 }
 if (existsSync(resolve(root, "src/nativeBootstrap")) || existsSync(resolve(root, "public/native-bootstrap-page.js"))) {
   throw new Error("nativeBootstrap files still exist");
@@ -25,7 +28,7 @@ if (existsSync(resolve(root, "src/nativeBootstrap")) || existsSync(resolve(root,
 if (existsSync(resolve(root, "vendor/luna-navigation"))) {
   throw new Error("vendor/luna-navigation must be removed from production");
 }
-console.log("PASS manifest 4.0.0 has content, background, popup, and no native-bootstrap-page.js");
+console.log("PASS manifest 4.0.0 has isolated content, document_start MAIN hook, background, and popup");
 
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -44,10 +47,16 @@ for (const [pattern, label] of [
   [/HistoryTracker/, "HistoryTracker"],
   [/导航准备中/, "导航准备中"],
   [/导航未完整/, "导航未完整"],
-  [/waiting-native|waiting-dom/, "native wait states"],
+  [/YadaRailController|NativeNavigationPort|jumpStableSlot/, "retired Yada navigation"],
+  [/OfficialNavigationVisibilityController|NativePreparationController/, "retired official-navigation controls"],
+  [/PREVIEW_KEY|data-preview-mode|previewAssistant/, "retired preview mode"],
+  [/data-yada-navigator|chatgpt-yada-rail-host/, "second navigator host"],
   [/searchVirtualPrompt|jumpVirtual/, "Luna virtual search"],
   [/luna-navigation/, "luna-navigation"]
 ]) {
   if (pattern.test(src)) throw new Error(`production source still contains ${label}`);
 }
-console.log("PASS native bootstrap failure path is absent");
+for (const retired of ["src/navigation", "src/rail", "scripts/candidate.mjs", "scripts/verify-browser.mjs", "scripts/verify-features.ts", "scripts/qa"]) {
+  if (existsSync(resolve(root, retired))) throw new Error(`retired path still exists: ${retired}`);
+}
+console.log("PASS retired rail, preview, direct/stable navigation, and browser-candidate paths are absent");

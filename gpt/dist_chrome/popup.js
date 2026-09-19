@@ -47,7 +47,8 @@
     });
     if (size >= 32 && rings.center) {
       ctx.fillStyle = palette.center;
-      ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
+      const symbolic = rings.center === "…" || rings.center === "—" || rings.center === "!";
+      ctx.font = `600 ${Math.round(size * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(rings.center, cx, cy + size * 0.02);
@@ -75,17 +76,6 @@
     ctx.stroke();
   }
 
-  // src/quota/iconState.ts
-  function snapshotToRings(snapshot) {
-    const incomplete = snapshot.coverageLabel !== "完整" || snapshot.tightestRemainingPercent == null;
-    return {
-      outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
-      middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
-      inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
-      center: incomplete ? "?" : String(snapshot.tightestRemainingPercent ?? 0)
-    };
-  }
-
   // src/quota/presentation.ts
   function metricRemainingLabel(metric) {
     if (!metric) return "当前套餐无此桶";
@@ -93,11 +83,22 @@
     return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
   }
   function metricPercentLabel(metric) {
-    if (!metric || metric.remainingRatio == null) return "?";
+    if (!metric || metric.remainingRatio == null) return "—";
     return `${Math.round(metric.remainingRatio * 100)}%`;
   }
   function historySyncLabel(snapshot) {
-    return snapshot.historyComplete ? "历史同步完整" : "历史同步不完整";
+    switch (snapshot.syncStatus) {
+      case "loading":
+        return "正在读取额度";
+      case "backfill":
+        return `正在补齐最近 7 天 ChatGPT 历史 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
+      case "ready":
+        return "历史同步完整";
+      case "error":
+        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+      default:
+        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+    }
   }
   function planStatusNote(snapshot) {
     if (!snapshot.plan) return "未确认 ChatGPT 套餐，不猜测额度桶。";
@@ -105,6 +106,17 @@
   }
   function workspaceStatusNote(snapshot) {
     return snapshot.personalProEligible ? null : "当前工作区不计入个人 Pro Chat 额度";
+  }
+
+  // src/quota/iconState.ts
+  function snapshotToRings(snapshot) {
+    const center = snapshot.syncStatus === "loading" || snapshot.syncStatus === "backfill" ? "…" : snapshot.syncStatus === "error" ? "!" : snapshot.syncStatus === "partial" || snapshot.tightestRemainingPercent == null ? "—" : String(snapshot.tightestRemainingPercent);
+    return {
+      outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
+      middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
+      inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
+      center
+    };
   }
 
   // src/shared/timeout.ts
@@ -187,6 +199,11 @@
     const header = el("div", "header");
     header.append(el("h1", "", "Pro 模型额度"), el("time", "", snapshot.updatedLabel));
     root.append(header);
+    root.append(el(
+      "p",
+      snapshot.syncStatus === "error" ? "warn" : "note",
+      historySyncLabel(snapshot)
+    ));
     const rings = el("div", "rings");
     const canvas = document.createElement("canvas");
     canvas.width = 148;
@@ -211,10 +228,10 @@
       root.append(metricBlock("GPT-5.6 Sol Pro · 过去 24 小时估算", snapshot.solProDaily, snapshot));
       root.append(metricBlock("两个 Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
     }
-    root.append(el("p", "note", "预计剩余"));
+    if (snapshot.syncStatus === "ready") root.append(el("p", "note", "预计剩余"));
+    else root.append(el("p", "note", "历史补齐前不估算剩余"));
     root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
     root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
-    root.append(el("p", "note", historySyncLabel(snapshot)));
     root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
     root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
     if (snapshot.fallbackModel) {
@@ -250,7 +267,7 @@
     if (metric.nextReleaseAt) wrap.append(el("p", "note", `下一次释放 ${formatTime(metric.nextReleaseAt)}`));
     if (metric.serverResetAt) wrap.append(el("p", "note", `服务端真实恢复时间 ${formatTime(metric.serverResetAt)}`));
     if (metric.exhausted) wrap.append(el("p", "warn", "该模型已耗尽"));
-    wrap.append(el("p", "note", snapshot.coverageLabel === "完整" ? "统计完整" : snapshot.historyComplete ? "历史估算" : "历史同步不完整"));
+    wrap.append(el("p", "note", snapshot.syncStatus === "ready" ? "统计完整" : "暂不估算剩余"));
     return wrap;
   }
   function formatTime(value) {

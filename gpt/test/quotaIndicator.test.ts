@@ -6,6 +6,7 @@ import { GPT6_PRO, SOL_PRO } from "../src/quota/vibebar/allowances";
 import { YadaToolbar } from "../src/ui/toolbar";
 import {
   QUOTA_INDICATOR_DEBOUNCE_MS,
+  QUOTA_POPOVER_HOST_ID,
   QuotaIndicator,
   type QuotaStateSender
 } from "../src/ui/quotaIndicator";
@@ -23,7 +24,7 @@ function event(id: string, model: string) {
   };
 }
 
-function proSnapshot(count = 40, extras: { historyComplete?: boolean; plan?: QuotaSnapshot["plan"]; workspaceKind?: QuotaSnapshot["workspaceKind"] } = {}): QuotaSnapshot {
+function proSnapshot(count = 40, extras: { historyComplete?: boolean; syncStatus?: QuotaSnapshot["syncStatus"]; plan?: QuotaSnapshot["plan"]; workspaceKind?: QuotaSnapshot["workspaceKind"] } = {}): QuotaSnapshot {
   const gpt6 = Array.from({ length: count }, (_, index) => event(`g${index}`, GPT6_PRO));
   const sol = [event("s0", SOL_PRO)];
   return calculateQuotaSnapshot({
@@ -32,6 +33,7 @@ function proSnapshot(count = 40, extras: { historyComplete?: boolean; plan?: Quo
     workspaceKind: extras.workspaceKind ?? "personal",
     events: [...gpt6, ...sol],
     historyComplete: extras.historyComplete ?? true,
+    syncStatus: extras.syncStatus,
     unclassifiedTurns: extras.historyComplete === false ? 2 : 0,
     now: NOW
   });
@@ -67,7 +69,7 @@ function mountIndicator(send: QuotaStateSender, theme: "light" | "dark" = "light
   shadow.append(button);
   document.body.append(host);
   const indicator = new QuotaIndicator(button, { send });
-  const popover = shadow.querySelector<HTMLElement>("[data-quota-popover]")!;
+  const popover = document.getElementById(QUOTA_POPOVER_HOST_ID)?.shadowRoot?.querySelector<HTMLElement>("[data-quota-popover]")!;
   return { host, button, canvas, indicator, popover };
 }
 
@@ -91,26 +93,25 @@ describe("inline toolbar quota rings", () => {
     document.body.innerHTML = "";
   });
 
-  it("keeps preview, quota, copy, prompts in that order", () => {
+  it("keeps only quota, copy, prompts in that order", () => {
     toolbar = mountToolbar();
     const buttons = [...toolbarShadow().querySelectorAll("button")];
     expect(buttons.map((button) => {
-      if (button.hasAttribute("data-preview-mode")) return "preview";
       if (button.hasAttribute("data-quota")) return "quota";
       if (button.hasAttribute("data-copy-all")) return "copy";
       if (button.hasAttribute("data-prompts")) return "prompts";
       return button.textContent;
-    })).toEqual(["preview", "quota", "copy", "prompts"]);
+    })).toEqual(["quota", "copy", "prompts"]);
+    expect(toolbarShadow().querySelector("[data-preview-mode]")).toBeNull();
   });
 
-  it("sizes the quota icon with the 20px preview icon, not the 29px capsule", () => {
+  it("sizes the quota icon as a 20px control, not a 29px capsule", () => {
     toolbar = mountToolbar();
     const root = toolbarShadow();
-    const preview = root.querySelector<HTMLButtonElement>("[data-preview-mode]")!;
     const quota = root.querySelector<HTMLButtonElement>("[data-quota]")!;
     const copy = root.querySelector<HTMLButtonElement>("[data-copy-all]")!;
     const css = root.querySelector("style")!.textContent ?? "";
-    const iconRule = css.slice(css.indexOf("button[data-preview-mode]"), css.indexOf("button[data-quota] canvas"));
+    const iconRule = css.slice(css.indexOf("button[data-quota]"), css.indexOf("button[data-quota] canvas"));
     expect(css).toMatch(/button\s*\{[^}]*height:\s*29px/);
     expect(iconRule).toContain("button[data-quota]");
     expect(iconRule).toMatch(/width:\s*20px/);
@@ -120,7 +121,6 @@ describe("inline toolbar quota rings", () => {
     expect(iconRule).toMatch(/border-radius:\s*50%/);
     expect(iconRule).not.toMatch(/height:\s*29px/);
     expect(css).toMatch(/button\[data-quota\] canvas\s*\{[^}]*width:\s*20px/);
-    expect(preview.textContent).toBe("●");
     expect(copy.textContent).toBe("复制全部");
     expect(quota.textContent).not.toMatch(/额度|Pro|%/);
   });
@@ -133,7 +133,7 @@ describe("inline toolbar quota rings", () => {
     expect(canvas).toBeTruthy();
     expect(quota.title).toBe("Pro 额度：读取中");
     expect(quota.getAttribute("aria-label")).toBe("Pro 额度：读取中");
-    expect(canvas?.dataset.quotaCenter).toBe("?");
+    expect(canvas?.dataset.quotaCenter).toBe("…");
     expect(canvas?.dataset.quotaOuter).toBe("0");
     expect(canvas?.dataset.quotaMiddle).toBe("0");
     expect(canvas?.dataset.quotaInner).toBe("0");
@@ -163,17 +163,29 @@ describe("inline toolbar quota rings", () => {
     expect(mounted.popover.textContent).toContain(`预计剩余 ${snapshot.combinedDaily?.estimatedRemaining} / ${snapshot.combinedDaily?.limit}`);
   });
 
-  it("keeps estimated rings but marks incomplete history with ?", async () => {
+  it("does not estimate remaining and marks partial history with a dash", async () => {
     const snapshot = proSnapshot(8, { historyComplete: false });
     const rings = snapshotToRings(snapshot);
     const send = vi.fn<QuotaStateSender>(async () => ({ snapshot }));
     const mounted = mountIndicator(send);
     indicator = mounted.indicator;
     await flush();
-    expect(rings.center).toBe("?");
-    expect(mounted.canvas.dataset.quotaCenter).toBe("?");
+    expect(rings.center).toBe("—");
+    expect(mounted.canvas.dataset.quotaCenter).toBe("—");
     mounted.button.click();
-    expect(mounted.popover.textContent).toContain("历史同步不完整");
+    expect(mounted.popover.textContent).toContain("历史暂未补齐");
+    expect(mounted.popover.textContent).not.toMatch(/预计剩余 \d+/);
+  });
+
+  it("uses an ellipsis while progressive history backfill is active", async () => {
+    const snapshot = proSnapshot(8, { historyComplete: false, syncStatus: "backfill" });
+    const mounted = mountIndicator(async () => ({ snapshot }));
+    indicator = mounted.indicator;
+    await flush();
+    expect(mounted.canvas.dataset.quotaCenter).toBe("…");
+    mounted.button.click();
+    expect(mounted.popover.textContent).toContain("正在补齐最近 7 天 ChatGPT 历史");
+    expect(mounted.popover.textContent).toContain(`已记录 ${snapshot.recordedCount}`);
   });
 
   it("does not invent Pro remaining for unknown plans", async () => {
@@ -229,13 +241,26 @@ describe("inline toolbar quota rings", () => {
     expect(mounted.popover.hidden).toBe(true);
   });
 
+  it("mounts the quota detail in a detached fixed portal", async () => {
+    const mounted = mountIndicator(async () => ({ snapshot: proSnapshot() }));
+    indicator = mounted.indicator;
+    await flush();
+    const portal = document.getElementById(QUOTA_POPOVER_HOST_ID);
+    const css = portal?.shadowRoot?.querySelector("style")?.textContent ?? "";
+    expect(portal?.parentElement).toBe(document.body);
+    expect(mounted.popover.getRootNode()).toBe(portal?.shadowRoot);
+    expect(css).toMatch(/position:\s*fixed/);
+    expect(css).toMatch(/max-height:\s*calc\(100vh - 16px\)/);
+    expect(css).toMatch(/overflow:\s*auto/);
+  });
+
   it("keeps the 20px button and fail-soft copy when background is unavailable", async () => {
     const send = vi.fn<QuotaStateSender>(async () => ({ error: "down" }));
     const mounted = mountIndicator(send);
     indicator = mounted.indicator;
     await flush();
     expect(mounted.button.title).toBe("Pro 额度暂不可用");
-    expect(mounted.canvas.dataset.quotaCenter).toBe("?");
+    expect(mounted.canvas.dataset.quotaCenter).toBe("!");
     mounted.button.click();
     expect(mounted.popover.textContent).toContain("无法读取额度账本");
   });
@@ -263,18 +288,16 @@ describe("inline toolbar quota rings", () => {
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });
 
-  it("keeps preview, copy-all, and prompts working beside the quota icon", () => {
+  it("keeps copy-all and prompts working beside the quota icon", () => {
     toolbar = mountToolbar();
     const root = toolbarShadow();
-    const preview = root.querySelector<HTMLButtonElement>("[data-preview-mode]")!;
     const copy = root.querySelector<HTMLButtonElement>("[data-copy-all]")!;
     const prompts = root.querySelector<HTMLButtonElement>("[data-prompts]")!;
-    expect(preview.textContent).toBe("●");
+    expect(root.querySelector("[data-preview-mode]")).toBeNull();
     expect(copy.textContent).toBe("复制全部");
     expect(prompts.textContent).toBe("提示词");
-    preview.click();
-    expect(preview.getAttribute("aria-pressed")).toBe("true");
     toolbar.closePanels();
-    expect(root.querySelector("[data-quota-popover]")?.hasAttribute("hidden")).toBe(true);
+    const popover = document.getElementById(QUOTA_POPOVER_HOST_ID)?.shadowRoot?.querySelector<HTMLElement>("[data-quota-popover]");
+    expect(popover?.hasAttribute("hidden")).toBe(true);
   });
 });

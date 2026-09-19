@@ -283,14 +283,14 @@
   }
   function findAccountId(value) {
     if (!value || typeof value !== "object") return null;
-    const record = value;
+    const record2 = value;
     for (const key of ["accountId", "account_id", "currentAccountId", "current_account_id", "id"]) {
-      const candidate = record[key];
+      const candidate = record2[key];
       if (typeof candidate === "string" && /^account-[a-z0-9_-]+$/i.test(candidate)) {
         return candidate;
       }
     }
-    for (const candidate of Object.values(record)) {
+    for (const candidate of Object.values(record2)) {
       const nested = findAccountId(candidate);
       if (nested) return nested;
     }
@@ -336,65 +336,6 @@
     '[contenteditable="true"]',
     ".ProseMirror"
   ].join(", ");
-  function isComposerElement(element) {
-    if (!(element instanceof Element)) return false;
-    if (element.matches(DIRECT_COMPOSER_SELECTOR)) return true;
-    const className = String(element.getAttribute("class") ?? "");
-    if (/\bProseMirror\b/i.test(className) && hasComposerAncestor(element)) return true;
-    if (/prompt/i.test(className) && hasComposerEvidence(element)) return true;
-    if (isStickyBottomComposerContainer(element)) return true;
-    return false;
-  }
-  function isInsideComposer(element) {
-    if (!(element instanceof Element)) return false;
-    if (element.closest(DIRECT_COMPOSER_SELECTOR)) return true;
-    let current = element;
-    while (current && current !== document.documentElement) {
-      if (isComposerElement(current)) return true;
-      current = current.parentElement;
-    }
-    return false;
-  }
-  function hasUnsentComposerDraft(root = document) {
-    try {
-      for (const node of root.querySelectorAll(DRAFT_CONTROL_SELECTOR)) {
-        if (!(node instanceof HTMLElement)) continue;
-        if (!isComposerElement(node) && !isInsideComposer(node)) continue;
-        if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
-          if (node.value.trim()) return true;
-          continue;
-        }
-        if ((node.innerText || node.textContent || "").trim()) return true;
-      }
-    } catch {
-      return false;
-    }
-    return false;
-  }
-  function hasComposerAncestor(element) {
-    return Boolean(element.closest([
-      "form",
-      "#prompt-textarea",
-      '[id*="prompt-textarea" i]',
-      '[data-testid*="composer" i]',
-      '[data-testid*="prompt-textarea" i]',
-      '[class*="composer" i]',
-      '[class*="prompt-textarea" i]'
-    ].join(", ")));
-  }
-  function hasComposerEvidence(element) {
-    return hasComposerAncestor(element) || Boolean(element.querySelector(DRAFT_CONTROL_SELECTOR)) || isStickyBottomComposerContainer(element);
-  }
-  function isStickyBottomComposerContainer(element) {
-    if (!(element instanceof HTMLElement)) return false;
-    if (!element.querySelector(DRAFT_CONTROL_SELECTOR)) return false;
-    const style = window.getComputedStyle(element);
-    const rect = element.getBoundingClientRect();
-    const nearBottom = rect.bottom >= window.innerHeight - 180 && rect.top >= window.innerHeight * 0.35;
-    const compactEnough = rect.height > 0 && rect.height <= Math.max(460, window.innerHeight * 0.55);
-    const positionedAtBottom = style.position === "fixed" || style.position === "sticky";
-    return (positionedAtBottom || nearBottom) && compactEnough;
-  }
 
   // src/conversation/attachmentSummary.ts
   var FILE_EXTENSION_LABELS = [
@@ -446,9 +387,9 @@ ${cleanText}`;
     const aggregateResult = readRecord(metadata?.aggregate_result);
     if (Array.isArray(aggregateResult?.messages)) {
       for (const item of aggregateResult.messages) {
-        const record = readRecord(item);
-        if (record && readString(record, "message_type") === "image") {
-          const url = readString(record, "image_url") ?? readString(record, "url") ?? void 0;
+        const record2 = readRecord(item);
+        if (record2 && readString(record2, "message_type") === "image") {
+          const url = readString(record2, "image_url") ?? readString(record2, "url") ?? void 0;
           attachments.push({ kind: "image", label: "图片", key: makeKey("image", url ?? "aggregate") });
         }
       }
@@ -478,18 +419,18 @@ ${cleanText}`;
     return "";
   }
   function collectAttachmentFromPart(part, attachments) {
-    const record = readRecord(part);
-    if (!record) return;
-    const contentType = (readString(record, "content_type") ?? readString(record, "type") ?? "").toLowerCase();
-    const filename = readString(record, "file_name") ?? readString(record, "filename") ?? readString(record, "name") ?? readString(record, "title") ?? void 0;
-    const mimeType = readString(record, "mime_type") ?? readString(record, "mimetype") ?? readString(record, "mime") ?? void 0;
-    const assetPointer = readString(record, "asset_pointer") ?? readString(record, "image_asset_pointer") ?? readString(record, "url") ?? readString(record, "href") ?? void 0;
+    const record2 = readRecord(part);
+    if (!record2) return;
+    const contentType = (readString(record2, "content_type") ?? readString(record2, "type") ?? "").toLowerCase();
+    const filename = readString(record2, "file_name") ?? readString(record2, "filename") ?? readString(record2, "name") ?? readString(record2, "title") ?? void 0;
+    const mimeType = readString(record2, "mime_type") ?? readString(record2, "mimetype") ?? readString(record2, "mime") ?? void 0;
+    const assetPointer = readString(record2, "asset_pointer") ?? readString(record2, "image_asset_pointer") ?? readString(record2, "url") ?? readString(record2, "href") ?? void 0;
     const key = makeKey("api", assetPointer ?? filename ?? mimeType ?? contentType);
     if (isImageContent(contentType, filename, mimeType, assetPointer)) {
       attachments.push({ kind: "image", label: "图片", key });
       return;
     }
-    if (contentType.includes("paste") || contentType.includes("pasted") || record.pasted === true) {
+    if (contentType.includes("paste") || contentType.includes("pasted") || record2.pasted === true) {
       attachments.push({ kind: "pasted", label: "粘贴内容", key: key ?? "pasted" });
       return;
     }
@@ -522,8 +463,8 @@ ${cleanText}`;
   function readRecord(value) {
     return value && typeof value === "object" ? value : null;
   }
-  function readString(record, key) {
-    const value = record[key];
+  function readString(record2, key) {
+    const value = record2[key];
     return typeof value === "string" && value.trim() ? value.trim() : null;
   }
   function isImageContent(contentType, filename, mimeType, assetPointer) {
@@ -671,10 +612,10 @@ ${text}
     return parts.map((part) => {
       if (typeof part === "string") return part;
       if (!part || typeof part !== "object") return "";
-      const record = part;
-      const contentType = readString2(record, "content_type") ?? readString2(record, "type") ?? "";
+      const record2 = part;
+      const contentType = readString2(record2, "content_type") ?? readString2(record2, "type") ?? "";
       if (contentType.includes("image") || contentType.includes("file")) return "";
-      return readString2(record, "text") ?? readString2(record, "content") ?? readString2(record, "markdown") ?? "";
+      return readString2(record2, "text") ?? readString2(record2, "content") ?? readString2(record2, "markdown") ?? "";
     }).filter(Boolean).join("\n\n");
   }
   function joinStringParts(parts) {
@@ -684,8 +625,8 @@ ${text}
   function readRole(message) {
     return message.author?.role;
   }
-  function readString2(record, key) {
-    const value = record[key];
+  function readString2(record2, key) {
+    const value = record2[key];
     return typeof value === "string" && value.trim() ? value.trim() : null;
   }
   function normalizeMarkdown(value) {
@@ -726,12 +667,12 @@ ${text}
     const limits = [];
     for (const row of rows) {
       if (!row || typeof row !== "object") continue;
-      const record = row;
-      const model = typeof record.model_slug === "string" ? record.model_slug : null;
+      const record2 = row;
+      const model = typeof record2.model_slug === "string" ? record2.model_slug : null;
       if (!model || !validModel(model)) continue;
-      const reset = parseDate(record.resets_after);
+      const reset = parseDate(record2.resets_after);
       if (reset != null && reset <= now) continue;
-      const fallbackRaw = typeof record.using_default_model_slug === "string" ? record.using_default_model_slug : null;
+      const fallbackRaw = typeof record2.using_default_model_slug === "string" ? record2.using_default_model_slug : null;
       const fallbackModel = fallbackRaw && validModel(fallbackRaw) ? fallbackRaw : null;
       limits.push({ model, resetsAt: reset, fallbackModel });
     }
@@ -757,8 +698,8 @@ ${text}
   }
   function isTemporary(value) {
     if (!value || typeof value !== "object") return false;
-    const record = value;
-    return record.is_temporary_chat === true || record.isTemporary === true;
+    const record2 = value;
+    return record2.is_temporary_chat === true || record2.isTemporary === true;
   }
   function conversationOrigin(value) {
     if (!value || typeof value !== "object") return null;
@@ -1205,1163 +1146,601 @@ ${text}
     return ids;
   }
 
-  // src/navigation/config.ts
-  var NATIVE_NAV_CONFIG = {
-    timeoutMs: 15e3,
-    directViewportMs: 320,
-    pollMs: 32,
-    alignmentQuietMs: 80,
-    alignmentTolerancePx: 8,
-    maxAlignmentAttempts: 2,
-    failStyleMs: 1500,
-    prepWaitMs: 3e3
-  };
-
-  // src/navigation/nativeCapability.ts
-  var CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR = [
-    `main [class$="_convSearchResultHighlightRoot"]`,
-    `main [class*="_convSearchResultHighlightRoot "]`
+  // src/nativeNavigator/dom.ts
+  var MESSAGE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
+  var OFFICIAL_ROOT_SELECTOR = [
+    'main [class$="_convSearchResultHighlightRoot"]',
+    'main [class*="_convSearchResultHighlightRoot "]'
   ].join(",");
-  var CHATGPT_OFFICIAL_NAV_FIXED_CHILD_SELECTOR = [
-    "fixed",
-    "inset-e-4",
-    "top-1/2",
-    "z-20",
-    "-translate-y-1/2"
-  ];
-  var CANCEL_KEYS = /* @__PURE__ */ new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Space"]);
-  function cssEscape(value) {
-    return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"');
-  }
-  function isOfficialFixedChild(element) {
-    return element instanceof HTMLElement && CHATGPT_OFFICIAL_NAV_FIXED_CHILD_SELECTOR.every((token) => element.classList.contains(token)) && !element.closest("[data-yada-root]");
-  }
-  function listOfficialNavigationRoots(root = document) {
-    return [...root.querySelectorAll(CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR)].filter((node) => [...node.children].some(isOfficialFixedChild));
-  }
-  function parsePromptNumber(button) {
-    const toc = button.dataset.tocItemIndex;
-    if (toc != null && /^\d+$/.test(toc)) return Number(toc);
-    const label = button.getAttribute("aria-label") ?? "";
-    const description = button.getAttribute("aria-description") ?? "";
-    const match = /Prompt\s+(\d+)/i.exec(label) || /Prompt\s+(\d+)/i.exec(description);
-    return match ? Number(match[1]) : null;
-  }
-  function readOfficialButtonsFromRoot(root) {
-    const fixed = [...root.children].find(isOfficialFixedChild);
-    if (!fixed) return null;
-    const buttons = [...fixed.querySelectorAll("button")].filter((node) => node instanceof HTMLButtonElement);
-    if (!buttons.length) return null;
-    const parsed = buttons.map((element) => ({ element, raw: parsePromptNumber(element) }));
-    if (parsed.some((item) => item.raw == null)) return null;
-    const values = parsed.map((item) => item.raw);
-    if (new Set(values).size !== values.length) return null;
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const zeroBased = min === 0 && max === values.length - 1;
-    const oneBased = min === 1 && max === values.length;
-    if (!zeroBased && !oneBased) return null;
-    const offset = oneBased ? 1 : 0;
-    return parsed.map((item) => ({ element: item.element, index: item.raw - offset })).sort((left, right) => left.index - right.index);
-  }
-  function collectOfficialButtons(root = document) {
-    const navRoots = listOfficialNavigationRoots(root);
-    if (navRoots.length !== 1) return [];
-    return readOfficialButtonsFromRoot(navRoots[0]) ?? [];
-  }
-  function isOfficialNavigationComplete(expectedTurnCount, conversationId, root = document) {
-    if (expectedTurnCount <= 0) return false;
-    const pageId = getConversationIdFromUrl();
-    if (pageId && pageId !== conversationId) return false;
-    const buttons = collectOfficialButtons(root);
-    if (buttons.length !== expectedTurnCount) return false;
-    return buttons.every((button, index) => button.index === index);
-  }
-  function isEphemeralTurnIndexMarker(id) {
-    return /^conversation-turn-\d+$/i.test(id.trim());
-  }
-  function slotRole(slot) {
-    const known = /* @__PURE__ */ new Set();
-    if (slot.matches('[data-message-author-role="user"]')) known.add("user");
-    if (slot.matches('[data-message-author-role="assistant"]')) known.add("assistant");
-    for (const node of slot.querySelectorAll("[data-message-author-role]")) {
-      const role = node.getAttribute("data-message-author-role");
-      if (role === "user" || role === "assistant") known.add(role);
-    }
-    if (known.size === 1) return [...known][0];
-    return "unknown";
-  }
-  function collectStableSlots(root = document) {
-    const containers = [...root.querySelectorAll("[data-turn-id-container]")];
-    const groups = /* @__PURE__ */ new Map();
-    for (const container of containers) {
-      const parent = container.parentElement;
-      if (!parent) continue;
-      const group = groups.get(parent);
-      if (group) group.push(container);
-      else groups.set(parent, [container]);
-    }
-    const largest = [...groups.values()].sort((left, right) => right.length - left.length)[0] ?? [];
-    const seen = /* @__PURE__ */ new Map();
-    const duplicates = /* @__PURE__ */ new Set();
-    for (const element of largest) {
-      const id = element.getAttribute("data-turn-id-container")?.trim() ?? "";
-      if (!id || id === "client-created-root" || isEphemeralTurnIndexMarker(id)) continue;
-      if (duplicates.has(id)) continue;
-      if (seen.has(id)) {
-        seen.delete(id);
-        duplicates.add(id);
-        continue;
+  var OFFICIAL_CONTAINER_TOKENS = ["fixed", "inset-e-4", "top-1/2", "z-20", "-translate-y-1/2"];
+  var SENTINEL_SELECTOR = '[data-testid="conversation-pagination-sentinel"]';
+  function conversationScroller() {
+    const surface = document.querySelector("main, [role=main]") ?? document;
+    const message = surface.querySelector(MESSAGE_SELECTOR);
+    if (!message) return null;
+    let ancestor = message.parentElement;
+    while (ancestor) {
+      const style = getComputedStyle(ancestor);
+      if (ancestor.clientHeight > 100 && ["auto", "scroll", "overlay"].some((value) => style.overflowY.includes(value))) {
+        return ancestor;
       }
-      seen.set(id, element);
+      ancestor = ancestor.parentElement;
     }
-    return [...seen.entries()].map(([id, element]) => ({ id, element, role: slotRole(element) }));
+    return document.scrollingElement;
   }
-  function isStableSlotsComplete(turns, root = document) {
-    if (!turns.length) return false;
-    const slots = collectStableSlots(root);
-    if (slots.length < turns.length) return false;
-    return turns.every((turn) => resolveStableSlot(turn, slots) != null);
+  function viewportTop(scroller) {
+    if (scroller === document.scrollingElement) return 0;
+    const rectangle = scroller.getBoundingClientRect();
+    return rectangle.top + scroller.clientTop;
   }
-  function resolveStableSlot(turn, slots) {
-    const byId = new Map(slots.map((slot) => [slot.id, slot]));
-    const user = turn.userMessageId ? byId.get(turn.userMessageId) : void 0;
-    if (user && (user.role === "user" || user.role === "unknown")) return user.element;
-    const round = byId.get(turn.id);
-    if (round && (round.role === "user" || round.role === "unknown")) return round.element;
-    const assistant = turn.assistantMessageId ? byId.get(turn.assistantMessageId) : void 0;
-    if (assistant && (assistant.role === "assistant" || assistant.role === "unknown") && !user) {
-      return assistant.element;
-    }
-    return null;
+  function readNativePrompts(root = document) {
+    const candidates = [...root.querySelectorAll(OFFICIAL_ROOT_SELECTOR)];
+    if (candidates.length !== 1) return { found: 0, visible: 0 };
+    const container = [...candidates[0].children].find(
+      (child) => child instanceof HTMLElement && OFFICIAL_CONTAINER_TOKENS.every((token) => child.classList.contains(token)) && !child.closest("[data-yada-root]")
+    );
+    if (!container) return { found: 0, visible: 0 };
+    const buttons = [...container.querySelectorAll("button")];
+    const indexes = buttons.map(readPromptIndex);
+    if (!indexes.length || indexes.some((index) => index === null)) return { found: 0, visible: 0 };
+    const numeric = indexes;
+    if (new Set(numeric).size !== numeric.length) return { found: 0, visible: 0 };
+    const first = Math.min(...numeric);
+    const ordered = [...numeric].map((index) => index - (first === 1 ? 1 : 0)).sort((left, right) => left - right);
+    if (!ordered.every((index, position) => index === position)) return { found: 0, visible: 0 };
+    return { found: buttons.length, visible: buttons.filter(elementVisible).length };
   }
-  function countMountedUserMessages(root = document) {
-    let count = 0;
-    for (const node of root.querySelectorAll('[data-message-author-role="user"][data-message-id]')) {
-      if (isInsideComposer(node)) continue;
-      if (node.dataset.messageId) count += 1;
-    }
-    return count;
+  function saveReadingPosition() {
+    const scroller = conversationScroller();
+    if (!scroller) return null;
+    const top = viewportTop(scroller);
+    const bottom = Math.min(innerHeight, top + scroller.clientHeight);
+    const onScreen = [...document.querySelectorAll(MESSAGE_SELECTOR)].filter((message) => {
+      const rectangle = message.getBoundingClientRect();
+      return rectangle.bottom > top + 8 && rectangle.top < bottom - 8;
+    });
+    const anchor = onScreen.find((message) => message.getBoundingClientRect().top >= top) ?? onScreen[0];
+    if (!anchor) return null;
+    return {
+      identity: stableMessageIdentity(anchor),
+      element: anchor,
+      offset: anchor.getBoundingClientRect().top - top,
+      scroller
+    };
   }
-  function findMountedUserMessage(messageId, root = document) {
-    const exact = root.querySelector(`[data-message-author-role="user"][data-message-id="${cssEscape(messageId)}"]`);
-    if (exact && !isInsideComposer(exact) && readMessageId(exact) === messageId) return exact;
-    for (const node of root.querySelectorAll("[data-message-id]")) {
-      if (isInsideComposer(node)) continue;
-      if (readMessageId(node) !== messageId) continue;
-      const role = node.getAttribute("data-message-author-role") ?? node.querySelector("[data-message-author-role]")?.getAttribute("data-message-author-role");
-      if (role === "user") return node;
-    }
-    return null;
+  function readingPositionDrift(position) {
+    if (!position.scroller.isConnected || conversationScroller() !== position.scroller) return null;
+    let anchor = position.element.isConnected ? position.element : null;
+    if (position.identity) anchor = findStableMessage(position.identity);
+    if (!anchor) return null;
+    return anchor.getBoundingClientRect().top - viewportTop(position.scroller) - position.offset;
   }
-  function readMessageId(element) {
-    return element.dataset.messageId ?? element.closest("[data-message-id]")?.dataset.messageId ?? null;
-  }
-  function scrollElementIntoView(element) {
-    if (typeof element.scrollIntoView !== "function") return;
-    try {
-      element.scrollIntoView({ behavior: "auto", block: "start" });
-    } catch {
-    }
-  }
-  function pageConversationMatches(conversationId) {
-    const pageId = getConversationIdFromUrl();
-    return !pageId || pageId === conversationId;
-  }
-  function isInViewport(element) {
-    const rect = element.getBoundingClientRect();
-    if (!element.isConnected) return false;
-    if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0) return true;
-    const height = window.innerHeight || 800;
-    return rect.bottom > 8 && rect.top < height - 8;
-  }
-  function isChatGptGenerating(root = document) {
-    return Boolean(
-      root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming, button[data-testid="stop-button"]')
+  function stableLayoutAvailable() {
+    const scroller = conversationScroller();
+    if (!scroller || getComputedStyle(scroller).overflowAnchor === "none") return false;
+    return !document.querySelector(
+      '[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming, button[data-testid="stop-button"], [data-stream-active="true"]'
     );
   }
-  function composerHasDraft() {
-    return hasUnsentComposerDraft();
+  function safeDesktopLayout() {
+    return document.visibilityState === "visible" && innerWidth >= 1024 && matchMedia("(hover: hover)").matches && stableLayoutAvailable();
   }
-  function attachUserNavigationCancel(abort) {
-    const onWheel = () => abort();
-    const onTouch = () => abort();
-    const onPointer = (event) => {
-      if (event.pointerType === "mouse" && event.buttons === 0) return;
-      const target = event.target;
-      if (target instanceof Element && target.closest("[data-yada-root]")) return;
-      abort();
-    };
-    const onKey = (event) => {
-      if (CANCEL_KEYS.has(event.key)) abort();
-    };
-    window.addEventListener("wheel", onWheel, { passive: true, capture: true });
-    window.addEventListener("touchstart", onTouch, { passive: true, capture: true });
-    window.addEventListener("touchmove", onTouch, { passive: true, capture: true });
-    window.addEventListener("pointerdown", onPointer, { capture: true });
-    window.addEventListener("keydown", onKey, { capture: true });
-    return () => {
-      window.removeEventListener("wheel", onWheel, true);
-      window.removeEventListener("touchstart", onTouch, true);
-      window.removeEventListener("touchmove", onTouch, true);
-      window.removeEventListener("pointerdown", onPointer, true);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }
-  function readNativeCapability(turns, conversationId, root = document) {
-    const officialButtons = collectOfficialButtons(root);
-    const slots = collectStableSlots(root);
+  function exposePaginationSentinel(scroller) {
+    const matches = [...scroller.querySelectorAll(SENTINEL_SELECTOR)];
+    if (matches.length !== 1) return null;
+    const element = matches[0];
+    const rectangle = element.getBoundingClientRect();
+    if (!element.isConnected || element.getClientRects().length === 0 || rectangle.height > 100) return null;
+    const ownedStyles = /* @__PURE__ */ new Map([
+      ["position", "sticky"],
+      ["top", "80px"],
+      ["opacity", "0"],
+      ["pointer-events", "none"]
+    ]);
+    const previous = /* @__PURE__ */ new Map();
+    for (const [property, value] of ownedStyles) {
+      previous.set(property, {
+        value: element.style.getPropertyValue(property),
+        priority: element.style.getPropertyPriority(property)
+      });
+      element.style.setProperty(property, value, "important");
+    }
+    let active = true;
     return {
-      officialButtonCount: officialButtons.length,
-      officialComplete: isOfficialNavigationComplete(turns.length, conversationId, root),
-      slotCount: slots.length,
-      slotsComplete: isStableSlotsComplete(turns, root),
-      mountedUserCount: countMountedUserMessages(root),
-      generating: isChatGptGenerating(root),
-      composerDraft: composerHasDraft()
+      element,
+      release() {
+        if (!active) return;
+        active = false;
+        for (const [property, value] of ownedStyles) {
+          if (element.style.getPropertyValue(property) !== value || element.style.getPropertyPriority(property) !== "important") continue;
+          const original = previous.get(property);
+          if (original.value) element.style.setProperty(property, original.value, original.priority);
+          else element.style.removeProperty(property);
+        }
+      }
     };
+  }
+  function readPromptIndex(button) {
+    const explicit = button.dataset.tocItemIndex;
+    if (explicit && /^\d+$/.test(explicit)) return Number(explicit);
+    for (const name of ["aria-label", "aria-description"]) {
+      const match = /^prompt\s+(\d+)(?:\b|:)/i.exec(button.getAttribute(name) ?? "");
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+  function elementVisible(element) {
+    if (!element.isConnected || element.getClientRects().length === 0) return false;
+    const style = getComputedStyle(element);
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+    const rectangle = element.getBoundingClientRect();
+    return rectangle.width > 0 && rectangle.height > 0 && rectangle.right > 0 && rectangle.left < innerWidth && rectangle.bottom > 0 && rectangle.top < innerHeight;
+  }
+  function stableMessageIdentity(element) {
+    let node = element;
+    for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
+      for (const attribute of ["data-message-id", "data-turn-id", "data-turn-id-container"]) {
+        const value = node.getAttribute(attribute);
+        if (value && value.length <= 256) return { attribute, value };
+      }
+      if (node.tagName === "ARTICLE") break;
+    }
+    return null;
+  }
+  function findStableMessage(identity2) {
+    const matches = [...document.querySelectorAll(`[${identity2.attribute}="${CSS.escape(identity2.value)}"]`)];
+    if (matches.length !== 1) return null;
+    return matches[0].matches(MESSAGE_SELECTOR) ? matches[0] : matches[0].querySelector(MESSAGE_SELECTOR);
   }
 
-  // src/navigation/nativePreparation.ts
-  var defaultHost = {
-    getSession(key) {
-      try {
-        return sessionStorage.getItem(key);
-      } catch {
-        return null;
-      }
-    },
-    setSession(key, value) {
-      try {
-        sessionStorage.setItem(key, value);
-      } catch {
-      }
-    },
-    locationHref: () => location.href,
-    assign: (url) => {
-      location.assign(url);
-    },
-    replaceUrl: (url) => {
-      history.replaceState(history.state, "", url);
-    }
-  };
-  var PREP_MUTATION_SELECTOR = [
-    `[class*="_convSearchResultHighlightRoot"]`,
-    "[data-turn-id-container]",
-    "button[data-toc-item-index]",
-    `button[aria-label^="Prompt "]`
-  ].join(",");
-  function nativePrepKey(conversationId) {
-    return `chatgpt-yada:native-prepared:${conversationId}`;
-  }
-  function readNativePrepState(conversationId, host = defaultHost) {
-    const value = host.getSession(nativePrepKey(conversationId));
-    if (value === "attempted" || value === "ready" || value === "unsupported") return value;
-    return "unseen";
-  }
-  function writeNativePrepState(conversationId, state, host = defaultHost) {
-    host.setSession(nativePrepKey(conversationId), state);
-  }
-  function nativePrepReloadAttempted(conversationId, host = defaultHost) {
-    return readNativePrepState(conversationId, host) !== "unseen";
-  }
-  function messageQueryValue(href) {
-    try {
-      const url = new URL(href, "https://chatgpt.com");
-      if (!url.searchParams.has("message")) return null;
-      return url.searchParams.get("message") ?? "";
-    } catch {
-      return null;
-    }
-  }
-  function hasNonEmptyMessageQuery(href) {
-    const value = messageQueryValue(href);
-    return value != null && value !== "";
-  }
-  function hasEmptyMessageQuery(href) {
-    return messageQueryValue(href) === "";
-  }
-  function withEmptyMessageTrigger(href) {
-    if (hasNonEmptyMessageQuery(href)) return null;
-    try {
-      const url = new URL(href, "https://chatgpt.com");
-      url.searchParams.set("message", "");
-      return url.toString();
-    } catch {
-      return null;
-    }
-  }
-  function stripEmptyMessageQuery(href) {
-    try {
-      const url = new URL(href, "https://chatgpt.com");
-      if (url.searchParams.get("message") === "") url.searchParams.delete("message");
-      return url.toString();
-    } catch {
-      return href;
-    }
-  }
-  function shouldAttemptNativePreparation(turns, capability) {
-    if (!turns.length) return false;
-    if (capability.generating || capability.composerDraft) return false;
-    if (capability.officialComplete || capability.slotsComplete) return false;
-    return turns.length > capability.mountedUserCount;
-  }
-  function decideNativePreparation(conversationId, turns, href, capability, host = defaultHost) {
-    const state = readNativePrepState(conversationId, host);
-    if (hasNonEmptyMessageQuery(href)) return { action: "none", state };
-    if (state === "ready" || state === "unsupported") return { action: "none", state };
-    const complete = capability.officialComplete || capability.slotsComplete;
-    if (state === "attempted") {
-      if (complete) {
-        writeNativePrepState(conversationId, "ready", host);
-        return { action: "ready", state: "ready", url: stripEmptyMessageQuery(href) };
-      }
-      if (!hasEmptyMessageQuery(href)) return { action: "none", state: "attempted" };
-      return { action: "wait", state: "attempted" };
-    }
-    if (hasEmptyMessageQuery(href)) {
-      writeNativePrepState(conversationId, "attempted", host);
-      if (complete) {
-        writeNativePrepState(conversationId, "ready", host);
-        return { action: "ready", state: "ready", url: stripEmptyMessageQuery(href) };
-      }
-      return { action: "wait", state: "attempted" };
-    }
-    if (!shouldAttemptNativePreparation(turns, capability)) return { action: "none", state: "unseen" };
-    const next = withEmptyMessageTrigger(href);
-    if (!next) return { action: "none", state: "unseen" };
-    writeNativePrepState(conversationId, "attempted", host);
-    return { action: "assign", state: "attempted", url: next };
-  }
-  function mutationTouchesNativeSkeleton(records) {
-    for (const record of records) {
-      if (record.target instanceof Element && record.target.closest(PREP_MUTATION_SELECTOR)) return true;
-      for (const node of [...record.addedNodes, ...record.removedNodes]) {
-        if (!(node instanceof Element)) continue;
-        if (node.matches(PREP_MUTATION_SELECTOR) || node.querySelector(PREP_MUTATION_SELECTOR)) return true;
-      }
-    }
-    return false;
-  }
-  var NativePrepWaiter = class {
-    constructor(conversationId, turns, host, onSettled) {
-      this.conversationId = conversationId;
-      this.host = host;
-      this.onSettled = onSettled;
-      this.turns = turns;
-      this.observer = new MutationObserver((records) => {
-        if (mutationTouchesNativeSkeleton(records)) this.scheduleCheck();
-      });
-      this.observer.observe(document.documentElement, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        attributeFilter: ["class", "data-toc-item-index", "aria-label", "aria-description", "data-turn-id-container"]
-      });
-      this.timer = window.setTimeout(() => this.finish("unsupported"), NATIVE_NAV_CONFIG.prepWaitMs);
-      this.scheduleCheck();
-    }
-    observer = null;
-    raf = 0;
-    timer = 0;
-    active = true;
-    turns;
-    isActive() {
-      return this.active;
-    }
-    hasObserver() {
-      return this.observer != null;
-    }
-    updateTurns(turns) {
-      this.turns = turns;
-      this.scheduleCheck();
-    }
-    dispose() {
-      this.stop();
-    }
-    scheduleCheck() {
-      if (!this.active || this.raf) return;
-      this.raf = requestAnimationFrame(() => {
-        this.raf = 0;
-        this.check();
-      });
-    }
-    check() {
-      if (!this.active) return;
-      const capability = readNativeCapability(this.turns, this.conversationId);
-      if (capability.officialComplete || capability.slotsComplete) this.finish("ready");
-    }
-    finish(result) {
-      if (!this.active) return;
-      writeNativePrepState(this.conversationId, result, this.host);
-      if (result === "ready") this.host.replaceUrl(stripEmptyMessageQuery(this.host.locationHref()));
-      this.stop();
-      this.onSettled();
-    }
-    stop() {
-      this.active = false;
-      this.observer?.disconnect();
-      this.observer = null;
-      if (this.raf) cancelAnimationFrame(this.raf);
-      this.raf = 0;
-      window.clearTimeout(this.timer);
-      this.timer = 0;
-    }
-  };
-  var NativePreparationController = class {
-    constructor(host = defaultHost) {
-      this.host = host;
-      window.addEventListener("pagehide", this.onPageHide);
-      window.addEventListener("beforeunload", this.onPageHide);
-    }
-    wait = null;
-    onPageHide = () => {
-      this.cancelWait();
+  // src/nativeNavigator/protocol.ts
+  var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
+  var HISTORY_ISSUES = /* @__PURE__ */ new Set([
+    null,
+    "http-error",
+    "capture-unavailable",
+    "unlinked",
+    "stalled",
+    "limit"
+  ]);
+  function emptyHistory(conversationId, generation = 0) {
+    return {
+      conversationId,
+      generation,
+      initialVersion: 0,
+      revision: 0,
+      pending: 0,
+      pages: 0,
+      messages: 0,
+      prompts: 0,
+      boundary: "unknown",
+      cursorPresent: false,
+      issue: null
     };
-    evaluate(conversationId, turns) {
-      if (!conversationId || !turns.length) {
-        this.cancelWait();
-        return { action: "none", state: "unseen" };
-      }
-      if (this.wait && this.wait.conversationId !== conversationId) this.cancelWait();
-      const href = this.host.locationHref();
-      const capability = readNativeCapability(turns, conversationId);
-      const decision = decideNativePreparation(conversationId, turns, href, capability, this.host);
-      if (decision.action === "assign") {
-        this.cancelWait();
-        this.host.assign(decision.url);
-      } else if (decision.action === "ready") {
-        this.cancelWait();
-        this.host.replaceUrl(decision.url);
-      } else if (decision.action === "wait") {
-        this.ensureWait(conversationId, turns);
-      }
-      return decision;
+  }
+  function record(value) {
+    return value != null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+  function identifier(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
+  }
+  function conversationIdFromUrl(input) {
+    try {
+      const parts = new URL(input).pathname.split("/").filter(Boolean);
+      const marker = parts.indexOf("c");
+      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
+    } catch {
+      return null;
     }
-    cancelWait() {
-      this.wait?.dispose();
-      this.wait = null;
+  }
+  function isMessageDeepLink(input = location.href) {
+    try {
+      const params = new URL(input).searchParams;
+      return params.has("message") || params.has("messageId");
+    } catch {
+      return false;
     }
-    isWaiting() {
-      return this.wait?.isActive() === true;
+  }
+  function isNativeHistoryState(value) {
+    const candidate = record(value);
+    if (!candidate) return false;
+    if (candidate.conversationId !== null && !identifier(candidate.conversationId)) return false;
+    if (candidate.boundary !== "unknown" && candidate.boundary !== "more" && candidate.boundary !== "complete") return false;
+    if (!HISTORY_ISSUES.has(candidate.issue) || typeof candidate.cursorPresent !== "boolean") return false;
+    for (const key of ["generation", "initialVersion", "revision", "pending", "pages", "messages", "prompts"]) {
+      const number = candidate[key];
+      if (!Number.isSafeInteger(number) || number < 0 || number > 1e6) return false;
     }
-    waitingConversationId() {
-      return this.wait?.isActive() ? this.wait.conversationId : null;
+    return true;
+  }
+
+  // src/nativeNavigator/hydrator.ts
+  var ACTIVE_LIMIT_MS = 6e4;
+  var ADDITIONAL_PAGE_LIMIT = 20;
+  var PAGE_PROGRESS_LIMIT_MS = 12e3;
+  var NATIVE_APPEARANCE_WAIT_MS = 2500;
+  var RECOVERY_IDLE_MS = 2500;
+  var MAX_RECOVERIES = 3;
+  var DEBUG_KEY = "chatgpt-yada:native-nav-debug";
+  var OfficialNavigatorHydrator = class {
+    constructor(sync) {
+      this.sync = sync;
     }
-    hasActiveObserver() {
-      return this.wait?.hasObserver() === true;
+    state = emptyHistory(conversationIdFromUrl(location.href));
+    expectedPrompts = 0;
+    context = "";
+    firstPage = 0;
+    activeMs = 0;
+    recoveries = 0;
+    peakDrift = 0;
+    completeSince = 0;
+    connected = false;
+    terminal = false;
+    phase = "waiting";
+    issue = null;
+    lastUserInput = performance.now() - RECOVERY_IDLE_MS;
+    operation = null;
+    timer = 0;
+    mutations = null;
+    unsubscribe = null;
+    disposed = false;
+    mount() {
+      this.unsubscribe = this.sync.subscribe((snapshot) => {
+        this.expectedPrompts = snapshot?.conversationId === this.state.conversationId ? snapshot.activeTurns.length : 0;
+        this.schedule();
+      });
+      addEventListener("message", this.onMessage);
+      addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
+      addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
+      addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("resize", this.onEnvironment, { passive: true });
+      document.addEventListener("visibilitychange", this.onEnvironment);
+      this.mutations = new MutationObserver(() => this.schedule());
+      this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+      this.requestState();
+      this.schedule(600);
+    }
+    resetRoute() {
+      this.cancel("route");
+      this.state = emptyHistory(conversationIdFromUrl(location.href), this.state.generation + 1);
+      this.connected = false;
+      this.expectedPrompts = 0;
+      this.resetContext("", 0);
+      this.setPhase("waiting");
+      this.requestState();
+      this.schedule(300);
     }
     dispose() {
-      window.removeEventListener("pagehide", this.onPageHide);
-      window.removeEventListener("beforeunload", this.onPageHide);
-      this.cancelWait();
+      if (this.disposed) return;
+      this.disposed = true;
+      this.cancel("dispose");
+      clearTimeout(this.timer);
+      this.timer = 0;
+      this.mutations?.disconnect();
+      this.mutations = null;
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+      removeEventListener("message", this.onMessage);
+      removeEventListener("wheel", this.onUserInput, true);
+      removeEventListener("touchstart", this.onUserInput, true);
+      removeEventListener("pointerdown", this.onUserInput, true);
+      removeEventListener("keydown", this.onUserInput, true);
+      removeEventListener("resize", this.onEnvironment);
+      document.removeEventListener("visibilitychange", this.onEnvironment);
+      delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
     }
-    ensureWait(conversationId, turns) {
-      if (this.wait?.isActive() && this.wait.conversationId === conversationId) {
-        this.wait.updateTurns(turns);
+    onMessage = (event) => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = record(event.data);
+      if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state" || !isNativeHistoryState(message.state)) return;
+      const incoming = message.state;
+      if (incoming.conversationId !== conversationIdFromUrl(location.href)) return;
+      if (incoming.generation < this.state.generation) return;
+      if (incoming.generation === this.state.generation && incoming.revision < this.state.revision) return;
+      const incomingContext = `${incoming.conversationId ?? ""}:${incoming.generation}:${incoming.initialVersion}`;
+      if (incomingContext !== this.context) {
+        this.cancel("context");
+        this.resetContext(incomingContext, incoming.pages);
+      }
+      this.state = incoming;
+      this.connected = true;
+      this.schedule();
+    };
+    onUserInput = () => {
+      this.lastUserInput = performance.now();
+      if (this.operation) {
+        this.cancel("user");
+        this.setPhase("interrupted");
+      } else {
+        this.schedule(RECOVERY_IDLE_MS);
+      }
+    };
+    onEnvironment = () => {
+      if (document.visibilityState !== "visible") this.cancel("hidden");
+      this.schedule(document.visibilityState === "visible" ? RECOVERY_IDLE_MS : 800);
+    };
+    schedule(delayMs = 180) {
+      if (this.disposed) return;
+      clearTimeout(this.timer);
+      this.timer = window.setTimeout(() => {
+        this.timer = 0;
+        void this.evaluate();
+      }, Math.max(0, delayMs));
+    }
+    async evaluate() {
+      if (this.disposed || this.operation) return;
+      const native = readNativePrompts();
+      if (!this.connected || !this.state.conversationId || this.state.initialVersion === 0 || this.state.pending > 0) {
+        this.setPhase("waiting");
         return;
       }
-      this.cancelWait();
-      this.wait = new NativePrepWaiter(conversationId, turns, this.host, () => {
-        if (this.wait?.conversationId === conversationId && !this.wait.isActive()) this.wait = null;
-      });
+      if (isMessageDeepLink()) {
+        this.terminal = true;
+        this.setPhase("deep-link");
+        return;
+      }
+      if (this.state.boundary === "complete") {
+        this.finishWithNativeState(native);
+        return;
+      }
+      if (this.terminal) {
+        this.publishDiagnostics();
+        return;
+      }
+      if (this.state.issue || this.state.boundary === "unknown") {
+        this.terminal = true;
+        this.setPhase("unverified", this.state.issue ?? "unverified-history");
+        return;
+      }
+      if (!safeDesktopLayout()) {
+        this.setPhase("deferred");
+        this.schedule(800);
+        return;
+      }
+      const idleFor = performance.now() - this.lastUserInput;
+      if (idleFor < RECOVERY_IDLE_MS) {
+        this.setPhase("deferred");
+        this.schedule(RECOVERY_IDLE_MS - idleFor);
+        return;
+      }
+      if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
+        this.terminal = true;
+        this.setPhase("limit", "limit");
+        return;
+      }
+      await this.launchAttempt();
+    }
+    finishWithNativeState(native) {
+      const snapshotMatch = this.expectedPrompts > 0 && native.found === this.expectedPrompts;
+      const captureMatch = this.state.prompts > 0 && native.found === this.state.prompts;
+      if (native.found > 0 && native.visible > 0 && (snapshotMatch || captureMatch)) {
+        this.terminal = true;
+        this.setPhase("ready-complete");
+        return;
+      }
+      if (native.found > 0 && this.expectedPrompts > 0 && !snapshotMatch && !captureMatch) {
+        this.terminal = true;
+        this.setPhase("prompt-count-mismatch", "prompt-count-mismatch");
+        return;
+      }
+      if (this.completeSince === 0) this.completeSince = performance.now();
+      const remaining = NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince);
+      if (remaining > 0) {
+        this.setPhase("waiting-native");
+        this.schedule(remaining);
+        return;
+      }
+      this.terminal = true;
+      this.setPhase("loaded-no-native");
+    }
+    async launchAttempt() {
+      const controller = new AbortController();
+      const attemptContext = this.context;
+      const started = performance.now();
+      this.operation = controller;
+      this.setPhase("automatic-loading");
+      let outcome;
+      try {
+        outcome = await this.hydrate(controller.signal, attemptContext);
+      } catch {
+        outcome = controller.signal.reason === "user" || controller.signal.reason === "hidden" ? "interrupted" : "changed";
+      } finally {
+        this.activeMs += Math.max(0, performance.now() - started);
+        if (this.operation === controller) this.operation = null;
+      }
+      if (this.disposed || attemptContext !== this.context) return;
+      if (outcome === "complete") {
+        this.completeSince = 0;
+        this.schedule(0);
+        return;
+      }
+      if (outcome === "interrupted") {
+        if (this.recoveries < MAX_RECOVERIES && this.activeMs < ACTIVE_LIMIT_MS) {
+          this.recoveries += 1;
+          this.setPhase("recovering");
+          this.schedule(RECOVERY_IDLE_MS);
+        } else {
+          this.terminal = true;
+          this.setPhase("recovery-limit", "recovery-limit");
+        }
+        return;
+      }
+      this.terminal = true;
+      this.setPhase(outcome, outcome);
+    }
+    async hydrate(signal, context) {
+      const position = saveReadingPosition();
+      if (!position || !stableLayoutAvailable()) return "incompatible-layout";
+      const activeDeadline = performance.now() + Math.max(0, ACTIVE_LIMIT_MS - this.activeMs);
+      let exposure = null;
+      const release = () => {
+        exposure?.release();
+        exposure = null;
+      };
+      const watch = watchReadingPosition(
+        position,
+        signal,
+        (drift) => {
+          this.peakDrift = Math.max(this.peakDrift, Math.abs(drift));
+        },
+        release
+      );
+      signal.addEventListener("abort", release, { once: true });
+      const problem = () => {
+        if (signal.aborted) throw signal.reason;
+        if (context !== this.context || this.state.conversationId !== conversationIdFromUrl(location.href)) return "changed";
+        if (watch.problem()) return watch.problem();
+        if (document.visibilityState !== "visible") return "interrupted";
+        if (this.state.issue) return this.state.issue;
+        if (this.state.boundary === "unknown") return "unverified";
+        if (performance.now() >= activeDeadline || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) return "limit";
+        return null;
+      };
+      try {
+        for (; ; ) {
+          const currentProblem = problem();
+          if (currentProblem) return currentProblem;
+          if (this.state.pending > 0) {
+            await abortableDelay(40, signal);
+            continue;
+          }
+          if (this.state.boundary === "complete") return "complete";
+          const pageAtStart = this.state.pages;
+          const pendingAtStart = this.state.pending;
+          exposure = exposePaginationSentinel(position.scroller);
+          if (!exposure) return "incompatible-layout";
+          const pageDeadline = Math.min(activeDeadline, performance.now() + PAGE_PROGRESS_LIMIT_MS);
+          let hostStarted = false;
+          while (performance.now() < pageDeadline) {
+            await abortableDelay(20, signal);
+            const waitProblem = problem();
+            if (waitProblem) return waitProblem;
+            if (this.state.pending > pendingAtStart || this.state.pages !== pageAtStart || this.state.boundary === "complete") {
+              hostStarted = true;
+              release();
+              break;
+            }
+            const rectangle = exposure.element.getBoundingClientRect();
+            const top = position.scroller === document.scrollingElement ? 0 : position.scroller.getBoundingClientRect().top + position.scroller.clientTop;
+            if (!exposure.element.isConnected || rectangle.bottom < top || rectangle.top > top + position.scroller.clientHeight) {
+              return "incompatible-layout";
+            }
+          }
+          release();
+          if (!hostStarted) return "stalled";
+          while (this.state.pending > 0 || this.state.pages === pageAtStart) {
+            const completionProblem = problem();
+            if (completionProblem) return completionProblem;
+            if (performance.now() >= pageDeadline) return "stalled";
+            await abortableDelay(40, signal);
+          }
+          await abortableDelay(240, signal);
+        }
+      } finally {
+        release();
+        watch.dispose();
+        signal.removeEventListener("abort", release);
+      }
+    }
+    cancel(reason) {
+      this.operation?.abort(reason);
+    }
+    resetContext(context, firstPage) {
+      this.context = context;
+      this.firstPage = firstPage;
+      this.activeMs = 0;
+      this.recoveries = 0;
+      this.peakDrift = 0;
+      this.completeSince = 0;
+      this.terminal = false;
+      this.issue = null;
+    }
+    setPhase(phase, issue = null) {
+      this.phase = phase;
+      this.issue = issue;
+      this.publishDiagnostics();
+    }
+    publishDiagnostics() {
+      if (!debugEnabled()) {
+        delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
+        return;
+      }
+      const native = readNativePrompts();
+      globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__ = {
+        phase: this.phase,
+        conversationId: this.state.conversationId,
+        pages: this.state.pages,
+        messages: this.state.messages,
+        capturedPrompts: this.state.prompts,
+        expectedPrompts: this.expectedPrompts,
+        nativeFound: native.found,
+        nativeVisible: native.visible,
+        boundary: this.state.boundary,
+        cursorPresent: this.state.cursorPresent,
+        issue: this.issue ?? this.state.issue,
+        recoveryCount: this.recoveries,
+        elapsedActiveMs: Math.round(this.activeMs),
+        maxObservedDriftPx: Math.round(this.peakDrift * 10) / 10
+      };
+    }
+    requestState() {
+      window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "hello" }, location.origin);
     }
   };
-
-  // src/navigation/diagnostics.ts
-  var DEBUG_KEY = "chatgpt-yada:nav-debug";
-  function isNavDebugEnabled() {
+  function watchReadingPosition(position, signal, onDrift, onUnsafe) {
+    let issue = null;
+    let missingFrames = 0;
+    let frame = 0;
+    let active = true;
+    const inspect = () => {
+      if (!active || signal.aborted) return;
+      const drift = readingPositionDrift(position);
+      if (drift === null) missingFrames += 1;
+      else {
+        missingFrames = 0;
+        onDrift(drift);
+      }
+      if (drift !== null && Math.abs(drift) > 8 || missingFrames > 3 || !stableLayoutAvailable()) {
+        issue = "layout-changed";
+        onUnsafe();
+        return;
+      }
+      frame = requestAnimationFrame(inspect);
+    };
+    frame = requestAnimationFrame(inspect);
+    return {
+      problem: () => issue,
+      dispose() {
+        active = false;
+        cancelAnimationFrame(frame);
+      }
+    };
+  }
+  function debugEnabled() {
     try {
       return localStorage.getItem(DEBUG_KEY) === "1";
     } catch {
       return false;
     }
   }
-  function publishNavigationDiagnostics(snapshot) {
-    if (!isNavDebugEnabled() || !snapshot) {
-      delete globalThis.__YADA_NAV_DIAGNOSTICS__;
-      return;
-    }
-    globalThis.__YADA_NAV_DIAGNOSTICS__ = snapshot;
-  }
-
-  // src/navigation/identity.ts
-  function findTurn(turns, turnId) {
-    return turns.filter(
-      (turn) => turn.id === turnId || turn.userMessageId === turnId || turn.assistantMessageId === turnId
-    );
-  }
-  function resolveNavigationTurn(turns, turnId) {
-    const matches = findTurn(turns, turnId);
-    if (matches.length > 1) return { ok: false, status: "identity-conflict" };
-    if (matches.length === 0) return { ok: false, status: "stale-target" };
-    return { ok: true, turn: matches[0] };
-  }
-  function turnUserMessageId(turn) {
-    return turn.userMessageId ?? turn.id;
-  }
-
-  // src/navigation/wait.ts
-  function abortError5() {
-    return new DOMException("Aborted", "AbortError");
-  }
-  function isAbortError4(error) {
-    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
-  }
-  function sleep(ms, signal) {
+  function abortableDelay(ms, signal) {
     return new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(abortError5());
+      if (signal.aborted) {
+        reject(signal.reason);
         return;
       }
       const timer = window.setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
+        signal.removeEventListener("abort", onAbort);
         resolve();
-      }, Math.max(0, ms));
+      }, ms);
       const onAbort = () => {
-        window.clearTimeout(timer);
-        reject(abortError5());
+        clearTimeout(timer);
+        reject(signal.reason);
       };
-      signal?.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener("abort", onAbort, { once: true });
     });
   }
-  function nextFrame(signal) {
-    return new Promise((resolve, reject) => {
-      if (signal?.aborted) {
-        reject(abortError5());
-        return;
-      }
-      const canRaf = typeof requestAnimationFrame === "function";
-      const id = canRaf ? requestAnimationFrame(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }) : window.setTimeout(() => {
-        signal?.removeEventListener("abort", onAbort);
-        resolve();
-      }, 16);
-      const onAbort = () => {
-        if (canRaf) cancelAnimationFrame(id);
-        else window.clearTimeout(id);
-        reject(abortError5());
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
-  }
-
-  // src/navigation/nativeButtonDriver.ts
-  async function jumpOfficialButton(conversationId, expectedTurnCount, targetIndex, userMessageId, signal, timeoutAt) {
-    if (!isOfficialNavigationComplete(expectedTurnCount, conversationId)) return "unavailable";
-    const buttons = collectOfficialButtons();
-    const target = buttons[targetIndex];
-    if (!target || target.index !== targetIndex) return "unavailable";
-    if (signal.aborted) return "cancelled";
-    try {
-      target.element.click();
-    } catch {
-      return "failed";
-    }
-    try {
-      while (Date.now() < timeoutAt) {
-        if (signal.aborted) return "cancelled";
-        const node = findMountedUserMessage(userMessageId);
-        if (node && readMessageId(node) === userMessageId && isInViewport(node)) return "ok";
-        await sleep(NATIVE_NAV_CONFIG.pollMs, signal);
-      }
-      return "timeout";
-    } catch (error) {
-      if (signal.aborted || isAbortError4(error)) return "cancelled";
-      return "failed";
-    }
-  }
-
-  // src/navigation/stableSlotDriver.ts
-  function isAligned(element) {
-    const rect = element.getBoundingClientRect();
-    if (rect.width === 0 && rect.height === 0 && rect.top === 0) return true;
-    return Math.abs(rect.top) <= NATIVE_NAV_CONFIG.alignmentTolerancePx;
-  }
-  async function jumpStableSlot(turn, signal, timeoutAt) {
-    const userMessageId = turn.userMessageId ?? turn.id;
-    const slots = collectStableSlots();
-    const slot = resolveStableSlot(turn, slots);
-    if (!slot?.isConnected) {
-      return { status: "unavailable", alignmentAttempts: 0, coarseLocates: 0 };
-    }
-    let coarseLocates = 0;
-    let alignmentAttempts = 0;
-    try {
-      coarseLocates = 1;
-      scrollElementIntoView(slot);
-      let mounted = null;
-      while (Date.now() < timeoutAt) {
-        if (signal.aborted) return { status: "cancelled", alignmentAttempts, coarseLocates };
-        mounted = findMountedUserMessage(userMessageId);
-        if (mounted && readMessageId(mounted) === userMessageId) break;
-        await sleep(NATIVE_NAV_CONFIG.pollMs, signal);
-      }
-      if (!mounted || readMessageId(mounted) !== userMessageId) {
-        return { status: Date.now() >= timeoutAt ? "timeout" : "failed", alignmentAttempts, coarseLocates };
-      }
-      while (alignmentAttempts < NATIVE_NAV_CONFIG.maxAlignmentAttempts && Date.now() < timeoutAt) {
-        if (signal.aborted) return { status: "cancelled", alignmentAttempts, coarseLocates };
-        if (isInViewport(mounted) && isAligned(mounted) && readMessageId(mounted) === userMessageId) {
-          return { status: "ok", alignmentAttempts, coarseLocates };
-        }
-        alignmentAttempts += 1;
-        scrollElementIntoView(mounted);
-        await sleep(NATIVE_NAV_CONFIG.alignmentQuietMs, signal);
-        mounted = findMountedUserMessage(userMessageId) ?? mounted;
-      }
-      if (mounted && readMessageId(mounted) === userMessageId && isInViewport(mounted)) {
-        return { status: "ok", alignmentAttempts, coarseLocates };
-      }
-      return { status: Date.now() >= timeoutAt ? "timeout" : "failed", alignmentAttempts, coarseLocates };
-    } catch (error) {
-      if (signal.aborted || isAbortError4(error)) return { status: "cancelled", alignmentAttempts, coarseLocates };
-      return { status: "failed", alignmentAttempts, coarseLocates };
-    }
-  }
-
-  // src/navigation/nativeNavigationPort.ts
-  function directJump(status, coarseLocates) {
-    return { status, coarseLocates, alignmentAttempts: 0 };
-  }
-  function targetKey(conversationId, turn) {
-    return `${conversationId}|${turnUserMessageId(turn)}|${turn.index}`;
-  }
-  function linkAbortSignal(source, target) {
-    if (!source) return () => void 0;
-    const abort = () => target.abort();
-    if (source.aborted) target.abort();
-    source.addEventListener("abort", abort, { once: true });
-    return () => source.removeEventListener("abort", abort);
-  }
-  async function jumpDirect(userMessageId, conversationId, signal, timeoutAt) {
-    if (signal.aborted) return directJump("cancelled", 0);
-    if (!pageConversationMatches(conversationId)) return directJump("stale-target", 0);
-    const node = findMountedUserMessage(userMessageId);
-    if (!node || !node.isConnected || readMessageId(node) !== userMessageId) return directJump("miss", 0);
-    scrollElementIntoView(node);
-    const coarseLocates = 1;
-    const deadline = Math.min(timeoutAt, Date.now() + NATIVE_NAV_CONFIG.directViewportMs);
-    try {
-      while (true) {
-        if (signal.aborted) return directJump("cancelled", coarseLocates);
-        if (!pageConversationMatches(conversationId)) return directJump("stale-target", coarseLocates);
-        const current = findMountedUserMessage(userMessageId);
-        if (current?.isConnected && readMessageId(current) === userMessageId && isInViewport(current)) {
-          return directJump("ok", coarseLocates);
-        }
-        if (Date.now() >= deadline) return directJump("miss", coarseLocates);
-        await nextFrame(signal);
-      }
-    } catch (error) {
-      if (signal.aborted || isAbortError4(error)) return directJump("cancelled", coarseLocates);
-      throw error;
-    }
-  }
-  var NativeNavigationPort = class {
-    active = null;
-    interrupt = null;
-    lastDiagnostics = null;
-    navigateTo(turnId, turns, conversationId, options = {}) {
-      const resolved = resolveNavigationTurn(turns, turnId);
-      if (!resolved.ok) return Promise.resolve(resolved);
-      const key = targetKey(conversationId, resolved.turn);
-      if (this.active?.key === key) return this.active.promise;
-      this.cancel();
-      const controller = new AbortController();
-      const unlink = linkAbortSignal(options.signal, controller);
-      const promise = this.run(resolved.turn, turns, conversationId, controller, options.timeoutMs).finally(() => {
-        unlink();
-        if (this.active?.controller === controller) this.active = null;
-      });
-      this.active = { key, controller, promise };
-      return promise;
-    }
-    cancel() {
-      this.active?.controller.abort();
-      this.active = null;
-      this.detachInterrupt();
-    }
-    dispose() {
-      this.cancel();
-      this.lastDiagnostics = null;
-      publishNavigationDiagnostics(null);
-    }
-    async run(turn, turns, conversationId, controller, timeoutMs) {
-      const started = Date.now();
-      const limit = Math.max(1, Math.min(NATIVE_NAV_CONFIG.timeoutMs, timeoutMs ?? NATIVE_NAV_CONFIG.timeoutMs));
-      const timeoutAt = started + limit;
-      let timedOut = false;
-      const timeoutTimer = window.setTimeout(() => {
-        timedOut = true;
-        controller.abort();
-      }, Math.max(1, timeoutAt - Date.now()));
-      this.attachInterrupt(() => controller.abort());
-      const userMessageId = turnUserMessageId(turn);
-      const capability = readNativeCapability(turns, conversationId);
-      let path = null;
-      let coarseLocates = 0;
-      let alignmentAttempts = 0;
-      let result = { ok: false, status: "failed" };
-      try {
-        if (controller.signal.aborted && !timedOut) return { ok: false, status: "cancelled" };
-        const mounted = findMountedUserMessage(userMessageId);
-        if (mounted && readMessageId(mounted) === userMessageId) {
-          const jumped = await jumpDirect(userMessageId, conversationId, controller.signal, timeoutAt);
-          coarseLocates += jumped.coarseLocates;
-          alignmentAttempts += jumped.alignmentAttempts;
-          if (jumped.status === "ok") {
-            path = "direct";
-            result = { ok: true, path: "direct" };
-            return result;
-          }
-          if (jumped.status === "cancelled") {
-            result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
-            return result;
-          }
-          if (jumped.status === "stale-target") {
-            result = { ok: false, status: "stale-target" };
-            return result;
-          }
-        }
-        if (isOfficialNavigationComplete(turns.length, conversationId)) {
-          path = "official-button";
-          const jumped = await jumpOfficialButton(
-            conversationId,
-            turns.length,
-            turn.index,
-            userMessageId,
-            controller.signal,
-            timeoutAt
-          );
-          if (jumped === "ok") result = { ok: true, path: "official-button" };
-          else if (jumped === "cancelled") result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
-          else if (jumped === "timeout") result = { ok: false, status: "timeout" };
-          else if (jumped === "unavailable") result = { ok: false, status: "unsupported" };
-          else result = { ok: false, status: "failed" };
-          return result;
-        }
-        if (isStableSlotsComplete(turns)) {
-          path = "stable-slot";
-          const jumped = await jumpStableSlot(turn, controller.signal, timeoutAt);
-          coarseLocates += jumped.coarseLocates;
-          alignmentAttempts += jumped.alignmentAttempts;
-          if (jumped.status === "ok") result = { ok: true, path: "stable-slot" };
-          else if (jumped.status === "cancelled") result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
-          else if (jumped.status === "timeout") result = { ok: false, status: "timeout" };
-          else if (jumped.status === "unavailable") result = { ok: false, status: "unsupported" };
-          else result = { ok: false, status: "failed" };
-          return result;
-        }
-        result = { ok: false, status: "unsupported" };
-        return result;
-      } catch (error) {
-        if (timedOut) result = { ok: false, status: "timeout" };
-        else if (controller.signal.aborted || isAbortError4(error)) result = { ok: false, status: "cancelled" };
-        else result = { ok: false, status: "failed" };
-        return result;
-      } finally {
-        window.clearTimeout(timeoutTimer);
-        this.detachInterrupt();
-        this.lastDiagnostics = {
-          conversationId,
-          targetIndex: turn.index,
-          targetMessageId: userMessageId,
-          path: result.ok ? result.path : path,
-          officialButtonCount: capability.officialButtonCount,
-          expectedTurnCount: turns.length,
-          slotCount: capability.slotCount,
-          reloadAttempted: nativePrepReloadAttempted(conversationId),
-          coarseLocates,
-          alignmentAttempts,
-          yadaScrollWrites: coarseLocates + alignmentAttempts,
-          result: result.ok ? result.path : result.status,
-          duration: Date.now() - started
-        };
-        publishNavigationDiagnostics(this.lastDiagnostics);
-      }
-    }
-    attachInterrupt(abort) {
-      this.detachInterrupt();
-      this.interrupt = attachUserNavigationCancel(abort);
-    }
-    detachInterrupt() {
-      this.interrupt?.();
-      this.interrupt = null;
-    }
-  };
-
-  // src/navigation/navigatorController.ts
-  var NavigatorController = class {
-    constructor(sync) {
-      this.sync = sync;
-    }
-    port = new NativeNavigationPort();
-    snapshot = null;
-    unsubscribe = null;
-    mount() {
-      this.unsubscribe = this.sync.subscribe((snapshot) => {
-        this.snapshot = snapshot;
-      });
-    }
-    async navigateTo(turnId, signal) {
-      const snapshot = this.snapshot ?? this.sync.getSnapshot();
-      if (!snapshot) return { ok: false, status: "failed" };
-      return this.port.navigateTo(turnId, snapshot.activeTurns, snapshot.conversationId, { signal });
-    }
-    cancel() {
-      this.port.cancel();
-    }
-    currentTurns() {
-      return this.snapshot?.activeTurns ?? [];
-    }
-    lastDiagnostics() {
-      return this.port.lastDiagnostics;
-    }
-    dispose() {
-      this.unsubscribe?.();
-      this.unsubscribe = null;
-      this.port.dispose();
-    }
-  };
-
-  // src/ui/theme.ts
-  function detectYadaTheme() {
-    const html = document.documentElement;
-    const themeAttr = safeGetAttribute(html, "data-theme") ?? safeGetAttribute(document.body, "data-theme");
-    if (themeAttr?.toLowerCase().includes("dark")) return "dark";
-    if (themeAttr?.toLowerCase().includes("light")) return "light";
-    if (html.classList.contains("dark")) return "dark";
-    if (html.classList.contains("light")) return "light";
-    const colorScheme = getComputedStyle(html).colorScheme;
-    if (colorScheme.includes("dark")) return "dark";
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  }
-  function safeGetAttribute(node, name) {
-    return node instanceof Element ? node.getAttribute(name) : null;
-  }
-  function observeYadaTheme(onChange) {
-    const applyTheme = () => onChange(detectYadaTheme());
-    const observer = new MutationObserver(applyTheme);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"]
-    });
-    observer.observe(document.body, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"]
-    });
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", applyTheme);
-    applyTheme();
-    return () => {
-      observer.disconnect();
-      media.removeEventListener("change", applyTheme);
-    };
-  }
-
-  // src/rail/preview.ts
-  function formatPreviewTime(seconds) {
-    if (seconds === void 0 || !Number.isFinite(seconds)) return "";
-    const date = new Date(seconds * 1e3);
-    if (!Number.isFinite(date.getTime())) return "";
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-  }
-  function renderPreviewContent(preview, turn, assistant) {
-    const title = document.createElement("strong");
-    title.textContent = `第 ${turn.index + 1} 轮`;
-    const heading = document.createElement("div");
-    heading.className = "preview-header";
-    heading.append(title);
-    const timestamp = formatPreviewTime(turn.userCreatedAt);
-    if (timestamp) {
-      const time = document.createElement("time");
-      time.textContent = timestamp;
-      heading.append(time);
-    }
-    preview.replaceChildren(heading, block("Harson", turn.userPreview));
-    if (assistant) preview.append(block("ChatGPT", turn.assistantPreview || "该轮暂无 ChatGPT 回复"));
-  }
-  function block(role, text) {
-    const section = document.createElement("section");
-    section.dataset.previewRole = role;
-    const label = document.createElement("strong");
-    label.textContent = role;
-    const summary = document.createElement("p");
-    summary.textContent = text;
-    section.append(label, summary);
-    return section;
-  }
-
-  // src/rail/view.ts
-  var RAIL_HOST_ID = "chatgpt-yada-rail-host";
-  var RailView = class {
-    host = document.createElement("div");
-    marks = document.createElement("div");
-    preview = document.createElement("div");
-    turns = [];
-    buttons = [];
-    active = -1;
-    hovered = -1;
-    assistant = false;
-    timer = 0;
-    pending = -1;
-    failed = -1;
-    themeDispose = null;
-    constructor(onJump) {
-      document.querySelectorAll(`[id="${RAIL_HOST_ID}"]`).forEach((node) => node.remove());
-      this.host.id = RAIL_HOST_ID;
-      this.host.dataset.yadaRoot = "true";
-      this.host.setAttribute("data-yada-theme", detectYadaTheme());
-      const shadow = this.host.attachShadow({ mode: "open" });
-      const style = document.createElement("style");
-      style.textContent = `
-      :host { position: fixed; width: 58px; z-index: 2147483400; font: 12px/1.5 system-ui; --text:#303030; --bg:#fff; --bar:#aaa8; color:var(--text); background: transparent; }
-      :host([hidden]) { display:none; }
-      :host([data-yada-theme="dark"]) { --text:#eee; --bg:#272727; --bar:#aaa7; color-scheme:dark; }
-      .marks { height:100%; display:flex; flex-direction:column; background: transparent; }
-      .mark { position:relative; flex:1 1 0; min-height:0; padding:0; border:0; width:58px; background:transparent; display:flex; align-items:center; justify-content:flex-end; cursor:pointer; outline-offset:2px; }
-      .mark-bar { display:block; height:1px; width:16px; border-radius:2px; background:var(--bar); transition:width .12s, background .12s; }
-      .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
-      .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
-      .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
-      .mark[data-pending="true"] .mark-bar { width:22px; background:#10a37f88; }
-      .mark[data-pending="true"] .number { opacity:1; }
-      .mark[data-failed="true"] .mark-bar { background:#c0392b; }
-      .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
-      .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
-      .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
-      .mark[data-distance="0"] .mark-bar { width:33px; background:#10a37f; height:2px; }
-      .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
-      .preview[hidden] { display:none; }
-      .preview strong { display:block; margin-bottom:4px; font-size:11px; }
-      .preview section strong { color:#10a37f; font-weight:700; }
-      .preview-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; }
-      .preview-header strong { margin:0; white-space:nowrap; }
-      .preview time { white-space:nowrap; opacity:.7; }
-      .preview section + section { margin-top:8px; }
-      .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-      .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
-      @media (prefers-reduced-motion:reduce) { .mark-bar { transition:none; } }
-    `;
-      this.marks.className = "marks";
-      this.marks.dataset.marks = "true";
-      this.marks.setAttribute("role", "navigation");
-      this.marks.setAttribute("aria-label", "对话轮次");
-      this.preview.className = "preview";
-      this.preview.hidden = true;
-      this.preview.style.pointerEvents = "none";
-      shadow.append(style, this.marks, this.preview);
-      document.documentElement.append(this.host);
-      this.host.hidden = true;
-      this.marks.addEventListener("pointermove", (event) => {
-        const rect = this.marks.getBoundingClientRect();
-        if (!rect.height || !this.turns.length) return;
-        this.hover(Math.max(0, Math.min(this.turns.length - 1, Math.floor((event.clientY - rect.top) / rect.height * this.turns.length))));
-      });
-      this.marks.addEventListener("pointerleave", () => this.clearHover());
-      this.marks.addEventListener("click", (event) => {
-        const button = event.target.closest("button");
-        const turn = button && this.turns[Number(button.dataset.index)];
-        if (turn) onJump(turn.userMessageId ?? turn.id);
-      });
-      this.marks.addEventListener("focusin", (event) => {
-        const button = event.target.closest("button");
-        if (button) this.hover(Number(button.dataset.index));
-      });
-      this.marks.addEventListener("focusout", () => this.clearHover());
-      this.themeDispose = observeYadaTheme((theme) => this.host.setAttribute("data-yada-theme", theme));
-    }
-    setTurns(turns) {
-      const changed = turns.length !== this.turns.length || turns.some((turn, index) => (turn.userMessageId ?? turn.id) !== (this.turns[index]?.userMessageId ?? this.turns[index]?.id));
-      this.turns = turns;
-      if (!changed) {
-        if (this.hovered >= 0) this.showPreview();
-        this.host.hidden = !turns.length;
-        return;
-      }
-      this.clearHover();
-      this.active = -1;
-      this.pending = -1;
-      this.failed = -1;
-      this.buttons = turns.map((turn) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "mark";
-        button.dataset.index = String(turn.index);
-        button.setAttribute("aria-label", `跳到第 ${turn.index + 1} 轮`);
-        const number = document.createElement("span");
-        number.className = "number";
-        number.textContent = String(turn.index + 1);
-        const bar = document.createElement("span");
-        bar.className = "mark-bar";
-        button.append(number, bar);
-        return button;
-      });
-      this.marks.replaceChildren(...this.buttons);
-      this.host.hidden = !turns.length;
-    }
-    setPending(index) {
-      const previous = this.buttons[this.pending];
-      if (previous) {
-        delete previous.dataset.pending;
-        previous.removeAttribute("aria-busy");
-      }
-      this.pending = index ?? -1;
-      const next = index == null ? void 0 : this.buttons[index];
-      if (next) {
-        next.dataset.pending = "true";
-        next.setAttribute("aria-busy", "true");
-      }
-    }
-    setFailed(index) {
-      const previous = this.buttons[this.failed];
-      if (previous) delete previous.dataset.failed;
-      this.failed = index ?? -1;
-      const next = index == null ? void 0 : this.buttons[index];
-      if (next) next.dataset.failed = "true";
-    }
-    setActive(index) {
-      if (this.active === index) return;
-      const old = this.buttons[this.active];
-      if (old) {
-        delete old.dataset.active;
-        old.removeAttribute("aria-current");
-      }
-      this.active = index;
-      const next = this.buttons[index];
-      if (next) {
-        next.dataset.active = "true";
-        next.setAttribute("aria-current", "step");
-      }
-    }
-    setPreviewMode(assistant) {
-      this.assistant = assistant;
-      if (this.hovered >= 0) this.showPreview();
-    }
-    clearHover() {
-      window.clearTimeout(this.timer);
-      this.timer = 0;
-      for (const button of this.buttons.slice(Math.max(0, this.hovered - 3), this.hovered + 4)) delete button.dataset.distance;
-      this.hovered = -1;
-      this.preview.hidden = true;
-    }
-    dispose() {
-      this.clearHover();
-      this.themeDispose?.();
-      this.host.remove();
-    }
-    previewIndex(index) {
-      this.hover(index);
-    }
-    hover(index) {
-      if (index === this.hovered || !this.turns[index]) return;
-      this.clearHover();
-      this.hovered = index;
-      for (let n = Math.max(0, index - 3); n <= Math.min(this.buttons.length - 1, index + 3); n++) {
-        this.buttons[n].dataset.distance = String(Math.abs(n - index));
-      }
-      this.preview.dataset.expanded = "false";
-      this.showPreview();
-      this.timer = window.setTimeout(() => {
-        this.preview.dataset.expanded = "true";
-        this.showPreview();
-      }, 1e3);
-    }
-    showPreview() {
-      const turn = this.turns[this.hovered];
-      const button = this.buttons[this.hovered];
-      if (!turn || !button) return;
-      renderPreviewContent(this.preview, turn, this.assistant);
-      this.preview.hidden = false;
-      const rect = button.getBoundingClientRect();
-      const width = this.preview.getBoundingClientRect().width || Math.min(340, innerWidth - 24);
-      this.preview.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.left - width - 12))}px`;
-      this.preview.style.maxHeight = `${innerHeight - 16}px`;
-      const height = this.preview.getBoundingClientRect().height;
-      this.preview.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, rect.top + rect.height / 2 - height / 2))}px`;
-    }
-  };
-
-  // src/navigation/officialVisibility.ts
-  var OFFICIAL_NAV_STYLE_ID = "chatgpt-yada-official-nav-visibility-style";
-  var ROOT_AT_END = `main [class$="_convSearchResultHighlightRoot"]`;
-  var ROOT_BEFORE_SPACE = `main [class*="_convSearchResultHighlightRoot "]`;
-  var FIXED_CHILD = '> [class~="fixed"][class~="inset-e-4"][class~="top-1/2"][class~="z-20"][class~="-translate-y-1/2"]:not([data-yada-root])';
-  function officialNavigationHideGate(options) {
-    const host = document.getElementById(RAIL_HOST_ID);
-    return {
-      yadaReady: Boolean(
-        options.conversationPage && options.snapshot && options.snapshot.activeTurns.length > 0 && host && !host.hidden
-      ),
-      officialReady: listOfficialNavigationRoots().length === 1
-    };
-  }
-  var OfficialNavigationVisibilityController = class {
-    yadaReady = false;
-    observer = null;
-    raf = 0;
-    update(gate) {
-      this.yadaReady = gate.yadaReady;
-      this.apply();
-      if (this.yadaReady) this.ensureWatch();
-      else this.stopWatch();
-    }
-    dispose() {
-      this.yadaReady = false;
-      this.stopWatch();
-      this.removeStyle();
-    }
-    apply() {
-      this.setHidden(this.yadaReady && listOfficialNavigationRoots().length === 1);
-    }
-    setHidden(hidden) {
-      if (hidden) this.ensureStyle();
-      else this.removeStyle();
-    }
-    ensureWatch() {
-      if (this.observer) return;
-      this.observer = new MutationObserver(() => this.scheduleApply());
-      this.observer.observe(document.documentElement, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        attributeFilter: ["class"]
-      });
-    }
-    stopWatch() {
-      this.observer?.disconnect();
-      this.observer = null;
-      if (this.raf) cancelAnimationFrame(this.raf);
-      this.raf = 0;
-    }
-    scheduleApply() {
-      if (this.raf) return;
-      this.raf = requestAnimationFrame(() => {
-        this.raf = 0;
-        this.apply();
-      });
-    }
-    ensureStyle() {
-      if (document.getElementById(OFFICIAL_NAV_STYLE_ID)) return;
-      const style = document.createElement("style");
-      style.id = OFFICIAL_NAV_STYLE_ID;
-      style.textContent = `
-${ROOT_AT_END} ${FIXED_CHILD},
-${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
-  opacity: 0 !important;
-  pointer-events: none !important;
-}
-`;
-      document.head.append(style);
-    }
-    removeStyle() {
-      document.getElementById(OFFICIAL_NAV_STYLE_ID)?.remove();
-    }
-  };
 
   // src/shared/timeout.ts
   function withTimeout(promise, timeoutMs, message = "timeout") {
@@ -2453,6 +1832,9 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
   }
 
   // src/quota/tracker.ts
+  var FIRST_HISTORY_DELAY_MS = 4e3;
+  var NEXT_HISTORY_SLICE_DELAY_MS = 1500;
+  var MAX_HISTORY_PASSES = 20;
   var QuotaTracker = class {
     constructor(sync) {
       this.sync = sync;
@@ -2461,22 +1843,33 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
     ingestQueue = Promise.resolve();
     history = createChromeHistoryStore();
     disposed = false;
-    historyStarted = false;
+    historyFlight = null;
     historyTimer = 0;
+    historyAbort = null;
+    historyIdentity = null;
+    historyPass = 0;
+    historyStopped = false;
+    historyResumePending = false;
+    lastAccount = null;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       document.addEventListener("visibilitychange", this.onVisibility);
-      this.historyTimer = window.setTimeout(() => {
-        void this.startHistoryScan();
-      }, 4e3);
+      this.scheduleHistory(FIRST_HISTORY_DELAY_MS);
     }
     async refreshCurrent() {
       await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
       await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
+      this.historyStopped = false;
+      this.historyResumePending = false;
+      this.scheduleHistory(0);
     }
     dispose() {
       this.disposed = true;
+      this.historyAbort?.abort();
+      this.historyAbort = null;
+      this.historyResumePending = false;
       window.clearTimeout(this.historyTimer);
+      this.historyTimer = 0;
       this.unsubscribe?.();
       this.unsubscribe = null;
       document.removeEventListener("visibilitychange", this.onVisibility);
@@ -2484,18 +1877,101 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
     onSnapshot(snapshot) {
       const work = this.writeLedger(snapshot);
       this.ingestQueue = this.ingestQueue.then(() => work, () => work);
-      if (snapshot) void this.startHistoryScan();
+      if (snapshot && !this.historyStopped) this.scheduleHistory(600);
       return work;
     }
-    startHistoryScan() {
-      if (this.historyStarted || this.disposed) return;
-      this.historyStarted = true;
+    scheduleHistory(delayMs) {
+      if (this.disposed || this.historyStopped || this.historyFlight || document.visibilityState === "hidden") return;
       window.clearTimeout(this.historyTimer);
-      void this.scanHistory();
+      this.historyTimer = window.setTimeout(() => {
+        this.historyTimer = 0;
+        this.startHistoryScan();
+      }, Math.max(0, delayMs));
+    }
+    startHistoryScan() {
+      if (this.disposed || this.historyStopped || this.historyFlight || document.visibilityState === "hidden") return;
+      const controller = new AbortController();
+      this.historyAbort = controller;
+      this.historyFlight = this.scanHistory(controller.signal).catch((error) => this.handleHistoryError(error, controller.signal)).finally(() => {
+        if (this.historyAbort === controller) this.historyAbort = null;
+        this.historyFlight = null;
+        if (this.historyResumePending) {
+          this.historyResumePending = false;
+          this.scheduleHistory(NEXT_HISTORY_SLICE_DELAY_MS);
+        }
+      });
+    }
+    async scanHistory(signal) {
+      const account = await readChatAccount(signal);
+      if (signal.aborted || this.disposed) return;
+      this.lastAccount = account;
+      if (this.historyIdentity !== account.identity) {
+        this.historyIdentity = account.identity;
+        this.historyPass = 0;
+        this.historyStopped = false;
+        this.historyResumePending = false;
+      }
+      this.historyPass += 1;
+      await this.publishHistoryState(account, [], "backfill", false, 0, null);
+      const result = await readChatHistory({
+        transport: {
+          async request(path, requestSignal) {
+            const response = await chatgptApi(path, { signal: requestSignal });
+            if (response.status === 401 || response.status === 403) {
+              throw Object.assign(new Error("login"), { name: "AbortError" });
+            }
+            if (!response.ok) throw new Error(`history ${response.status}`);
+            return response.json();
+          }
+        },
+        fetchDetail: (id, requestSignal) => fetchConversation(id, requestSignal),
+        store: this.history,
+        identity: account.identity,
+        now: Date.now(),
+        signal
+      });
+      if (signal.aborted || this.disposed) return;
+      if (result.summary.cancelled) throw new Error("login");
+      const resumable = historyNeedsAnotherPass(result.summary) && this.historyPass < MAX_HISTORY_PASSES;
+      const status = result.summary.complete ? "ready" : resumable ? "backfill" : "partial";
+      await this.publishHistoryState(
+        account,
+        result.turns,
+        status,
+        result.summary.complete,
+        result.summary.unclassifiedTurns,
+        null
+      );
+      if (resumable) this.historyResumePending = true;
+      else this.historyStopped = true;
+    }
+    async handleHistoryError(error, signal) {
+      if (signal.aborted || this.disposed) return;
+      this.historyStopped = true;
+      this.historyResumePending = false;
+      const account = this.lastAccount;
+      if (!account) return;
+      const message = conciseError(error);
+      await this.publishHistoryState(account, [], "error", false, 0, message).catch(() => void 0);
+    }
+    async publishHistoryState(account, turns, syncStatus, historyComplete, unclassifiedTurns, historyError) {
+      const events = toEvents(turns, account.identity, "personal");
+      await sendRuntimeMessage({
+        type: "quota/ingest",
+        events,
+        plan: account.plan,
+        unclassifiedTurns,
+        historyComplete,
+        syncStatus,
+        historyError,
+        workspaceKind: "personal",
+        accountKey: account.identity
+      });
     }
     async writeLedger(snapshot) {
       if (this.disposed || !snapshot) return;
       const account = await readChatAccount();
+      this.lastAccount = account;
       const limits = await readModelLimits();
       const classification = classifySnapshot(snapshot);
       const events = snapshot.quotaIsWork ? [] : toEvents(snapshot.quotaTurns, account.identity, classification);
@@ -2510,39 +1986,20 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
         accountKey: account.identity
       });
     }
-    async scanHistory() {
-      if (this.disposed || document.visibilityState === "hidden") return;
-      const account = await readChatAccount();
-      const result = await readChatHistory({
-        transport: {
-          async request(path, signal) {
-            const response = await chatgptApi(path, { signal });
-            if (response.status === 401 || response.status === 403) throw Object.assign(new Error("login"), { name: "AbortError" });
-            if (!response.ok) throw new Error(`history ${response.status}`);
-            return response.json();
-          }
-        },
-        fetchDetail: (id, signal) => fetchConversation(id, signal),
-        store: this.history,
-        identity: account.identity,
-        now: Date.now()
-      });
-      if (this.disposed) return;
-      const events = toEvents(result.turns, account.identity, "personal");
-      await sendRuntimeMessage({
-        type: "quota/ingest",
-        events,
-        plan: account.plan,
-        unclassifiedTurns: result.summary.unclassifiedTurns,
-        historyComplete: result.summary.complete,
-        workspaceKind: "personal",
-        accountKey: account.identity
-      });
-    }
     onVisibility = () => {
-      if (document.visibilityState === "visible") void this.startHistoryScan();
+      if (document.visibilityState === "hidden") {
+        this.historyAbort?.abort();
+        window.clearTimeout(this.historyTimer);
+        this.historyTimer = 0;
+        return;
+      }
+      if (!this.historyStopped) {
+        if (this.historyFlight) this.historyResumePending = true;
+        else this.scheduleHistory(RECOVERY_DELAY_MS);
+      }
     };
   };
+  var RECOVERY_DELAY_MS = 600;
   function classifySnapshot(snapshot) {
     if (snapshot.quotaIsWork) return "work";
     if (snapshot.quotaTemporary) return "temporary";
@@ -2558,192 +2015,18 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
       classification
     }));
   }
-
-  // src/rail/active.ts
-  function viewport(root) {
-    if (root === document.scrollingElement || root === document.documentElement) {
-      return { top: 0, height: innerHeight };
-    }
-    const rect = root.getBoundingClientRect();
-    const top = Math.max(0, rect.top + root.clientTop);
-    return { top, height: Math.max(0, Math.min(innerHeight, rect.bottom) - top) };
+  function conciseError(error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (/login/i.test(message)) return "ChatGPT 登录状态不可用";
+    if (/timeout|timed out|超时/i.test(message)) return "历史读取超时";
+    if (/history \d+/.test(message)) return "历史接口暂不可用";
+    return "历史读取失败";
   }
-  function findScrollRoot() {
-    const sample = document.querySelector('[data-message-author-role="user"], [data-message-author-role="assistant"]');
-    let parent = sample?.parentElement ?? null;
-    while (parent && parent !== document.body) {
-      const overflowY = getComputedStyle(parent).overflowY;
-      if (overflowY === "auto" || overflowY === "scroll") return parent;
-      parent = parent.parentElement;
-    }
-    return document.scrollingElement ?? document.documentElement;
-  }
-  function readVisibleUserMessageId(root) {
-    const area = viewport(root);
-    const nodes = [...document.querySelectorAll('[data-message-author-role="user"][data-message-id], [data-message-author-role="user"]')];
-    let best = null;
-    for (const node of nodes) {
-      const id = node.dataset.messageId ?? node.closest("[data-message-id]")?.dataset.messageId;
-      if (!id) continue;
-      const rect = node.getBoundingClientRect();
-      if (rect.bottom < area.top || rect.top > area.top + area.height) continue;
-      const distance = Math.abs(rect.top - (area.top + 80));
-      if (!best || distance < best.distance) best = { id, distance };
-    }
-    return best?.id ?? null;
+  function historyNeedsAnotherPass(summary) {
+    return !summary.complete && !summary.cancelled && (summary.hitDetailBudget || summary.hitDeadline);
   }
 
-  // src/rail/layout.ts
-  function placeRail(host, root, count) {
-    const main = document.querySelector("main");
-    const bounds = [main, root === document.scrollingElement ? null : root].filter((element) => !!element).map((element) => element.getBoundingClientRect()).filter((rect) => rect.width > 100 && rect.height > 100);
-    let right = 60;
-    if (bounds.length) {
-      right = Math.max(44, innerWidth - Math.min(...bounds.map((rect) => rect.right)) + 24);
-    } else {
-      for (const panel of document.querySelectorAll('aside, [role="complementary"], [data-testid*="panel"]')) {
-        const rect = panel.getBoundingClientRect();
-        if (["fixed", "sticky"].includes(getComputedStyle(panel).position) && rect.width > 100 && rect.height > 150 && rect.left > innerWidth / 2 && rect.right > innerWidth - 80) {
-          right = Math.max(right, innerWidth - rect.left + 24);
-        }
-      }
-    }
-    const composer = document.querySelector("#prompt-textarea, form textarea, [data-testid*='composer' i]");
-    const composerTop = composer?.getBoundingClientRect().top ?? innerHeight - 80;
-    const area = viewport(root);
-    const top = Math.max(90, area.top + 50);
-    const bottomLimit = Math.min(area.top + area.height - 24, composerTop - 24, innerHeight - 24);
-    const available = Math.max(30, bottomLimit - top);
-    const height = Math.min(available, Math.max(count * 4, Math.min(count * 17, available)));
-    host.style.right = `${Math.min(Math.max(8, innerWidth - 70), right)}px`;
-    host.style.top = `${top + Math.max(0, (available - height) / 2)}px`;
-    host.style.height = `${height}px`;
-  }
-
-  // src/rail/controller.ts
-  var YadaRailController = class {
-    constructor(sync, navigator2) {
-      this.sync = sync;
-      this.navigator = navigator2;
-      this.view = new RailView((id) => {
-        void this.jump(id);
-      });
-    }
-    view;
-    unsubscribe = null;
-    snapshot = null;
-    root = null;
-    disposed = false;
-    raf = 0;
-    jumping = false;
-    jumpGeneration = 0;
-    jumpTarget = null;
-    failTimer = 0;
-    mount() {
-      this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
-      window.addEventListener("resize", this.onLayout, { passive: true });
-      window.addEventListener("scroll", this.onScroll, { capture: true, passive: true });
-      this.root = findScrollRoot();
-      this.root.addEventListener("scroll", this.onScroll, { passive: true });
-    }
-    setPreviewMode(assistant) {
-      this.view.setPreviewMode(assistant);
-    }
-    clear() {
-      this.snapshot = null;
-      this.jumping = false;
-      this.jumpTarget = null;
-      window.clearTimeout(this.failTimer);
-      this.view.setTurns([]);
-      this.view.clearHover();
-      this.view.setPending(null);
-      this.view.setFailed(null);
-    }
-    dispose() {
-      this.disposed = true;
-      this.unsubscribe?.();
-      this.unsubscribe = null;
-      window.cancelAnimationFrame(this.raf);
-      window.clearTimeout(this.failTimer);
-      window.removeEventListener("resize", this.onLayout);
-      window.removeEventListener("scroll", this.onScroll, true);
-      this.root?.removeEventListener("scroll", this.onScroll);
-      this.view.dispose();
-    }
-    onSnapshot(snapshot) {
-      if (this.disposed) return;
-      this.snapshot = snapshot;
-      const turns = snapshot?.activeTurns ?? [];
-      this.view.setTurns(turns);
-      if (turns.length) {
-        this.layout();
-        if (!this.jumping) this.syncActive();
-      }
-    }
-    async jump(turnId) {
-      if (this.jumping && this.jumpTarget === turnId) return;
-      const generation = ++this.jumpGeneration;
-      this.jumpTarget = turnId;
-      window.clearTimeout(this.failTimer);
-      this.view.setFailed(null);
-      this.jumping = true;
-      const index = this.turnIndex(turnId);
-      this.view.setPending(index);
-      try {
-        const result = await this.navigator.navigateTo(turnId);
-        if (generation !== this.jumpGeneration) return;
-        this.view.setPending(null);
-        if (!result.ok && result.status === "cancelled") {
-          this.syncActive();
-          return;
-        }
-        if (!result.ok) {
-          this.view.setFailed(index);
-          this.failTimer = window.setTimeout(() => {
-            if (generation !== this.jumpGeneration) return;
-            this.view.setFailed(null);
-            this.syncActive();
-          }, NATIVE_NAV_CONFIG.failStyleMs);
-          return;
-        }
-        if (index >= 0) this.view.setActive(index);
-      } finally {
-        if (generation === this.jumpGeneration) {
-          this.jumping = false;
-          this.jumpTarget = null;
-        }
-      }
-    }
-    turnIndex(turnId) {
-      const turns = this.snapshot?.activeTurns ?? [];
-      return turns.findIndex((turn) => turn.id === turnId || turn.userMessageId === turnId);
-    }
-    onLayout = () => {
-      this.layout();
-    };
-    onScroll = () => {
-      if (this.raf) return;
-      this.raf = window.requestAnimationFrame(() => {
-        this.raf = 0;
-        this.syncActive();
-      });
-    };
-    layout() {
-      this.root = findScrollRoot();
-      placeRail(this.view.host, this.root, this.snapshot?.activeTurns.length ?? 0);
-    }
-    syncActive() {
-      if (this.jumping) return;
-      const turns = this.snapshot?.activeTurns ?? [];
-      if (!turns.length) return;
-      this.root = findScrollRoot();
-      const visibleId = readVisibleUserMessageId(this.root);
-      const index = visibleId ? turns.findIndex((turn) => turn.userMessageId === visibleId || turn.id === visibleId) : -1;
-      if (index >= 0) this.view.setActive(index);
-    }
-  };
-
-  // inline-css:/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-optimization-20260916/gpt/src/prompts/panel.css
+  // inline-css:/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-official-only-20260919/gpt/src/prompts/panel.css
   var panel_default = '/* Modal adapted from GPT Conversation Toolkit. Copyright (c) 2026 bujue3709.\n * MIT; see THIRD_PARTY_NOTICES.md. Compact copy-only UI is a Yada adapter. */\n:host { font:13px/1.5 system-ui; color-scheme:light; }\n:host([hidden]), [hidden] { display:none !important; }\n* { box-sizing:border-box; }\n.yada-prompt-modal { position:fixed; inset:0; z-index:2147483647; --bg:#fff; --text:#303030; --muted:#666; --border:#8884; --hover:#8881; color:var(--text); overscroll-behavior:contain; }\n.yada-prompt-modal[data-toolkit-theme="dark"] { --bg:#272727; --text:#eee; --muted:#bbb; --hover:#fff1; color-scheme:dark; }\n.yada-prompt-backdrop { position:absolute; inset:0; background:#0006; touch-action:none; }\n.yada-prompt-panel { position:absolute; right:20px; bottom:20px; width:min(620px, calc(100vw - 24px)); min-height:0; height:auto; max-height:min(72vh, 680px); display:flex; flex-direction:column; gap:12px; padding:16px; overflow:hidden; background:var(--bg); border:1px solid var(--border); border-radius:16px; box-shadow:0 12px 40px #0003; }\n.yada-prompt-header, .yada-prompt-item-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }\n.yada-prompt-header { flex-shrink:0; }\n.yada-prompt-header strong { font-size:16px; }\n.yada-prompt-header-actions, .yada-prompt-item-actions { display:flex; gap:4px; flex-shrink:0; }\nbutton { font:inherit; color:inherit; background:transparent; border:1px solid var(--border); border-radius:8px; padding:5px 9px; cursor:pointer; }\nbutton:hover { background:var(--hover); }\nbutton:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px solid #10a37f; outline-offset:2px; }\n[data-prompt-action="add"], .yada-prompt-add { color:#fff; background:#10a37f; border-color:#10a37f; }\n[data-prompt-action="add"]:hover, .yada-prompt-add:hover { background:#0c8567; }\n.yada-prompt-list { min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:10px; scrollbar-width:thin; }\n.yada-prompt-item { border:1px solid var(--border); border-radius:10px; padding:10px 12px; flex-shrink:0; cursor:default; }\n.yada-prompt-item-title { margin:0; font-size:13px; overflow-wrap:anywhere; min-width:0; }\n.yada-prompt-icon { width:30px; height:30px; padding:6px; border-color:transparent; display:grid; place-items:center; }\n.yada-prompt-icon[data-prompt-action="delete"] { color:#c86464; }\n.yada-prompt-item-content { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }\n.yada-prompt-empty { margin:0; padding:12px; text-align:center; color:var(--muted); }\n.yada-prompt-editor { display:grid; grid-template-columns:1fr 1fr; gap:10px; min-height:0; flex-shrink:0; }\n.yada-prompt-editor input, .yada-prompt-editor textarea { grid-column:1 / -1; width:100%; background:var(--bg); color:inherit; border:1px solid var(--border); border-radius:8px; padding:8px; font:inherit; }\n.yada-prompt-editor textarea { height:clamp(50px, 20vh, 180px); min-height:0; resize:none; overscroll-behavior:contain; }\n[role="alert"] { margin:0; color:#c86464; }\n.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }\n@media (max-width:640px) { .yada-prompt-panel { right:12px; bottom:12px; } .yada-prompt-header { gap:6px; } }\n';
 
   // src/export/clipboard.ts
@@ -2771,7 +2054,6 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
 
   // src/prompts/storage.ts
   var PROMPT_KEY = "chatgpt-yada:prompt-library:v1";
-  var PREVIEW_KEY = "chatgpt-yada:preview-assistant:v1";
   function parseLibrary(value) {
     if (value === void 0) return { version: 1, prompts: [] };
     if (!value || typeof value !== "object") throw new Error("提示词数据无效");
@@ -2789,6 +2071,41 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
   }
   async function saveLibrary(library) {
     await chrome.storage.local.set({ [PROMPT_KEY]: parseLibrary(library) });
+  }
+
+  // src/ui/theme.ts
+  function detectYadaTheme() {
+    const html = document.documentElement;
+    const themeAttr = safeGetAttribute(html, "data-theme") ?? safeGetAttribute(document.body, "data-theme");
+    if (themeAttr?.toLowerCase().includes("dark")) return "dark";
+    if (themeAttr?.toLowerCase().includes("light")) return "light";
+    if (html.classList.contains("dark")) return "dark";
+    if (html.classList.contains("light")) return "light";
+    const colorScheme = getComputedStyle(html).colorScheme;
+    if (colorScheme.includes("dark")) return "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function safeGetAttribute(node, name) {
+    return node instanceof Element ? node.getAttribute(name) : null;
+  }
+  function observeYadaTheme(onChange) {
+    const applyTheme = () => onChange(detectYadaTheme());
+    const observer = new MutationObserver(applyTheme);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", applyTheme);
+    applyTheme();
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", applyTheme);
+    };
   }
 
   // src/prompts/panel.ts
@@ -3135,7 +2452,8 @@ ${timestamp ? `${timestamp}
     });
     if (size >= 32 && rings.center) {
       ctx.fillStyle = palette.center;
-      ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
+      const symbolic = rings.center === "…" || rings.center === "—" || rings.center === "!";
+      ctx.font = `600 ${Math.round(size * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(rings.center, cx, cy + size * 0.02);
@@ -3179,37 +2497,6 @@ ${timestamp ? `${timestamp}
     ctx.stroke();
   }
 
-  // src/quota/iconState.ts
-  function snapshotToRings(snapshot) {
-    const incomplete = snapshot.coverageLabel !== "完整" || snapshot.tightestRemainingPercent == null;
-    return {
-      outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
-      middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
-      inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
-      center: incomplete ? "?" : String(snapshot.tightestRemainingPercent ?? 0)
-    };
-  }
-  function snapshotTitle(snapshot) {
-    const workspace = snapshot.personalProEligible ? "" : "\n当前工作区不计入个人 Pro Chat 额度";
-    return [
-      "ChatGPT Yada Pro 额度",
-      "",
-      metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
-      metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
-      metricLine("两个 Pro", snapshot.combinedDaily),
-      "",
-      `历史同步：${snapshot.historyComplete ? "完整" : "不完整"}`,
-      `未分类轮次：${snapshot.unclassifiedTurns}`,
-      snapshot.updatedLabel,
-      workspace
-    ].join("\n").trim();
-  }
-  function metricLine(label, metric) {
-    if (!metric) return `${label}：当前套餐无此桶`;
-    if (metric.estimatedRemaining == null) return `${label}：已记录 ${metric.used}，历史同步不完整`;
-    return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
-  }
-
   // src/quota/presentation.ts
   function metricRemainingLabel(metric) {
     if (!metric) return "当前套餐无此桶";
@@ -3217,11 +2504,22 @@ ${timestamp ? `${timestamp}
     return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
   }
   function metricPercentLabel(metric) {
-    if (!metric || metric.remainingRatio == null) return "?";
+    if (!metric || metric.remainingRatio == null) return "—";
     return `${Math.round(metric.remainingRatio * 100)}%`;
   }
   function historySyncLabel(snapshot) {
-    return snapshot.historyComplete ? "历史同步完整" : "历史同步不完整";
+    switch (snapshot.syncStatus) {
+      case "loading":
+        return "正在读取额度";
+      case "backfill":
+        return `正在补齐最近 7 天 ChatGPT 历史 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
+      case "ready":
+        return "历史同步完整";
+      case "error":
+        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+      default:
+        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+    }
   }
   function planStatusNote(snapshot) {
     if (!snapshot.plan) return "未确认 ChatGPT 套餐，不猜测额度桶。";
@@ -3242,6 +2540,37 @@ ${timestamp ? `${timestamp}
     ];
   }
 
+  // src/quota/iconState.ts
+  function snapshotToRings(snapshot) {
+    const center = snapshot.syncStatus === "loading" || snapshot.syncStatus === "backfill" ? "…" : snapshot.syncStatus === "error" ? "!" : snapshot.syncStatus === "partial" || snapshot.tightestRemainingPercent == null ? "—" : String(snapshot.tightestRemainingPercent);
+    return {
+      outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
+      middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
+      inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
+      center
+    };
+  }
+  function snapshotTitle(snapshot) {
+    const workspace = snapshot.personalProEligible ? "" : "\n当前工作区不计入个人 Pro Chat 额度";
+    return [
+      "ChatGPT Yada Pro 额度",
+      "",
+      metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
+      metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
+      metricLine("两个 Pro", snapshot.combinedDaily),
+      "",
+      `历史同步：${historySyncLabel(snapshot)}`,
+      `未分类轮次：${snapshot.unclassifiedTurns}`,
+      snapshot.updatedLabel,
+      workspace
+    ].join("\n").trim();
+  }
+  function metricLine(label, metric) {
+    if (!metric) return `${label}：当前套餐无此桶`;
+    if (metric.estimatedRemaining == null) return `${label}：已记录 ${metric.used}，历史同步不完整`;
+    return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  }
+
   // src/quota/types.ts
   var LEDGER_KEY = "chatgpt-yada:quota-ledger:v2";
   var STATE_KEY = "chatgpt-yada:quota-state:v2";
@@ -3249,41 +2578,52 @@ ${timestamp ? `${timestamp}
 
   // src/ui/quotaIndicator.ts
   var QUOTA_INDICATOR_DEBOUNCE_MS = 80;
-  var UNKNOWN_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "?" };
+  var QUOTA_POPOVER_HOST_ID = "chatgpt-yada-quota-popover-host";
+  var UNKNOWN_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "…" };
+  var ERROR_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "!" };
+  var POPOVER_WIDTH = 312;
+  var VIEWPORT_GUTTER = 8;
   var POPOVER_CSS = `
+  :host {
+    --yada-text: #202123;
+    --yada-muted: rgba(32, 33, 35, 0.64);
+    --yada-border: rgba(32, 33, 35, 0.16);
+    color-scheme: light;
+    pointer-events: none;
+  }
+  :host([data-yada-theme="dark"]) {
+    --yada-text: #ececec;
+    --yada-muted: rgba(236, 236, 236, 0.66);
+    --yada-border: rgba(236, 236, 236, 0.16);
+    color-scheme: dark;
+  }
   [data-quota-popover] {
-    position: absolute;
-    z-index: 30;
+    position: fixed;
+    z-index: 2147483646;
     box-sizing: border-box;
-    width: 260px;
-    max-width: calc(100vw - 16px);
-    padding: 12px;
-    border: 1px solid var(--yada-button-border);
+    width: min(${POPOVER_WIDTH}px, calc(100vw - ${VIEWPORT_GUTTER * 2}px));
+    max-height: calc(100vh - ${VIEWPORT_GUTTER * 2}px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    border: 1px solid var(--yada-border);
     border-radius: 12px;
     background: #fff;
     color: var(--yada-text);
-    box-shadow: 0 10px 28px rgba(15, 15, 15, 0.12);
+    box-shadow: 0 12px 32px rgba(15, 15, 15, 0.18);
     font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     text-align: left;
     white-space: normal;
+    pointer-events: auto;
   }
+  [data-quota-popover][hidden] { display: none !important; }
   :host([data-yada-theme="dark"]) [data-quota-popover] {
     background: #2a2a2a;
-    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
   }
-  [data-quota-popover] h2 {
-    margin: 0 0 8px;
-    font-size: 13px;
-    font-weight: 700;
-  }
-  [data-quota-popover] h3 {
-    margin: 10px 0 2px;
-    font-size: 12px;
-    font-weight: 700;
-  }
-  [data-quota-popover] p {
-    margin: 0;
-  }
+  [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+  [data-quota-popover] h3 { margin: 10px 0 2px; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] p { margin: 0; }
   [data-quota-popover] [data-quota-note],
   [data-quota-popover] [data-quota-warn],
   [data-quota-popover] [data-quota-error] {
@@ -3292,9 +2632,7 @@ ${timestamp ? `${timestamp}
     color: var(--yada-muted);
   }
   [data-quota-popover] [data-quota-warn],
-  [data-quota-popover] [data-quota-error] {
-    color: var(--yada-text);
-  }
+  [data-quota-popover] [data-quota-error] { color: var(--yada-text); }
 `;
   var QuotaIndicator = class {
     constructor(button, options = {}) {
@@ -3303,22 +2641,33 @@ ${timestamp ? `${timestamp}
       this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
       this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
       this.canvas.setAttribute("aria-hidden", "true");
-      const root = this.root();
-      this.styleEl = document.createElement("style");
-      this.styleEl.textContent = POPOVER_CSS;
+      document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
+      this.portalHost = document.createElement("div");
+      this.portalHost.id = QUOTA_POPOVER_HOST_ID;
+      this.portalHost.dataset.yadaRoot = "true";
+      this.themeValue = detectYadaTheme();
+      this.portalHost.dataset.yadaTheme = this.themeValue;
+      const portal = this.portalHost.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = POPOVER_CSS;
       this.popover = document.createElement("div");
       this.popover.hidden = true;
       this.popover.dataset.quotaPopover = "true";
       this.popover.setAttribute("role", "dialog");
       this.popover.setAttribute("aria-label", "Pro 模型额度");
-      root.append(this.styleEl, this.popover);
-      this.themeObserver = new MutationObserver(() => this.paint(this.rings));
-      const host = this.host();
-      if (host) this.themeObserver.observe(host, { attributes: true, attributeFilter: ["data-yada-theme"] });
+      portal.append(style, this.popover);
+      (document.body ?? document.documentElement).append(this.portalHost);
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.themeValue = theme;
+        this.portalHost.dataset.yadaTheme = theme;
+        this.paint(this.rings);
+      });
       this.button.setAttribute("aria-haspopup", "dialog");
       this.button.addEventListener("click", this.onClick);
       document.addEventListener("pointerdown", this.onPointerDown, true);
       document.addEventListener("keydown", this.onKeyDown, true);
+      window.addEventListener("resize", this.onViewportChange, { passive: true });
+      window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
       chrome.storage?.onChanged?.addListener(this.onStorageChanged);
       this.apply(null, "loading");
       void this.loadState();
@@ -3326,15 +2675,16 @@ ${timestamp ? `${timestamp}
     send;
     debounceMs;
     canvas;
+    portalHost;
     popover;
-    styleEl;
-    themeObserver;
+    disposeTheme;
     disposed = false;
     generation = 0;
     refreshTimer = 0;
     status = "loading";
     snapshot = null;
     rings = UNKNOWN_QUOTA_RINGS;
+    themeValue;
     close = () => {
       this.popover.hidden = true;
       this.button.setAttribute("aria-expanded", "false");
@@ -3346,13 +2696,14 @@ ${timestamp ? `${timestamp}
       this.generation += 1;
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = 0;
-      this.themeObserver.disconnect();
+      this.disposeTheme();
       this.button.removeEventListener("click", this.onClick);
       document.removeEventListener("pointerdown", this.onPointerDown, true);
       document.removeEventListener("keydown", this.onKeyDown, true);
+      window.removeEventListener("resize", this.onViewportChange);
+      window.removeEventListener("scroll", this.onViewportChange, true);
       chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
-      this.popover.remove();
-      this.styleEl.remove();
+      this.portalHost.remove();
     }
     onClick = (event) => {
       event.preventDefault();
@@ -3363,7 +2714,7 @@ ${timestamp ? `${timestamp}
     onPointerDown = (event) => {
       if (this.popover.hidden) return;
       const path = event.composedPath();
-      if (path.includes(this.button) || path.includes(this.popover)) return;
+      if (path.includes(this.button) || path.includes(this.popover) || path.includes(this.portalHost)) return;
       this.close();
     };
     onKeyDown = (event) => {
@@ -3371,6 +2722,9 @@ ${timestamp ? `${timestamp}
       event.stopPropagation();
       this.close();
       this.button.focus();
+    };
+    onViewportChange = () => {
+      if (!this.popover.hidden) this.positionPopover();
     };
     onStorageChanged = (changes, area) => {
       if (this.disposed || area !== "local") return;
@@ -3397,7 +2751,7 @@ ${timestamp ? `${timestamp}
     apply(snapshot, status) {
       this.snapshot = snapshot;
       this.status = status;
-      const rings = snapshot ? snapshotToRings(snapshot) : UNKNOWN_QUOTA_RINGS;
+      const rings = status === "error" ? ERROR_QUOTA_RINGS : snapshot ? snapshotToRings(snapshot) : UNKNOWN_QUOTA_RINGS;
       this.paint(rings);
       this.setTitle(
         status === "error" ? "Pro 额度暂不可用" : snapshot ? snapshotTitle(snapshot) : "Pro 额度：读取中"
@@ -3416,7 +2770,7 @@ ${timestamp ? `${timestamp}
       paintQuotaCanvas(
         this.canvas,
         rings,
-        this.theme() === "light" ? LIGHT_ICON_PALETTE : DARK_ICON_PALETTE
+        this.themeValue === "light" ? LIGHT_ICON_PALETTE : DARK_ICON_PALETTE
       );
     }
     setTitle(title) {
@@ -3438,10 +2792,15 @@ ${timestamp ? `${timestamp}
         this.popover.append(note("无法读取额度账本", "quota-error"));
         return;
       }
-      if (!this.snapshot) return;
+      if (!this.snapshot) {
+        this.popover.append(note("正在读取额度", "quota-note"));
+        return;
+      }
+      this.popover.append(note(historySyncLabel(this.snapshot), this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
+      if (this.snapshot.syncStatus === "error") return;
       const planNote = planStatusNote(this.snapshot);
       if (planNote) this.popover.append(note(planNote, "quota-warn"));
-      else {
+      else if (this.snapshot.syncStatus === "ready") {
         for (const bucket of snapshotBucketViews(this.snapshot)) {
           const section = document.createElement("section");
           const title = document.createElement("h3");
@@ -3454,43 +2813,35 @@ ${timestamp ? `${timestamp}
           this.popover.append(section);
         }
       }
-      this.popover.append(note("预计剩余", "quota-note"));
-      this.popover.append(note(historySyncLabel(this.snapshot), "quota-note"));
+      this.popover.append(note("本地估算，不是 ChatGPT 官方余额", "quota-note"));
       this.popover.append(note("只统计个人 Chat，不统计 Work 和 Codex", "quota-note"));
       this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
       const workspace = workspaceStatusNote(this.snapshot);
       if (workspace) this.popover.append(note(workspace, "quota-warn"));
     }
     positionPopover() {
-      const host = this.host();
-      const width = 260;
-      if (!host) {
-        this.popover.style.width = `${width}px`;
-        return;
-      }
-      const hostRect = host.getBoundingClientRect();
       const buttonRect = this.button.getBoundingClientRect();
-      const minLeft = 8 - hostRect.left;
-      const maxLeft = window.innerWidth - 8 - width - hostRect.left;
-      const preferred = buttonRect.right - hostRect.left - width;
-      const left = Math.min(Math.max(preferred, minLeft), Math.max(minLeft, maxLeft));
+      const width = Math.min(POPOVER_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_GUTTER * 2));
+      const left = clamp(
+        buttonRect.right - width,
+        VIEWPORT_GUTTER,
+        Math.max(VIEWPORT_GUTTER, window.innerWidth - VIEWPORT_GUTTER - width)
+      );
       this.popover.style.width = `${width}px`;
       this.popover.style.left = `${left}px`;
       this.popover.style.right = "auto";
-      this.popover.style.top = `${buttonRect.bottom - hostRect.top + 6}px`;
-    }
-    theme() {
-      return this.host()?.getAttribute("data-yada-theme") === "dark" ? "dark" : "light";
-    }
-    host() {
-      const root = this.button.getRootNode();
-      return root instanceof ShadowRoot ? root.host : this.button.parentElement;
-    }
-    root() {
-      const root = this.button.getRootNode();
-      return root instanceof ShadowRoot ? root : document;
+      this.popover.style.top = `${VIEWPORT_GUTTER}px`;
+      const rect = this.popover.getBoundingClientRect();
+      const height = Math.min(rect.height, Math.max(0, window.innerHeight - VIEWPORT_GUTTER * 2));
+      const below = buttonRect.bottom + 6;
+      const above = buttonRect.top - height - 6;
+      const top = below + height <= window.innerHeight - VIEWPORT_GUTTER ? below : above >= VIEWPORT_GUTTER ? above : VIEWPORT_GUTTER;
+      this.popover.style.top = `${top}px`;
     }
   };
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
   function note(text, kind) {
     const node = document.createElement("p");
     node.dataset[kind === "quota-note" ? "quotaNote" : kind === "quota-warn" ? "quotaWarn" : "quotaError"] = "true";
@@ -3500,9 +2851,7 @@ ${timestamp ? `${timestamp}
 
   // src/ui/toolbar.ts
   var YadaToolbar = class {
-    constructor(onPreviewMode = () => {
-    }, sync = null) {
-      this.onPreviewMode = onPreviewMode;
+    constructor(sync = null) {
       this.sync = sync;
     }
     host = null;
@@ -3514,7 +2863,6 @@ ${timestamp ? `${timestamp}
     placementTimer = 0;
     prompts = null;
     quota = null;
-    previewAssistant = false;
     closePanels() {
       this.prompts?.close();
       this.quota?.close();
@@ -3536,27 +2884,6 @@ ${timestamp ? `${timestamp}
       });
       this.quota = new QuotaIndicator(this.query("[data-quota]"));
       this.prompts = new PromptPanel(this.query("[data-prompts]"));
-      const mode = this.query("[data-preview-mode]");
-      const applyMode = () => {
-        mode.setAttribute("aria-pressed", String(this.previewAssistant));
-        mode.title = this.previewAssistant ? "预览：User + ChatGPT" : "预览：User";
-        mode.setAttribute("aria-label", mode.title);
-        this.onPreviewMode(this.previewAssistant);
-      };
-      let modeTouched = false;
-      void chrome.storage.local.get(PREVIEW_KEY).then((data) => {
-        if (!this.host || modeTouched) return;
-        this.previewAssistant = data[PREVIEW_KEY] === true;
-        applyMode();
-      }).catch(() => applyMode());
-      mode.addEventListener("click", () => {
-        modeTouched = true;
-        this.previewAssistant = !this.previewAssistant;
-        applyMode();
-        void chrome.storage.local.set({ [PREVIEW_KEY]: this.previewAssistant }).catch(() => {
-          mode.title = "预览模式保存失败，下次打开将恢复旧设置";
-        });
-      });
       this.disposeTheme = observeYadaTheme((theme) => {
         this.host?.setAttribute("data-yada-theme", theme);
       });
@@ -3682,7 +3009,6 @@ ${timestamp ? `${timestamp}
           cursor: default;
           opacity: 0.66;
         }
-        button[data-preview-mode],
         button[data-quota] {
           padding: 0;
           width: 20px;
@@ -3693,18 +3019,12 @@ ${timestamp ? `${timestamp}
           flex-shrink: 0;
           line-height: 0;
         }
-        button[data-preview-mode] {
-          font-size: 16px;
-          color: var(--yada-muted);
-        }
-        button[data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
         button[data-quota] canvas {
           display: block;
           width: 20px;
           height: 20px;
         }
       </style>
-      <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
       <button type="button" data-quota aria-haspopup="dialog" aria-expanded="false" aria-label="Pro 额度：读取中" title="Pro 额度：读取中"><canvas width="32" height="32" aria-hidden="true"></canvas></button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
@@ -3819,13 +3139,9 @@ ${timestamp ? `${timestamp}
   // src/content.ts
   var ChatGptYadaApp = class {
     sync = null;
-    navigator = null;
-    rail = null;
+    hydrator = null;
     toolbar = null;
     quota = null;
-    prep = null;
-    officialNav = null;
-    prepDispose = null;
     routeDispose = null;
     messageDispose = null;
     hostGuard = null;
@@ -3833,27 +3149,16 @@ ${timestamp ? `${timestamp}
     mount() {
       this.sync = new ConversationSync();
       this.sync.mountPageObserver();
-      this.navigator = new NavigatorController(this.sync);
-      this.navigator.mount();
-      this.rail = new YadaRailController(this.sync, this.navigator);
-      this.rail.mount();
+      this.hydrator = new OfficialNavigatorHydrator(this.sync);
+      this.hydrator.mount();
       this.quota = new QuotaTracker(this.sync);
       this.quota.mount();
-      this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.sync);
+      this.toolbar = new YadaToolbar(this.sync);
       this.toolbar.mount();
-      this.prep = new NativePreparationController();
-      this.officialNav = new OfficialNavigationVisibilityController();
-      this.prepDispose = this.sync.subscribe((snapshot) => {
-        this.prep?.evaluate(snapshot?.conversationId ?? null, snapshot?.activeTurns ?? []);
-        this.updateOfficialVisibility(snapshot);
-      });
       this.syncPageState();
       this.routeDispose = observeRouteChange(() => {
         this.toolbar?.closePanels();
-        this.rail?.clear();
-        this.navigator?.cancel();
-        this.prep?.cancelWait();
-        this.updateOfficialVisibility(null);
+        this.hydrator?.resetRoute();
         this.syncPageState();
       });
       const onMessage = (message, _sender, sendResponse) => {
@@ -3864,7 +3169,7 @@ ${timestamp ? `${timestamp}
       chrome.runtime.onMessage.addListener(onMessage);
       this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
       this.hostGuard = new MutationObserver(() => {
-        if (document.getElementById("chatgpt-yada-rail-host") && document.getElementById("chatgpt-yada-toolbar-host")) return;
+        if (document.getElementById("chatgpt-yada-toolbar-host")) return;
         if (this.remounts >= 5) return;
         this.remounts += 1;
         this.dispose();
@@ -3880,18 +3185,10 @@ ${timestamp ? `${timestamp}
       this.routeDispose = null;
       this.messageDispose?.();
       this.messageDispose = null;
-      this.prepDispose?.();
-      this.prepDispose = null;
-      this.officialNav?.dispose();
-      this.officialNav = null;
-      this.prep?.dispose();
-      this.prep = null;
+      this.hydrator?.dispose();
+      this.hydrator = null;
       this.quota?.dispose();
       this.quota = null;
-      this.rail?.dispose();
-      this.rail = null;
-      this.navigator?.dispose();
-      this.navigator = null;
       this.toolbar?.dispose();
       this.toolbar = null;
       this.sync?.dispose();
@@ -3903,13 +3200,6 @@ ${timestamp ? `${timestamp}
       const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
       if (copy) copy.hidden = !isChatGptConversationPage();
       this.sync?.setActiveConversation(getConversationIdFromUrl());
-      if (!isChatGptConversationPage()) this.updateOfficialVisibility(null);
-    }
-    updateOfficialVisibility(snapshot) {
-      this.officialNav?.update(officialNavigationHideGate({
-        conversationPage: isChatGptConversationPage(),
-        snapshot
-      }));
     }
   };
   if (isChatGptPage()) {

@@ -12,12 +12,23 @@ export function metricRemainingLabel(metric: QuotaMetric | null): string {
 }
 
 export function metricPercentLabel(metric: QuotaMetric | null): string {
-  if (!metric || metric.remainingRatio == null) return "?";
+  if (!metric || metric.remainingRatio == null) return "—";
   return `${Math.round(metric.remainingRatio * 100)}%`;
 }
 
 export function historySyncLabel(snapshot: QuotaSnapshot): string {
-  return snapshot.historyComplete ? "历史同步完整" : "历史同步不完整";
+  switch (snapshot.syncStatus) {
+    case "loading":
+      return "正在读取额度";
+    case "backfill":
+      return `正在补齐最近 7 天 ChatGPT 历史 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
+    case "ready":
+      return "历史同步完整";
+    case "error":
+      return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+    default:
+      return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+  }
 }
 
 export function planStatusNote(snapshot: QuotaSnapshot): string | null {

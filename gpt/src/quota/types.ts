@@ -3,6 +3,7 @@ import type { ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
 export type QuotaCoverage = "partial" | "complete-local" | "degraded";
 
 export type QuotaClassification = "personal" | "work" | "unknown" | "temporary";
+export type QuotaSyncStatus = "loading" | "backfill" | "ready" | "partial" | "error";
 
 export type QuotaUsageEvent = {
   id: string;
@@ -39,6 +40,8 @@ export type QuotaSnapshot = {
   unclassifiedTurns: number;
   recordedCount: number;
   historyComplete: boolean;
+  syncStatus: QuotaSyncStatus;
+  historyError: string | null;
   coverageLabel: "完整" | "历史估算" | "数据不完整";
   tightestRemainingPercent: number | null;
   personalProEligible: boolean;
@@ -46,15 +49,6 @@ export type QuotaSnapshot = {
   fallbackModel: string | null;
   updatedLabel: string;
 };
-
-export type BackfillStatus =
-  | "idle"
-  | "running"
-  | "paused"
-  | "complete"
-  | "unavailable"
-  | "error"
-  | "incomplete";
 
 export type QuotaLedgerState = {
   version: 2;
@@ -66,6 +60,8 @@ export type QuotaPersistedState = {
   accountKey?: string;
   plan: ChatPlan;
   historyComplete: boolean;
+  syncStatus: QuotaSyncStatus;
+  historyError?: string;
   unclassifiedTurns: number;
   lastSnapshot?: QuotaSnapshot;
   writeError?: string;

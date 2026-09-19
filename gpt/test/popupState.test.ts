@@ -21,6 +21,8 @@ function snapshot(): QuotaSnapshot {
     unclassifiedTurns: 0,
     recordedCount: 0,
     historyComplete: false,
+    syncStatus: "partial",
+    historyError: null,
     coverageLabel: "数据不完整",
     tightestRemainingPercent: null,
     personalProEligible: true,
@@ -70,6 +72,7 @@ describe("popup ready/error contract", () => {
     HTMLCanvasElement.prototype.getContext = original;
     expect(root.dataset.state).toBe("ready");
     expect(isPopupReady(root)).toBe(true);
-    expect(root.textContent).toContain("预计剩余");
+    expect(root.textContent).toContain("历史补齐前不估算剩余");
+    expect(root.textContent).not.toMatch(/预计剩余 \d+/);
   });
 });

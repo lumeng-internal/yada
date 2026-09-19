@@ -27,6 +27,7 @@ const inlineCss = {
 await esbuild.build({
   absWorkingDir: root,
   entryPoints: {
+    "native-navigator-main": "src/nativeNavigator/mainHook.ts",
     content: "src/content.ts",
     background: "src/background/serviceWorker.ts",
     popup: "src/popup/popup.ts"
@@ -62,7 +63,7 @@ for (const file of ["LICENSE", "NOTICE.md", "THIRD_PARTY_NOTICES.md"]) {
 
 const built = JSON.parse(readFileSync(resolve(outdir, "manifest.json"), "utf8"));
 if (built.version !== "4.0.0") throw new Error(`dist manifest version is ${built.version}`);
-if (!existsSync(resolve(outdir, "content.js")) || !existsSync(resolve(outdir, "background.js")) || !existsSync(resolve(outdir, "popup.html"))) {
+if (!existsSync(resolve(outdir, "native-navigator-main.js")) || !existsSync(resolve(outdir, "content.js")) || !existsSync(resolve(outdir, "background.js")) || !existsSync(resolve(outdir, "popup.html"))) {
   throw new Error("extension outputs missing");
 }
 if (existsSync(resolve(outdir, "content.css"))) {
@@ -75,4 +76,7 @@ if (content.includes("native-bootstrap-page") || content.includes("NativeBootstr
 if (/searchVirtualPrompt|jumpVirtual|luna-navigation|Virtual Search/.test(content)) {
   throw new Error("built content.js still contains Luna virtual search");
 }
-console.log("build ok: dist_chrome/{content.js,background.js,popup.js,popup.html,popup.css,manifest.json}");
+if (/YadaRailController|NativeNavigationPort|OfficialNavigationVisibilityController|NativePreparationController|PREVIEW_KEY|data-preview-mode/.test(content)) {
+  throw new Error("built content.js still contains retired Yada navigation or preview symbols");
+}
+console.log("build ok: dist_chrome/{native-navigator-main.js,content.js,background.js,popup.js,popup.html,popup.css,manifest.json}");

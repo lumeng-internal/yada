@@ -1,4 +1,4 @@
-import type { QuotaSnapshot, QuotaUsageEvent } from "../quota/types";
+import type { QuotaSnapshot, QuotaSyncStatus, QuotaUsageEvent } from "../quota/types";
 import type { ChatGPTChatModelLimit, ChatPlan } from "../quota/vibebar/types";
 import { withTimeout } from "./timeout";
 
@@ -14,6 +14,8 @@ export type QuotaIngest = {
   events: QuotaUsageEvent[];
   plan?: ChatPlan;
   historyComplete?: boolean;
+  syncStatus?: QuotaSyncStatus;
+  historyError?: string | null;
   unclassifiedTurns?: number;
   workspaceKind?: QuotaSnapshot["workspaceKind"];
   limits?: ChatGPTChatModelLimit[];

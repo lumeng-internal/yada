@@ -1,6 +1,5 @@
 import type { ConversationSync } from "../core/conversationSync";
 import { PromptPanel } from "../prompts/panel";
-import { PREVIEW_KEY } from "../prompts/storage";
 import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
@@ -21,11 +20,7 @@ export class YadaToolbar {
 
   private prompts: PromptPanel | null = null;
   private quota: QuotaIndicator | null = null;
-  private previewAssistant = false;
-  constructor(
-    private readonly onPreviewMode: (assistant: boolean) => void = () => {},
-    private readonly sync: ConversationSync | null = null
-  ) {}
+  constructor(private readonly sync: ConversationSync | null = null) {}
 
   closePanels(): void {
     this.prompts?.close();
@@ -52,23 +47,6 @@ export class YadaToolbar {
 
     this.quota = new QuotaIndicator(this.query<HTMLButtonElement>("[data-quota]")!);
     this.prompts = new PromptPanel( this.query<HTMLButtonElement>("[data-prompts]")!);
-    const mode = this.query<HTMLButtonElement>("[data-preview-mode]")!;
-    const applyMode = (): void => {
-      mode.setAttribute("aria-pressed", String(this.previewAssistant));
-      mode.title = this.previewAssistant ? "预览：User + ChatGPT" : "预览：User";
-      mode.setAttribute("aria-label", mode.title);
-      this.onPreviewMode(this.previewAssistant);
-    };
-    let modeTouched = false;
-    void chrome.storage.local.get(PREVIEW_KEY).then(data => {
-      if (!this.host || modeTouched) return;
-      this.previewAssistant = data[PREVIEW_KEY] === true; applyMode();
-    }).catch(() => applyMode());
-    mode.addEventListener("click", () => {
-      modeTouched = true;
-      this.previewAssistant = !this.previewAssistant; applyMode();
-      void chrome.storage.local.set({ [PREVIEW_KEY]: this.previewAssistant }).catch(() => { mode.title = "预览模式保存失败，下次打开将恢复旧设置"; });
-    });
 
     this.disposeTheme = observeYadaTheme((theme) => {
       this.host?.setAttribute("data-yada-theme", theme);
@@ -201,7 +179,6 @@ export class YadaToolbar {
           cursor: default;
           opacity: 0.66;
         }
-        button[data-preview-mode],
         button[data-quota] {
           padding: 0;
           width: 20px;
@@ -212,18 +189,12 @@ export class YadaToolbar {
           flex-shrink: 0;
           line-height: 0;
         }
-        button[data-preview-mode] {
-          font-size: 16px;
-          color: var(--yada-muted);
-        }
-        button[data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
         button[data-quota] canvas {
           display: block;
           width: 20px;
           height: 20px;
         }
       </style>
-      <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
       <button type="button" data-quota aria-haspopup="dialog" aria-expanded="false" aria-label="Pro 额度：读取中" title="Pro 额度：读取中"><canvas width="32" height="32" aria-hidden="true"></canvas></button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>

@@ -1,6 +1,5 @@
 import type { PromptLibrary } from "./types";
 export const PROMPT_KEY = "chatgpt-yada:prompt-library:v1";
-export const PREVIEW_KEY = "chatgpt-yada:preview-assistant:v1";
 
 export function parseLibrary(value: unknown): PromptLibrary {
   if (value === undefined) return { version: 1, prompts: [] };

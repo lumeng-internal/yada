@@ -150,7 +150,7 @@ describe("calculation", () => {
     });
     expect(snapshot.gpt6ProWeekly?.estimatedRemaining).toBeNull();
     expect(snapshot.coverageLabel).toBe("历史估算");
-    expect(snapshotToRings(snapshot).center).toBe("?");
+    expect(snapshotToRings(snapshot).center).toBe("—");
     expect(snapshotTitle(snapshot)).not.toMatch(/官方/);
   });
 });

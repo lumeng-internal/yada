@@ -1,5 +1,5 @@
 import { calculateQuotaSnapshot } from "./calculator";
-import { EVENT_TTL_MS, LEDGER_KEY, MAX_EVENTS, STATE_KEY, type QuotaLedgerState, type QuotaPersistedState, type QuotaSnapshot, type QuotaUsageEvent } from "./types";
+import { EVENT_TTL_MS, LEDGER_KEY, MAX_EVENTS, STATE_KEY, type QuotaLedgerState, type QuotaPersistedState, type QuotaSnapshot, type QuotaSyncStatus, type QuotaUsageEvent } from "./types";
 import type { ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
 
 export type QuotaStorage = {
@@ -35,6 +35,8 @@ export class QuotaLedger {
     now?: number;
     plan?: ChatPlan;
     historyComplete?: boolean;
+    syncStatus?: QuotaSyncStatus;
+    historyError?: string | null;
     unclassifiedTurns?: number;
     limits?: readonly ChatGPTChatModelLimit[];
     workspaceKind?: QuotaSnapshot["workspaceKind"];
@@ -50,6 +52,8 @@ export class QuotaLedger {
       const accountKey = extras.accountKey ?? events[0]?.accountKey ?? state.accountKey;
       if (extras.plan !== undefined) state.plan = extras.plan;
       if (extras.historyComplete !== undefined) state.historyComplete = extras.historyComplete;
+      if (extras.syncStatus !== undefined) state.syncStatus = extras.syncStatus;
+      if (extras.historyError !== undefined) state.historyError = extras.historyError ?? undefined;
       if (extras.unclassifiedTurns !== undefined) state.unclassifiedTurns = extras.unclassifiedTurns;
       if (accountKey) state.accountKey = accountKey;
       const snapshot = accountKey
@@ -60,6 +64,8 @@ export class QuotaLedger {
           events: ledger.events,
           limits: extras.limits,
           historyComplete: state.historyComplete,
+          syncStatus: state.syncStatus,
+          historyError: state.historyError,
           unclassifiedTurns: state.unclassifiedTurns,
           now: extras.now,
           writeError: state.writeError
@@ -77,6 +83,8 @@ export class QuotaLedger {
     extras: {
       workspaceKind?: QuotaSnapshot["workspaceKind"];
       historyComplete?: boolean;
+      syncStatus?: QuotaSyncStatus;
+      historyError?: string | null;
       unclassifiedTurns?: number;
       limits?: readonly ChatGPTChatModelLimit[];
       now?: number;
@@ -90,6 +98,8 @@ export class QuotaLedger {
       events: ledger.events,
       limits: extras.limits,
       historyComplete: extras.historyComplete ?? state.historyComplete,
+      syncStatus: extras.syncStatus ?? state.syncStatus,
+      historyError: extras.historyError ?? state.historyError,
       unclassifiedTurns: extras.unclassifiedTurns ?? state.unclassifiedTurns,
       now: extras.now,
       writeError: state.writeError
@@ -143,15 +153,25 @@ function parseLedger(value: unknown): QuotaLedgerState {
 }
 
 function parseState(value: unknown): QuotaPersistedState {
-  if (!value || typeof value !== "object") return { version: 2, plan: null, historyComplete: false, unclassifiedTurns: 0 };
+  if (!value || typeof value !== "object") return { version: 2, plan: null, historyComplete: false, syncStatus: "loading", unclassifiedTurns: 0 };
   const record = value as QuotaPersistedState;
   return {
     version: 2,
     accountKey: record.accountKey,
     plan: record.plan === "pro" || record.plan === "prolite" ? record.plan : null,
     historyComplete: record.historyComplete === true,
+    syncStatus: isSyncStatus(record.syncStatus)
+      ? record.syncStatus
+      : record.historyComplete === true
+        ? "ready"
+        : "partial",
+    historyError: record.historyError,
     unclassifiedTurns: record.unclassifiedTurns ?? 0,
     writeError: record.writeError,
     lastSnapshot: record.lastSnapshot
   };
+}
+
+function isSyncStatus(value: unknown): value is QuotaSyncStatus {
+  return value === "loading" || value === "backfill" || value === "ready" || value === "partial" || value === "error";
 }

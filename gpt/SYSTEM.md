@@ -1,36 +1,40 @@
 # ChatGPT Yada 系统
 
-版本 **4.0.0**。唯一数据流：
+版本：**4.0.0**。
 
 ```text
-业务事件
-   ↓
-ConversationSync
-   ↓
-readConversation()
-   ↓
-ConversationSnapshot
-   │
-   ├─ activeTurns
-   │    ├─ Rail（完整轮次）
-   │    ├─ Preview
-   │    ├─ Copy All
-   │    └─ NativeNavigationPort
-   │         ├─ Direct
-   │         ├─ Official Button
-   │         └─ Stable Slot
-   │
-   └─ quota source
-        ↓
-  Vibe Bar-compatible parser
-        ↓
-    Local Ledger
-        ├─ Action 三环
-        └─ Popup
+ChatGPT Host
+  ├─ Official Prompt Navigator
+  │    ↑
+  │    └─ Native History Hydrator
+  │         ├─ document_start MAIN fetch hook
+  │         ├─ metadata-only cursor chain
+  │         └─ host pagination sentinel
+  ├─ ConversationSync
+  │    ├─ Copy All
+  │    └─ current-conversation quota turns
+  ├─ Vibe Bar quota reader
+  │    └─ progressive persistent history cache
+  └─ Yada Toolbar
+       ├─ Pro quota rings
+       ├─ 复制全部
+       └─ 提示词
 ```
 
-读取当前对话只有一个入口：`readConversation()`。当前对话状态只有一份：`ConversationSnapshot`。导航、复制、额度都不读第二份当前对话。历史额度扫描可以读历史对话，但复用同一 parser。UI 不负责业务读取。Service Worker 不抓 ChatGPT 页面。
+## 官方导航
 
-完整同步只允许四类事件：路由 `conversationId` 变化、Assistant streaming `true→false`、新的稳定 Assistant `messageId`、Popup「立即刷新」。
+`native-navigator-main.js` 在 `document_start`、MAIN world 运行。它只包装 `window.fetch`，识别 chatgpt.com 同源、GET、地址栏当前 conversation 的已知 history endpoint。普通 initial request 的 `num_turns` 至少提升到 100；message 深链和所有不确定请求原样放行。
 
-导航身份是 `userMessageId`，正文只用于预览。官方导航仅在 Yada Rail 已显示完整轮次、且官方根节点可唯一识别时视觉隐藏；DOM 与按钮保留，程序仍可点击。Direct 必须确认目标进入视口后才算成功。每篇对话、每个标签页最多一次空 `?message=` 原生准备；准备后会短暂等待官方按钮或稳定槽位，不因首帧不完整立即写成 unsupported。`sessionStorage` 状态为 unseen / attempted / ready / unsupported。Luna 虚拟搜索已从生产路径删除。
+ChatGPT 立即得到原始 Promise 和 Response。旁路只读取 Response clone 的 id、role、cursor、root 和 branch 元数据，并通过同源 `postMessage` 传给 isolated controller。正文、Cookie 和认证信息不跨 bridge。
+
+isolated controller 只在 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 时工作。它每次只暴露唯一 pagination sentinel 一页，并持续检查可见消息锚点。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式并停止。共享上限为 60 秒 active、20 个 additional pages、每页 12 秒、最多 3 次 interruption recovery。
+
+HistoryChain 只有在 initial → linked before cursor → explicit root 完整闭合时才认定 complete。重复 cursor、无进展、branch 改变或无法验证都会停止。历史完整后最多等待官方控件 2.5 秒；若仍不存在，状态为 `loaded-no-native`，不提供 fallback。
+
+## 当前对话与额度
+
+`ConversationSync` 仍是 Copy All 与当前会话 quota turns 的唯一当前对话快照。额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。
+
+`QuotaTracker` 使用同一个持久 cache 进行多个有界 history slice。每轮仍保持 Vibe Bar 的 7 天窗口、page size 50、最多 4 页、detail budget 24、25 秒 deadline。只有 budget/deadline 未完成时才短暂等待后继续；账号切换重置，hidden 暂停，complete 停止，持久错误不循环重试。
+
+额度状态为 `loading | backfill | ready | partial | error`。补齐或部分状态不猜剩余数字。详情卡在 document body 下的独立 Shadow DOM portal 中 fixed 定位，不受 ChatGPT Header clipping context 影响。

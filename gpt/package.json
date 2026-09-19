@@ -3,12 +3,11 @@
   "version": "4.0.0",
   "private": true,
   "license": "AGPL-3.0-only",
-  "description": "Complete ChatGPT long-thread navigation, hover preview, copy-all timestamps, prompt library, and local Pro quota estimates.",
+  "description": "Restores ChatGPT's native long-conversation navigator, with copy-all, prompts, and local Pro quota estimates.",
   "type": "module",
   "scripts": {
     "check": "node scripts/check.mjs",
     "build": "tsc --noEmit && node scripts/build.mjs",
-    "candidate": "node scripts/candidate.mjs",
     "test": "vitest run",
     "verify:copy": "esbuild scripts/verify-copy.ts --bundle --platform=node --format=esm --outfile=/tmp/chatgpt-yada-copy-verify.mjs && node /tmp/chatgpt-yada-copy-verify.mjs",
     "verify:gate": "node scripts/verify-gate.mjs"

@@ -1,27 +1,38 @@
 # ChatGPT Yada 验收
 
-Mac mini 开发验证：
+## 本轮工程门禁
 
 ```bash
 cd gpt
-npm run check
 npm run build
+npm run verify:gate
+git diff --check
 ```
 
-`npm run candidate` 仍可使用 Mac mini 已经登录 ChatGPT 的会议浏览器，自动加载当前 `dist_chrome`，写出 `artifacts/candidate/<git-sha>.json`。它只覆盖短对话 smoke、Popup 和回归。会议浏览器没有真实 100+ 对话，因此 **不能** 把 candidate 写成 `MACBOOK_NATIVE_ACCEPTANCE=PASS`。
+检查 build metafile、旧符号、manifest 的 `document_start` MAIN hook、无额外权限，以及 `claude/` / `gemini/` 未改变。
 
-返回值：
+本轮明确不运行 Mac mini ChatGPT 产品测试、candidate、Playwright、自动长对话、自动模型调用、PR、CI 或 Release。因此工程构建成功不等于真实导航或额度体验通过。
 
-- **PASS**：代码、fixture、短对话会议浏览器 smoke、隐私和 ZIP 通过。仍不等于 MacBook 长对话原生导航验收。
-- **FAIL**：代码存在真实问题。
-- **SETUP_REQUIRED**：按中文提示补一项条件，例如会议浏览器未运行、ChatGPT 未登录、或缺少 100+ 轮真实对话。
-- **BUSY**：会议浏览器正在执行会议任务，晚点重跑。不要杀掉会议任务。
+```text
+MAC_MINI_PRODUCT_TEST = NOT_RUN_BY_DESIGN
+MACBOOK_MANUAL_ACCEPTANCE = PENDING
+```
 
-不要为了拿 PASS 自动制造 ChatGPT 对话或消耗 Pro 额度。
+## MacBook 手工验收
 
-原生导航的最终验收由 Harson 在 MacBook 使用日常 Microsoft Edge 和真实 100+ 对话完成。在那之前：
+导航：
 
-- `DEVELOPMENT_STATUS` 可以为 COMPLETE
-- `MACBOOK_NATIVE_ACCEPTANCE` 必须为 PENDING
-- 只提供 `ChatGPT-Yada-v4.0.0-native-nav-UNVERIFIED.zip`
-- 不要生成或覆盖 `ChatGPT-Yada-v4.0.0-dist_chrome.zip`
+1. 在 Edge 加载固定 `dist_chrome`，打开真实 100～200 轮对话。
+2. 右侧只能有 ChatGPT 官方 Navigator；无 Yada Rail、绿色点或第二套刻度。
+3. 打开和等待 hydration 时，当前阅读位置不得自行上下移动。
+4. 官方 prompt 数应完整；依次测试第一轮、中间轮、最后一轮，以及最后 → 第一 → 中间 → 最后。
+5. 滚动、点击、按键或输入期间，hydration 必须立即让权。
+
+额度：
+
+1. 顶栏显示 20px 三环；同步中应明确显示正在补齐历史，而不是孤立 `?`。
+2. 同步完成后显示本地“预计剩余”。
+3. 点击三环应出现约 312px 的完整详情卡，不得被 Header 裁成白条。
+4. Escape、外部点击、route change 均可关闭详情。
+
+验收前不要生成正式 `ChatGPT-Yada-v4.0.0-dist_chrome.zip`。

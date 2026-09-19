@@ -70,6 +70,8 @@
   // src/quota/calculator.ts
   function calculateQuotaSnapshot(input) {
     const now = input.now ?? Date.now();
+    const requestedStatus = input.writeError ? "error" : input.syncStatus ?? (input.historyComplete ? "ready" : "partial");
+    const syncStatus = requestedStatus === "ready" && !input.historyComplete ? "partial" : requestedStatus;
     const countable = input.events.filter(
       (event) => event.accountKey === input.accountKey && (event.classification === "personal" || event.classification === "temporary")
     );
@@ -99,6 +101,8 @@
       unclassifiedTurns: input.unclassifiedTurns,
       recordedCount: countable.length,
       historyComplete: input.historyComplete,
+      syncStatus,
+      historyError: input.writeError ?? input.historyError ?? null,
       coverageLabel,
       tightestRemainingPercent: ratios.length ? Math.round(Math.min(...ratios) * 100) : null,
       personalProEligible: input.workspaceKind !== "work" && input.plan != null,
@@ -172,6 +176,8 @@
         const accountKey = extras.accountKey ?? events[0]?.accountKey ?? state.accountKey;
         if (extras.plan !== void 0) state.plan = extras.plan;
         if (extras.historyComplete !== void 0) state.historyComplete = extras.historyComplete;
+        if (extras.syncStatus !== void 0) state.syncStatus = extras.syncStatus;
+        if (extras.historyError !== void 0) state.historyError = extras.historyError ?? void 0;
         if (extras.unclassifiedTurns !== void 0) state.unclassifiedTurns = extras.unclassifiedTurns;
         if (accountKey) state.accountKey = accountKey;
         const snapshot = accountKey ? calculateQuotaSnapshot({
@@ -181,6 +187,8 @@
           events: ledger2.events,
           limits: extras.limits,
           historyComplete: state.historyComplete,
+          syncStatus: state.syncStatus,
+          historyError: state.historyError,
           unclassifiedTurns: state.unclassifiedTurns,
           now: extras.now,
           writeError: state.writeError
@@ -199,6 +207,8 @@
         events: ledger2.events,
         limits: extras.limits,
         historyComplete: extras.historyComplete ?? state.historyComplete,
+        syncStatus: extras.syncStatus ?? state.syncStatus,
+        historyError: extras.historyError ?? state.historyError,
         unclassifiedTurns: extras.unclassifiedTurns ?? state.unclassifiedTurns,
         now: extras.now,
         writeError: state.writeError
@@ -243,17 +253,22 @@
     };
   }
   function parseState(value) {
-    if (!value || typeof value !== "object") return { version: 2, plan: null, historyComplete: false, unclassifiedTurns: 0 };
+    if (!value || typeof value !== "object") return { version: 2, plan: null, historyComplete: false, syncStatus: "loading", unclassifiedTurns: 0 };
     const record = value;
     return {
       version: 2,
       accountKey: record.accountKey,
       plan: record.plan === "pro" || record.plan === "prolite" ? record.plan : null,
       historyComplete: record.historyComplete === true,
+      syncStatus: isSyncStatus(record.syncStatus) ? record.syncStatus : record.historyComplete === true ? "ready" : "partial",
+      historyError: record.historyError,
       unclassifiedTurns: record.unclassifiedTurns ?? 0,
       writeError: record.writeError,
       lastSnapshot: record.lastSnapshot
     };
+  }
+  function isSyncStatus(value) {
+    return value === "loading" || value === "backfill" || value === "ready" || value === "partial" || value === "error";
   }
 
   // src/quota/iconRenderer.ts
@@ -303,7 +318,8 @@
     });
     if (size >= 32 && rings.center) {
       ctx.fillStyle = palette.center;
-      ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
+      const symbolic = rings.center === "…" || rings.center === "—" || rings.center === "!";
+      ctx.font = `600 ${Math.round(size * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.fillText(rings.center, cx, cy + size * 0.02);
@@ -339,14 +355,30 @@
     ctx.stroke();
   }
 
+  // src/quota/presentation.ts
+  function historySyncLabel(snapshot) {
+    switch (snapshot.syncStatus) {
+      case "loading":
+        return "正在读取额度";
+      case "backfill":
+        return `正在补齐最近 7 天 ChatGPT 历史 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
+      case "ready":
+        return "历史同步完整";
+      case "error":
+        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+      default:
+        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+    }
+  }
+
   // src/quota/iconState.ts
   function snapshotToRings(snapshot) {
-    const incomplete = snapshot.coverageLabel !== "完整" || snapshot.tightestRemainingPercent == null;
+    const center = snapshot.syncStatus === "loading" || snapshot.syncStatus === "backfill" ? "…" : snapshot.syncStatus === "error" ? "!" : snapshot.syncStatus === "partial" || snapshot.tightestRemainingPercent == null ? "—" : String(snapshot.tightestRemainingPercent);
     return {
       outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
       middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
       inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
-      center: incomplete ? "?" : String(snapshot.tightestRemainingPercent ?? 0)
+      center
     };
   }
   function snapshotTitle(snapshot) {
@@ -358,7 +390,7 @@
       metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
       metricLine("两个 Pro", snapshot.combinedDaily),
       "",
-      `历史同步：${snapshot.historyComplete ? "完整" : "不完整"}`,
+      `历史同步：${historySyncLabel(snapshot)}`,
       `未分类轮次：${snapshot.unclassifiedTurns}`,
       snapshot.updatedLabel,
       workspace
@@ -452,6 +484,8 @@
     const snapshot = await ledger.ingest(message.events, {
       plan: message.plan,
       historyComplete: message.historyComplete,
+      syncStatus: message.syncStatus,
+      historyError: message.historyError,
       unclassifiedTurns: message.unclassifiedTurns,
       limits: message.limits,
       workspaceKind: message.workspaceKind,
@@ -469,6 +503,8 @@
       workspaceKind: restored.state.lastSnapshot?.workspaceKind ?? "personal",
       events: restored.ledger.events,
       historyComplete: restored.state.historyComplete,
+      syncStatus: restored.state.syncStatus,
+      historyError: restored.state.historyError,
       unclassifiedTurns: restored.state.unclassifiedTurns,
       writeError: restored.state.writeError
     });
@@ -484,6 +520,8 @@
       workspaceKind: last?.workspaceKind ?? "personal",
       events: restored.ledger.events,
       historyComplete: restored.state.historyComplete,
+      syncStatus: restored.state.syncStatus,
+      historyError: restored.state.historyError,
       unclassifiedTurns: restored.state.unclassifiedTurns,
       writeError: restored.state.writeError
     });

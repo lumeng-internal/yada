@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMemoryHistoryStore, readChatHistory } from "../src/quota/vibebar/historyReader";
 import { identity } from "../src/quota/vibebar/conversationParser";
+import { historyNeedsAnotherPass } from "../src/quota/tracker";
 import { linearConversation } from "./helpers";
 
 const NOW = 1_800_000_000_000;
@@ -8,6 +9,14 @@ const DAY = 86_400_000;
 
 function uuid(n: number): string {
   return `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`;
+}
+
+function recentConversation(id: string) {
+  const detail = linearConversation(1, id);
+  for (const node of Object.values(detail.mapping ?? {})) {
+    if (node.message) node.message.create_time = NOW / 1000;
+  }
+  return { ...detail, conversation_id: id, conversation_origin: "chat" };
 }
 
 describe("history reader", () => {
@@ -85,6 +94,45 @@ describe("history reader", () => {
     expect(result.summary.hitDetailBudget).toBe(true);
     expect(result.summary.complete).toBe(false);
     expect(result.summary.failedConversations).toBeGreaterThan(0);
+  });
+
+  it("converges across bounded passes by reusing the persistent detail cache", async () => {
+    const store = createMemoryHistoryStore();
+    const items = Array.from({ length: 26 }, (_, i) => ({
+      id: uuid(i + 100),
+      update_time: NOW / 1000,
+      conversation_origin: "chat"
+    }));
+    const details: string[] = [];
+    const read = () => readChatHistory({
+      now: NOW,
+      identity: "account",
+      store,
+      detailBudget: 24,
+      transport: {
+        async request(path) {
+          if (path.includes("is_archived=false")) return { items, total: items.length };
+          if (path.includes("is_archived=true")) return { items: [], total: 0 };
+          throw new Error(path);
+        }
+      },
+      async fetchDetail(id) {
+        details.push(id);
+        return recentConversation(id);
+      }
+    });
+
+    const first = await read();
+    expect(historyNeedsAnotherPass(first.summary)).toBe(true);
+    expect(first.summary.hitDetailBudget).toBe(true);
+    expect(first.summary.complete).toBe(false);
+    expect(details).toHaveLength(24);
+
+    const second = await read();
+    expect(historyNeedsAnotherPass(second.summary)).toBe(false);
+    expect(second.summary.complete).toBe(true);
+    expect(second.turns).toHaveLength(26);
+    expect(details).toHaveLength(26);
   });
 
   it("stops at the 25 second deadline", async () => {

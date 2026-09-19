@@ -14,7 +14,7 @@ describe("icon renderer", () => {
     expect(remainingToRatio(62, 200)).toBeCloseTo(0.31);
   });
 
-  it("uses ? when coverage is incomplete and never says official remaining", () => {
+  it("uses a dash when coverage is partial and never says official remaining", () => {
     const snapshot = calculateQuotaSnapshot({
       accountKey: "a",
       plan: "pro",
@@ -24,7 +24,7 @@ describe("icon renderer", () => {
       unclassifiedTurns: 0
     });
     const rings = snapshotToRings(snapshot);
-    expect(rings.center).toBe("?");
+    expect(rings.center).toBe("—");
     const title = snapshotTitle(snapshot);
     expect(title).not.toMatch(/官方/);
   });

@@ -1,7 +1,7 @@
 import { allowances } from "./vibebar/allowances";
 import { proBuckets } from "./vibebar/conversationParser";
 import type { ChatGPTChatModelLimit, ChatGPTChatTurn, ChatPlan } from "./vibebar/types";
-import type { QuotaCoverage, QuotaMetric, QuotaSnapshot, QuotaUsageEvent } from "./types";
+import type { QuotaCoverage, QuotaMetric, QuotaSnapshot, QuotaSyncStatus, QuotaUsageEvent } from "./types";
 
 export function calculateQuotaSnapshot(input: {
   accountKey: string;
@@ -10,11 +10,19 @@ export function calculateQuotaSnapshot(input: {
   events: readonly QuotaUsageEvent[];
   limits?: readonly ChatGPTChatModelLimit[];
   historyComplete: boolean;
+  syncStatus?: QuotaSyncStatus;
+  historyError?: string | null;
   unclassifiedTurns: number;
   now?: number;
   writeError?: string;
 }): QuotaSnapshot {
   const now = input.now ?? Date.now();
+  const requestedStatus: QuotaSyncStatus = input.writeError
+    ? "error"
+    : input.syncStatus ?? (input.historyComplete ? "ready" : "partial");
+  const syncStatus: QuotaSyncStatus = requestedStatus === "ready" && !input.historyComplete
+    ? "partial"
+    : requestedStatus;
   const countable = input.events.filter((event) =>
     event.accountKey === input.accountKey
     && (event.classification === "personal" || event.classification === "temporary")
@@ -52,6 +60,8 @@ export function calculateQuotaSnapshot(input: {
     unclassifiedTurns: input.unclassifiedTurns,
     recordedCount: countable.length,
     historyComplete: input.historyComplete,
+    syncStatus,
+    historyError: input.writeError ?? input.historyError ?? null,
     coverageLabel,
     tightestRemainingPercent: ratios.length ? Math.round(Math.min(...ratios) * 100) : null,
     personalProEligible: input.workspaceKind !== "work" && input.plan != null,

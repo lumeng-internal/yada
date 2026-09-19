@@ -45,6 +45,8 @@ async function ingest(message: QuotaIngest): Promise<{ snapshot: QuotaSnapshot |
   const snapshot = await ledger.ingest(message.events, {
     plan: message.plan,
     historyComplete: message.historyComplete,
+    syncStatus: message.syncStatus,
+    historyError: message.historyError,
     unclassifiedTurns: message.unclassifiedTurns,
     limits: message.limits,
     workspaceKind: message.workspaceKind,
@@ -63,6 +65,8 @@ async function getState(message: QuotaGetState): Promise<{ snapshot: QuotaSnapsh
     workspaceKind: restored.state.lastSnapshot?.workspaceKind ?? "personal",
     events: restored.ledger.events,
     historyComplete: restored.state.historyComplete,
+    syncStatus: restored.state.syncStatus,
+    historyError: restored.state.historyError,
     unclassifiedTurns: restored.state.unclassifiedTurns,
     writeError: restored.state.writeError
   });
@@ -79,6 +83,8 @@ async function restore(): Promise<void> {
     workspaceKind: last?.workspaceKind ?? "personal",
     events: restored.ledger.events,
     historyComplete: restored.state.historyComplete,
+    syncStatus: restored.state.syncStatus,
+    historyError: restored.state.historyError,
     unclassifiedTurns: restored.state.unclassifiedTurns,
     writeError: restored.state.writeError
   });

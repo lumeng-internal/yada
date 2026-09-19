@@ -72,7 +72,8 @@ export function renderQuotaIcon(
   });
   if (size >= 32 && rings.center) {
     ctx.fillStyle = palette.center;
-    ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
+    const symbolic = rings.center === "…" || rings.center === "—" || rings.center === "!";
+    ctx.font = `600 ${Math.round(size * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(rings.center, cx, cy + size * 0.02);

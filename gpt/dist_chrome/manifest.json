@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "ChatGPT Yada",
   "version": "4.0.0",
-  "description": "Complete ChatGPT long-thread navigation, hover preview, copy-all timestamps, prompt library, and local Pro quota estimates.",
+  "description": "Restores ChatGPT's native long-conversation navigator, with copy-all, prompts, and local Pro quota estimates.",
   "action": {
     "default_title": "ChatGPT Yada Pro 额度",
     "default_popup": "popup.html"
@@ -11,6 +11,16 @@
     "service_worker": "background.js"
   },
   "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "native-navigator-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
     {
       "matches": [
         "https://chatgpt.com/*"
