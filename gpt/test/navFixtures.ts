@@ -98,3 +98,32 @@ export function installScrollTopCounter(element: HTMLElement): { writes: number 
   });
   return counter;
 }
+
+export function setElementRect(element: HTMLElement, rect: { top: number; height?: number; width?: number }): void {
+  const height = rect.height ?? 40;
+  const width = rect.width ?? 40;
+  const top = rect.top;
+  const box = {
+    x: 0,
+    y: top,
+    top,
+    bottom: top + height,
+    left: 0,
+    right: width,
+    width,
+    height,
+    toJSON() { return {}; }
+  };
+  Object.defineProperty(element, "getBoundingClientRect", {
+    configurable: true,
+    value: () => box
+  });
+}
+
+export function outOfViewportRect(element: HTMLElement): void {
+  setElementRect(element, { top: 8_000 });
+}
+
+export function inViewportRect(element: HTMLElement): void {
+  setElementRect(element, { top: 0 });
+}

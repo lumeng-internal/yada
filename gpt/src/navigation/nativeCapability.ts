@@ -193,6 +193,11 @@ export function scrollElementIntoView(element: HTMLElement): void {
   }
 }
 
+export function pageConversationMatches(conversationId: string): boolean {
+  const pageId = getConversationIdFromUrl();
+  return !pageId || pageId === conversationId;
+}
+
 export function isInViewport(element: HTMLElement): boolean {
   const rect = element.getBoundingClientRect();
   if (!element.isConnected) return false;

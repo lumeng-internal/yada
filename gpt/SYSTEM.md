@@ -33,4 +33,4 @@ ConversationSnapshot
 
 完整同步只允许四类事件：路由 `conversationId` 变化、Assistant streaming `true→false`、新的稳定 Assistant `messageId`、Popup「立即刷新」。
 
-导航身份是 `userMessageId`，正文只用于预览。官方导航在 Yada Rail 挂载后仅视觉隐藏，DOM 与按钮保留，程序仍可点击。每篇对话、每个标签页最多一次空 `?message=` 原生准备；`sessionStorage` 状态为 unseen / attempted / ready / unsupported。Luna 虚拟搜索已从生产路径删除。
+导航身份是 `userMessageId`，正文只用于预览。官方导航仅在 Yada Rail 已显示完整轮次、且官方根节点可唯一识别时视觉隐藏；DOM 与按钮保留，程序仍可点击。Direct 必须确认目标进入视口后才算成功。每篇对话、每个标签页最多一次空 `?message=` 原生准备；准备后会短暂等待官方按钮或稳定槽位，不因首帧不完整立即写成 unsupported。`sessionStorage` 状态为 unseen / attempted / ready / unsupported。Luna 虚拟搜索已从生产路径删除。

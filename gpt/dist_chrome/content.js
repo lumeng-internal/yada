@@ -1205,6 +1205,18 @@ ${text}
     return ids;
   }
 
+  // src/navigation/config.ts
+  var NATIVE_NAV_CONFIG = {
+    timeoutMs: 15e3,
+    directViewportMs: 320,
+    pollMs: 32,
+    alignmentQuietMs: 80,
+    alignmentTolerancePx: 8,
+    maxAlignmentAttempts: 2,
+    failStyleMs: 1500,
+    prepWaitMs: 3e3
+  };
+
   // src/navigation/nativeCapability.ts
   var CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR = [
     `main [class$="_convSearchResultHighlightRoot"]`,
@@ -1352,6 +1364,10 @@ ${text}
     } catch {
     }
   }
+  function pageConversationMatches(conversationId) {
+    const pageId = getConversationIdFromUrl();
+    return !pageId || pageId === conversationId;
+  }
   function isInViewport(element) {
     const rect = element.getBoundingClientRect();
     if (!element.isConnected) return false;
@@ -1429,6 +1445,12 @@ ${text}
       history.replaceState(history.state, "", url);
     }
   };
+  var PREP_MUTATION_SELECTOR = [
+    `[class*="_convSearchResultHighlightRoot"]`,
+    "[data-turn-id-container]",
+    "button[data-toc-item-index]",
+    `button[aria-label^="Prompt "]`
+  ].join(",");
   function nativePrepKey(conversationId) {
     return `chatgpt-yada:native-prepared:${conversationId}`;
   }
@@ -1439,6 +1461,9 @@ ${text}
   }
   function writeNativePrepState(conversationId, state, host = defaultHost) {
     host.setSession(nativePrepKey(conversationId), state);
+  }
+  function nativePrepReloadAttempted(conversationId, host = defaultHost) {
+    return readNativePrepState(conversationId, host) !== "unseen";
   }
   function messageQueryValue(href) {
     try {
@@ -1492,8 +1517,7 @@ ${text}
         return { action: "ready", state: "ready", url: stripEmptyMessageQuery(href) };
       }
       if (!hasEmptyMessageQuery(href)) return { action: "none", state: "attempted" };
-      writeNativePrepState(conversationId, "unsupported", host);
-      return { action: "unsupported", state: "unsupported" };
+      return { action: "wait", state: "attempted" };
     }
     if (hasEmptyMessageQuery(href)) {
       writeNativePrepState(conversationId, "attempted", host);
@@ -1501,8 +1525,7 @@ ${text}
         writeNativePrepState(conversationId, "ready", host);
         return { action: "ready", state: "ready", url: stripEmptyMessageQuery(href) };
       }
-      writeNativePrepState(conversationId, "unsupported", host);
-      return { action: "unsupported", state: "unsupported" };
+      return { action: "wait", state: "attempted" };
     }
     if (!shouldAttemptNativePreparation(turns, capability)) return { action: "none", state: "unseen" };
     const next = withEmptyMessageTrigger(href);
@@ -1510,33 +1533,139 @@ ${text}
     writeNativePrepState(conversationId, "attempted", host);
     return { action: "assign", state: "attempted", url: next };
   }
+  function mutationTouchesNativeSkeleton(records) {
+    for (const record of records) {
+      if (record.target instanceof Element && record.target.closest(PREP_MUTATION_SELECTOR)) return true;
+      for (const node of [...record.addedNodes, ...record.removedNodes]) {
+        if (!(node instanceof Element)) continue;
+        if (node.matches(PREP_MUTATION_SELECTOR) || node.querySelector(PREP_MUTATION_SELECTOR)) return true;
+      }
+    }
+    return false;
+  }
+  var NativePrepWaiter = class {
+    constructor(conversationId, turns, host, onSettled) {
+      this.conversationId = conversationId;
+      this.host = host;
+      this.onSettled = onSettled;
+      this.turns = turns;
+      this.observer = new MutationObserver((records) => {
+        if (mutationTouchesNativeSkeleton(records)) this.scheduleCheck();
+      });
+      this.observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["class", "data-toc-item-index", "aria-label", "aria-description", "data-turn-id-container"]
+      });
+      this.timer = window.setTimeout(() => this.finish("unsupported"), NATIVE_NAV_CONFIG.prepWaitMs);
+      this.scheduleCheck();
+    }
+    observer = null;
+    raf = 0;
+    timer = 0;
+    active = true;
+    turns;
+    isActive() {
+      return this.active;
+    }
+    hasObserver() {
+      return this.observer != null;
+    }
+    updateTurns(turns) {
+      this.turns = turns;
+      this.scheduleCheck();
+    }
+    dispose() {
+      this.stop();
+    }
+    scheduleCheck() {
+      if (!this.active || this.raf) return;
+      this.raf = requestAnimationFrame(() => {
+        this.raf = 0;
+        this.check();
+      });
+    }
+    check() {
+      if (!this.active) return;
+      const capability = readNativeCapability(this.turns, this.conversationId);
+      if (capability.officialComplete || capability.slotsComplete) this.finish("ready");
+    }
+    finish(result) {
+      if (!this.active) return;
+      writeNativePrepState(this.conversationId, result, this.host);
+      if (result === "ready") this.host.replaceUrl(stripEmptyMessageQuery(this.host.locationHref()));
+      this.stop();
+      this.onSettled();
+    }
+    stop() {
+      this.active = false;
+      this.observer?.disconnect();
+      this.observer = null;
+      if (this.raf) cancelAnimationFrame(this.raf);
+      this.raf = 0;
+      window.clearTimeout(this.timer);
+      this.timer = 0;
+    }
+  };
   var NativePreparationController = class {
     constructor(host = defaultHost) {
       this.host = host;
+      window.addEventListener("pagehide", this.onPageHide);
+      window.addEventListener("beforeunload", this.onPageHide);
     }
+    wait = null;
+    onPageHide = () => {
+      this.cancelWait();
+    };
     evaluate(conversationId, turns) {
-      if (!conversationId || !turns.length) return { action: "none", state: "unseen" };
+      if (!conversationId || !turns.length) {
+        this.cancelWait();
+        return { action: "none", state: "unseen" };
+      }
+      if (this.wait && this.wait.conversationId !== conversationId) this.cancelWait();
       const href = this.host.locationHref();
       const capability = readNativeCapability(turns, conversationId);
       const decision = decideNativePreparation(conversationId, turns, href, capability, this.host);
-      if (decision.action === "assign") this.host.assign(decision.url);
-      if (decision.action === "ready") this.host.replaceUrl(decision.url);
+      if (decision.action === "assign") {
+        this.cancelWait();
+        this.host.assign(decision.url);
+      } else if (decision.action === "ready") {
+        this.cancelWait();
+        this.host.replaceUrl(decision.url);
+      } else if (decision.action === "wait") {
+        this.ensureWait(conversationId, turns);
+      }
       return decision;
     }
-    blockedByPage(turns, conversationId) {
-      return isChatGptGenerating() || composerHasDraft() || !turns.length || !conversationId;
+    cancelWait() {
+      this.wait?.dispose();
+      this.wait = null;
     }
-  };
-
-  // src/navigation/config.ts
-  var NATIVE_NAV_CONFIG = {
-    timeoutMs: 15e3,
-    directSettleMs: 48,
-    pollMs: 32,
-    alignmentQuietMs: 80,
-    alignmentTolerancePx: 8,
-    maxAlignmentAttempts: 2,
-    failStyleMs: 1500
+    isWaiting() {
+      return this.wait?.isActive() === true;
+    }
+    waitingConversationId() {
+      return this.wait?.isActive() ? this.wait.conversationId : null;
+    }
+    hasActiveObserver() {
+      return this.wait?.hasObserver() === true;
+    }
+    dispose() {
+      window.removeEventListener("pagehide", this.onPageHide);
+      window.removeEventListener("beforeunload", this.onPageHide);
+      this.cancelWait();
+    }
+    ensureWait(conversationId, turns) {
+      if (this.wait?.isActive() && this.wait.conversationId === conversationId) {
+        this.wait.updateTurns(turns);
+        return;
+      }
+      this.cancelWait();
+      this.wait = new NativePrepWaiter(conversationId, turns, this.host, () => {
+        if (this.wait?.conversationId === conversationId && !this.wait.isActive()) this.wait = null;
+      });
+    }
   };
 
   // src/navigation/diagnostics.ts
@@ -1591,6 +1720,28 @@ ${text}
       }, Math.max(0, ms));
       const onAbort = () => {
         window.clearTimeout(timer);
+        reject(abortError5());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  function nextFrame(signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError5());
+        return;
+      }
+      const canRaf = typeof requestAnimationFrame === "function";
+      const id = canRaf ? requestAnimationFrame(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }) : window.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, 16);
+      const onAbort = () => {
+        if (canRaf) cancelAnimationFrame(id);
+        else window.clearTimeout(id);
         reject(abortError5());
       };
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -1682,6 +1833,29 @@ ${text}
     source.addEventListener("abort", abort, { once: true });
     return () => source.removeEventListener("abort", abort);
   }
+  async function jumpDirect(userMessageId, conversationId, signal, timeoutAt) {
+    if (signal.aborted) return "cancelled";
+    if (!pageConversationMatches(conversationId)) return "stale-target";
+    const node = findMountedUserMessage(userMessageId);
+    if (!node || !node.isConnected || readMessageId(node) !== userMessageId) return "miss";
+    scrollElementIntoView(node);
+    const deadline = Math.min(timeoutAt, Date.now() + NATIVE_NAV_CONFIG.directViewportMs);
+    try {
+      while (true) {
+        if (signal.aborted) return "cancelled";
+        if (!pageConversationMatches(conversationId)) return "stale-target";
+        const current = findMountedUserMessage(userMessageId);
+        if (current?.isConnected && readMessageId(current) === userMessageId && isInViewport(current)) {
+          return "ok";
+        }
+        if (Date.now() >= deadline) return "miss";
+        await nextFrame(signal);
+      }
+    } catch (error) {
+      if (signal.aborted || isAbortError4(error)) return "cancelled";
+      throw error;
+    }
+  }
   var NativeNavigationPort = class {
     active = null;
     interrupt = null;
@@ -1728,18 +1902,22 @@ ${text}
       let result = { ok: false, status: "failed" };
       try {
         if (controller.signal.aborted && !timedOut) return { ok: false, status: "cancelled" };
-        const direct = findMountedUserMessage(userMessageId);
-        if (direct && readMessageId(direct) === userMessageId) {
-          path = "direct";
-          scrollElementIntoView(direct);
-          await sleep(NATIVE_NAV_CONFIG.directSettleMs, controller.signal);
-          const still = findMountedUserMessage(userMessageId);
-          if (still && readMessageId(still) === userMessageId) {
+        const mounted = findMountedUserMessage(userMessageId);
+        if (mounted && readMessageId(mounted) === userMessageId) {
+          const jumped = await jumpDirect(userMessageId, conversationId, controller.signal, timeoutAt);
+          if (jumped === "ok") {
+            path = "direct";
             result = { ok: true, path: "direct" };
             return result;
           }
-          result = { ok: false, status: "failed" };
-          return result;
+          if (jumped === "cancelled") {
+            result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
+            return result;
+          }
+          if (jumped === "stale-target") {
+            result = { ok: false, status: "stale-target" };
+            return result;
+          }
         }
         if (isOfficialNavigationComplete(turns.length, conversationId)) {
           path = "official-button";
@@ -1787,7 +1965,7 @@ ${text}
           officialButtonCount: capability.officialButtonCount,
           expectedTurnCount: turns.length,
           slotCount: capability.slotCount,
-          reloadAttempted: readNativePrepState(conversationId) === "attempted" || readNativePrepState(conversationId) === "ready",
+          reloadAttempted: nativePrepReloadAttempted(conversationId),
           yadaScrollWrites: 0,
           alignmentAttempts,
           result: result.ok ? result.path : result.status,
@@ -1840,24 +2018,326 @@ ${text}
     }
   };
 
-  // src/navigation/officialVisibility.ts
-  var OFFICIAL_NAV_STYLE_ID = "chatgpt-yada-official-nav-visibility-style";
-  var ROOT_AT_END = CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR.split(",")[0];
-  var ROOT_BEFORE_SPACE = CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR.split(",")[1];
-  var FIXED_CHILD = `> ${CHATGPT_OFFICIAL_NAV_FIXED_CHILD_SELECTOR.map((token) => `[class~="${token}"]`).join("")}:not([data-yada-root])`;
-  var OfficialNavigationVisibilityController = class {
-    enabled = false;
-    setEnabled(enabled) {
-      this.enabled = enabled;
-      if (enabled) this.ensureStyle();
-      else this.removeStyle();
+  // src/ui/theme.ts
+  function detectYadaTheme() {
+    const html = document.documentElement;
+    const themeAttr = safeGetAttribute(html, "data-theme") ?? safeGetAttribute(document.body, "data-theme");
+    if (themeAttr?.toLowerCase().includes("dark")) return "dark";
+    if (themeAttr?.toLowerCase().includes("light")) return "light";
+    if (html.classList.contains("dark")) return "dark";
+    if (html.classList.contains("light")) return "light";
+    const colorScheme = getComputedStyle(html).colorScheme;
+    if (colorScheme.includes("dark")) return "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function safeGetAttribute(node, name) {
+    return node instanceof Element ? node.getAttribute(name) : null;
+  }
+  function observeYadaTheme(onChange) {
+    const applyTheme = () => onChange(detectYadaTheme());
+    const observer = new MutationObserver(applyTheme);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", applyTheme);
+    applyTheme();
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", applyTheme);
+    };
+  }
+
+  // src/rail/preview.ts
+  function formatPreviewTime(seconds) {
+    if (seconds === void 0 || !Number.isFinite(seconds)) return "";
+    const date = new Date(seconds * 1e3);
+    if (!Number.isFinite(date.getTime())) return "";
+    const pad = (n) => String(n).padStart(2, "0");
+    return `${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
+  function renderPreviewContent(preview, turn, assistant) {
+    const title = document.createElement("strong");
+    title.textContent = `第 ${turn.index + 1} 轮`;
+    const heading = document.createElement("div");
+    heading.className = "preview-header";
+    heading.append(title);
+    const timestamp = formatPreviewTime(turn.userCreatedAt);
+    if (timestamp) {
+      const time = document.createElement("time");
+      time.textContent = timestamp;
+      heading.append(time);
+    }
+    preview.replaceChildren(heading, block("Harson", turn.userPreview));
+    if (assistant) preview.append(block("ChatGPT", turn.assistantPreview || "该轮暂无 ChatGPT 回复"));
+  }
+  function block(role, text) {
+    const section = document.createElement("section");
+    section.dataset.previewRole = role;
+    const label = document.createElement("strong");
+    label.textContent = role;
+    const summary = document.createElement("p");
+    summary.textContent = text;
+    section.append(label, summary);
+    return section;
+  }
+
+  // src/rail/view.ts
+  var RAIL_HOST_ID = "chatgpt-yada-rail-host";
+  var RailView = class {
+    host = document.createElement("div");
+    marks = document.createElement("div");
+    preview = document.createElement("div");
+    turns = [];
+    buttons = [];
+    active = -1;
+    hovered = -1;
+    assistant = false;
+    timer = 0;
+    pending = -1;
+    failed = -1;
+    themeDispose = null;
+    constructor(onJump) {
+      document.querySelectorAll(`[id="${RAIL_HOST_ID}"]`).forEach((node) => node.remove());
+      this.host.id = RAIL_HOST_ID;
+      this.host.dataset.yadaRoot = "true";
+      this.host.setAttribute("data-yada-theme", detectYadaTheme());
+      const shadow = this.host.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = `
+      :host { position: fixed; width: 58px; z-index: 2147483400; font: 12px/1.5 system-ui; --text:#303030; --bg:#fff; --bar:#aaa8; color:var(--text); background: transparent; }
+      :host([hidden]) { display:none; }
+      :host([data-yada-theme="dark"]) { --text:#eee; --bg:#272727; --bar:#aaa7; color-scheme:dark; }
+      .marks { height:100%; display:flex; flex-direction:column; background: transparent; }
+      .mark { position:relative; flex:1 1 0; min-height:0; padding:0; border:0; width:58px; background:transparent; display:flex; align-items:center; justify-content:flex-end; cursor:pointer; outline-offset:2px; }
+      .mark-bar { display:block; height:1px; width:16px; border-radius:2px; background:var(--bar); transition:width .12s, background .12s; }
+      .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
+      .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
+      .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
+      .mark[data-pending="true"] .mark-bar { width:22px; background:#10a37f88; }
+      .mark[data-pending="true"] .number { opacity:1; }
+      .mark[data-failed="true"] .mark-bar { background:#c0392b; }
+      .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
+      .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
+      .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
+      .mark[data-distance="0"] .mark-bar { width:33px; background:#10a37f; height:2px; }
+      .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
+      .preview[hidden] { display:none; }
+      .preview strong { display:block; margin-bottom:4px; font-size:11px; }
+      .preview section strong { color:#10a37f; font-weight:700; }
+      .preview-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; }
+      .preview-header strong { margin:0; white-space:nowrap; }
+      .preview time { white-space:nowrap; opacity:.7; }
+      .preview section + section { margin-top:8px; }
+      .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
+      .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
+      @media (prefers-reduced-motion:reduce) { .mark-bar { transition:none; } }
+    `;
+      this.marks.className = "marks";
+      this.marks.dataset.marks = "true";
+      this.marks.setAttribute("role", "navigation");
+      this.marks.setAttribute("aria-label", "对话轮次");
+      this.preview.className = "preview";
+      this.preview.hidden = true;
+      this.preview.style.pointerEvents = "none";
+      shadow.append(style, this.marks, this.preview);
+      document.documentElement.append(this.host);
+      this.host.hidden = true;
+      this.marks.addEventListener("pointermove", (event) => {
+        const rect = this.marks.getBoundingClientRect();
+        if (!rect.height || !this.turns.length) return;
+        this.hover(Math.max(0, Math.min(this.turns.length - 1, Math.floor((event.clientY - rect.top) / rect.height * this.turns.length))));
+      });
+      this.marks.addEventListener("pointerleave", () => this.clearHover());
+      this.marks.addEventListener("click", (event) => {
+        const button = event.target.closest("button");
+        const turn = button && this.turns[Number(button.dataset.index)];
+        if (turn) onJump(turn.userMessageId ?? turn.id);
+      });
+      this.marks.addEventListener("focusin", (event) => {
+        const button = event.target.closest("button");
+        if (button) this.hover(Number(button.dataset.index));
+      });
+      this.marks.addEventListener("focusout", () => this.clearHover());
+      this.themeDispose = observeYadaTheme((theme) => this.host.setAttribute("data-yada-theme", theme));
+    }
+    setTurns(turns) {
+      const changed = turns.length !== this.turns.length || turns.some((turn, index) => (turn.userMessageId ?? turn.id) !== (this.turns[index]?.userMessageId ?? this.turns[index]?.id));
+      this.turns = turns;
+      if (!changed) {
+        if (this.hovered >= 0) this.showPreview();
+        this.host.hidden = !turns.length;
+        return;
+      }
+      this.clearHover();
+      this.active = -1;
+      this.pending = -1;
+      this.failed = -1;
+      this.buttons = turns.map((turn) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "mark";
+        button.dataset.index = String(turn.index);
+        button.setAttribute("aria-label", `跳到第 ${turn.index + 1} 轮`);
+        const number = document.createElement("span");
+        number.className = "number";
+        number.textContent = String(turn.index + 1);
+        const bar = document.createElement("span");
+        bar.className = "mark-bar";
+        button.append(number, bar);
+        return button;
+      });
+      this.marks.replaceChildren(...this.buttons);
+      this.host.hidden = !turns.length;
+    }
+    setPending(index) {
+      const previous = this.buttons[this.pending];
+      if (previous) {
+        delete previous.dataset.pending;
+        previous.removeAttribute("aria-busy");
+      }
+      this.pending = index ?? -1;
+      const next = index == null ? void 0 : this.buttons[index];
+      if (next) {
+        next.dataset.pending = "true";
+        next.setAttribute("aria-busy", "true");
+      }
+    }
+    setFailed(index) {
+      const previous = this.buttons[this.failed];
+      if (previous) delete previous.dataset.failed;
+      this.failed = index ?? -1;
+      const next = index == null ? void 0 : this.buttons[index];
+      if (next) next.dataset.failed = "true";
+    }
+    setActive(index) {
+      if (this.active === index) return;
+      const old = this.buttons[this.active];
+      if (old) {
+        delete old.dataset.active;
+        old.removeAttribute("aria-current");
+      }
+      this.active = index;
+      const next = this.buttons[index];
+      if (next) {
+        next.dataset.active = "true";
+        next.setAttribute("aria-current", "step");
+      }
+    }
+    setPreviewMode(assistant) {
+      this.assistant = assistant;
+      if (this.hovered >= 0) this.showPreview();
+    }
+    clearHover() {
+      window.clearTimeout(this.timer);
+      this.timer = 0;
+      for (const button of this.buttons.slice(Math.max(0, this.hovered - 3), this.hovered + 4)) delete button.dataset.distance;
+      this.hovered = -1;
+      this.preview.hidden = true;
     }
     dispose() {
-      this.enabled = false;
+      this.clearHover();
+      this.themeDispose?.();
+      this.host.remove();
+    }
+    previewIndex(index) {
+      this.hover(index);
+    }
+    hover(index) {
+      if (index === this.hovered || !this.turns[index]) return;
+      this.clearHover();
+      this.hovered = index;
+      for (let n = Math.max(0, index - 3); n <= Math.min(this.buttons.length - 1, index + 3); n++) {
+        this.buttons[n].dataset.distance = String(Math.abs(n - index));
+      }
+      this.preview.dataset.expanded = "false";
+      this.showPreview();
+      this.timer = window.setTimeout(() => {
+        this.preview.dataset.expanded = "true";
+        this.showPreview();
+      }, 1e3);
+    }
+    showPreview() {
+      const turn = this.turns[this.hovered];
+      const button = this.buttons[this.hovered];
+      if (!turn || !button) return;
+      renderPreviewContent(this.preview, turn, this.assistant);
+      this.preview.hidden = false;
+      const rect = button.getBoundingClientRect();
+      const width = this.preview.getBoundingClientRect().width || Math.min(340, innerWidth - 24);
+      this.preview.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.left - width - 12))}px`;
+      this.preview.style.maxHeight = `${innerHeight - 16}px`;
+      const height = this.preview.getBoundingClientRect().height;
+      this.preview.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, rect.top + rect.height / 2 - height / 2))}px`;
+    }
+  };
+
+  // src/navigation/officialVisibility.ts
+  var OFFICIAL_NAV_STYLE_ID = "chatgpt-yada-official-nav-visibility-style";
+  var ROOT_AT_END = `main [class$="_convSearchResultHighlightRoot"]`;
+  var ROOT_BEFORE_SPACE = `main [class*="_convSearchResultHighlightRoot "]`;
+  var FIXED_CHILD = '> [class~="fixed"][class~="inset-e-4"][class~="top-1/2"][class~="z-20"][class~="-translate-y-1/2"]:not([data-yada-root])';
+  function officialNavigationHideGate(options) {
+    const host = document.getElementById(RAIL_HOST_ID);
+    return {
+      yadaReady: Boolean(
+        options.conversationPage && options.snapshot && options.snapshot.activeTurns.length > 0 && host && !host.hidden
+      ),
+      officialReady: listOfficialNavigationRoots().length === 1
+    };
+  }
+  var OfficialNavigationVisibilityController = class {
+    yadaReady = false;
+    observer = null;
+    raf = 0;
+    update(gate) {
+      this.yadaReady = gate.yadaReady;
+      this.apply();
+      if (this.yadaReady) this.ensureWatch();
+      else this.stopWatch();
+    }
+    dispose() {
+      this.yadaReady = false;
+      this.stopWatch();
       this.removeStyle();
     }
+    apply() {
+      this.setHidden(this.yadaReady && listOfficialNavigationRoots().length === 1);
+    }
+    setHidden(hidden) {
+      if (hidden) this.ensureStyle();
+      else this.removeStyle();
+    }
+    ensureWatch() {
+      if (this.observer) return;
+      this.observer = new MutationObserver(() => this.scheduleApply());
+      this.observer.observe(document.documentElement, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["class"]
+      });
+    }
+    stopWatch() {
+      this.observer?.disconnect();
+      this.observer = null;
+      if (this.raf) cancelAnimationFrame(this.raf);
+      this.raf = 0;
+    }
+    scheduleApply() {
+      if (this.raf) return;
+      this.raf = requestAnimationFrame(() => {
+        this.raf = 0;
+        this.apply();
+      });
+    }
     ensureStyle() {
-      if (!this.enabled || document.getElementById(OFFICIAL_NAV_STYLE_ID)) return;
+      if (document.getElementById(OFFICIAL_NAV_STYLE_ID)) return;
       const style = document.createElement("style");
       style.id = OFFICIAL_NAV_STYLE_ID;
       style.textContent = `
@@ -2130,265 +2610,6 @@ ${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
     host.style.top = `${top + Math.max(0, (available - height) / 2)}px`;
     host.style.height = `${height}px`;
   }
-
-  // src/ui/theme.ts
-  function detectYadaTheme() {
-    const html = document.documentElement;
-    const themeAttr = safeGetAttribute(html, "data-theme") ?? safeGetAttribute(document.body, "data-theme");
-    if (themeAttr?.toLowerCase().includes("dark")) return "dark";
-    if (themeAttr?.toLowerCase().includes("light")) return "light";
-    if (html.classList.contains("dark")) return "dark";
-    if (html.classList.contains("light")) return "light";
-    const colorScheme = getComputedStyle(html).colorScheme;
-    if (colorScheme.includes("dark")) return "dark";
-    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-  }
-  function safeGetAttribute(node, name) {
-    return node instanceof Element ? node.getAttribute(name) : null;
-  }
-  function observeYadaTheme(onChange) {
-    const applyTheme = () => onChange(detectYadaTheme());
-    const observer = new MutationObserver(applyTheme);
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"]
-    });
-    observer.observe(document.body, {
-      attributes: true,
-      attributeFilter: ["class", "data-theme"]
-    });
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    media.addEventListener("change", applyTheme);
-    applyTheme();
-    return () => {
-      observer.disconnect();
-      media.removeEventListener("change", applyTheme);
-    };
-  }
-
-  // src/rail/preview.ts
-  function formatPreviewTime(seconds) {
-    if (seconds === void 0 || !Number.isFinite(seconds)) return "";
-    const date = new Date(seconds * 1e3);
-    if (!Number.isFinite(date.getTime())) return "";
-    const pad = (n) => String(n).padStart(2, "0");
-    return `${pad(date.getMonth() + 1)}月${pad(date.getDate())}日 ${["周日", "周一", "周二", "周三", "周四", "周五", "周六"][date.getDay()]} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
-  }
-  function renderPreviewContent(preview, turn, assistant) {
-    const title = document.createElement("strong");
-    title.textContent = `第 ${turn.index + 1} 轮`;
-    const heading = document.createElement("div");
-    heading.className = "preview-header";
-    heading.append(title);
-    const timestamp = formatPreviewTime(turn.userCreatedAt);
-    if (timestamp) {
-      const time = document.createElement("time");
-      time.textContent = timestamp;
-      heading.append(time);
-    }
-    preview.replaceChildren(heading, block("Harson", turn.userPreview));
-    if (assistant) preview.append(block("ChatGPT", turn.assistantPreview || "该轮暂无 ChatGPT 回复"));
-  }
-  function block(role, text) {
-    const section = document.createElement("section");
-    section.dataset.previewRole = role;
-    const label = document.createElement("strong");
-    label.textContent = role;
-    const summary = document.createElement("p");
-    summary.textContent = text;
-    section.append(label, summary);
-    return section;
-  }
-
-  // src/rail/view.ts
-  var RAIL_HOST_ID = "chatgpt-yada-rail-host";
-  var RailView = class {
-    host = document.createElement("div");
-    marks = document.createElement("div");
-    preview = document.createElement("div");
-    turns = [];
-    buttons = [];
-    active = -1;
-    hovered = -1;
-    assistant = false;
-    timer = 0;
-    pending = -1;
-    failed = -1;
-    themeDispose = null;
-    constructor(onJump) {
-      document.querySelectorAll(`[id="${RAIL_HOST_ID}"]`).forEach((node) => node.remove());
-      this.host.id = RAIL_HOST_ID;
-      this.host.dataset.yadaRoot = "true";
-      this.host.setAttribute("data-yada-theme", detectYadaTheme());
-      const shadow = this.host.attachShadow({ mode: "open" });
-      const style = document.createElement("style");
-      style.textContent = `
-      :host { position: fixed; width: 58px; z-index: 2147483400; font: 12px/1.5 system-ui; --text:#303030; --bg:#fff; --bar:#aaa8; color:var(--text); background: transparent; }
-      :host([hidden]) { display:none; }
-      :host([data-yada-theme="dark"]) { --text:#eee; --bg:#272727; --bar:#aaa7; color-scheme:dark; }
-      .marks { height:100%; display:flex; flex-direction:column; background: transparent; }
-      .mark { position:relative; flex:1 1 0; min-height:0; padding:0; border:0; width:58px; background:transparent; display:flex; align-items:center; justify-content:flex-end; cursor:pointer; outline-offset:2px; }
-      .mark-bar { display:block; height:1px; width:16px; border-radius:2px; background:var(--bar); transition:width .12s, background .12s; }
-      .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
-      .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
-      .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
-      .mark[data-pending="true"] .mark-bar { width:22px; background:#10a37f88; }
-      .mark[data-pending="true"] .number { opacity:1; }
-      .mark[data-failed="true"] .mark-bar { background:#c0392b; }
-      .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
-      .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
-      .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
-      .mark[data-distance="0"] .mark-bar { width:33px; background:#10a37f; height:2px; }
-      .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
-      .preview[hidden] { display:none; }
-      .preview strong { display:block; margin-bottom:4px; font-size:11px; }
-      .preview section strong { color:#10a37f; font-weight:700; }
-      .preview-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; }
-      .preview-header strong { margin:0; white-space:nowrap; }
-      .preview time { white-space:nowrap; opacity:.7; }
-      .preview section + section { margin-top:8px; }
-      .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-      .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
-      @media (prefers-reduced-motion:reduce) { .mark-bar { transition:none; } }
-    `;
-      this.marks.className = "marks";
-      this.marks.dataset.marks = "true";
-      this.marks.setAttribute("role", "navigation");
-      this.marks.setAttribute("aria-label", "对话轮次");
-      this.preview.className = "preview";
-      this.preview.hidden = true;
-      this.preview.style.pointerEvents = "none";
-      shadow.append(style, this.marks, this.preview);
-      document.documentElement.append(this.host);
-      this.host.hidden = true;
-      this.marks.addEventListener("pointermove", (event) => {
-        const rect = this.marks.getBoundingClientRect();
-        if (!rect.height || !this.turns.length) return;
-        this.hover(Math.max(0, Math.min(this.turns.length - 1, Math.floor((event.clientY - rect.top) / rect.height * this.turns.length))));
-      });
-      this.marks.addEventListener("pointerleave", () => this.clearHover());
-      this.marks.addEventListener("click", (event) => {
-        const button = event.target.closest("button");
-        const turn = button && this.turns[Number(button.dataset.index)];
-        if (turn) onJump(turn.userMessageId ?? turn.id);
-      });
-      this.marks.addEventListener("focusin", (event) => {
-        const button = event.target.closest("button");
-        if (button) this.hover(Number(button.dataset.index));
-      });
-      this.marks.addEventListener("focusout", () => this.clearHover());
-      this.themeDispose = observeYadaTheme((theme) => this.host.setAttribute("data-yada-theme", theme));
-    }
-    setTurns(turns) {
-      const changed = turns.length !== this.turns.length || turns.some((turn, index) => (turn.userMessageId ?? turn.id) !== (this.turns[index]?.userMessageId ?? this.turns[index]?.id));
-      this.turns = turns;
-      if (!changed) {
-        if (this.hovered >= 0) this.showPreview();
-        this.host.hidden = !turns.length;
-        return;
-      }
-      this.clearHover();
-      this.active = -1;
-      this.pending = -1;
-      this.failed = -1;
-      this.buttons = turns.map((turn) => {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "mark";
-        button.dataset.index = String(turn.index);
-        button.setAttribute("aria-label", `跳到第 ${turn.index + 1} 轮`);
-        const number = document.createElement("span");
-        number.className = "number";
-        number.textContent = String(turn.index + 1);
-        const bar = document.createElement("span");
-        bar.className = "mark-bar";
-        button.append(number, bar);
-        return button;
-      });
-      this.marks.replaceChildren(...this.buttons);
-      this.host.hidden = !turns.length;
-    }
-    setPending(index) {
-      const previous = this.buttons[this.pending];
-      if (previous) {
-        delete previous.dataset.pending;
-        previous.removeAttribute("aria-busy");
-      }
-      this.pending = index ?? -1;
-      const next = index == null ? void 0 : this.buttons[index];
-      if (next) {
-        next.dataset.pending = "true";
-        next.setAttribute("aria-busy", "true");
-      }
-    }
-    setFailed(index) {
-      const previous = this.buttons[this.failed];
-      if (previous) delete previous.dataset.failed;
-      this.failed = index ?? -1;
-      const next = index == null ? void 0 : this.buttons[index];
-      if (next) next.dataset.failed = "true";
-    }
-    setActive(index) {
-      if (this.active === index) return;
-      const old = this.buttons[this.active];
-      if (old) {
-        delete old.dataset.active;
-        old.removeAttribute("aria-current");
-      }
-      this.active = index;
-      const next = this.buttons[index];
-      if (next) {
-        next.dataset.active = "true";
-        next.setAttribute("aria-current", "step");
-      }
-    }
-    setPreviewMode(assistant) {
-      this.assistant = assistant;
-      if (this.hovered >= 0) this.showPreview();
-    }
-    clearHover() {
-      window.clearTimeout(this.timer);
-      this.timer = 0;
-      for (const button of this.buttons.slice(Math.max(0, this.hovered - 3), this.hovered + 4)) delete button.dataset.distance;
-      this.hovered = -1;
-      this.preview.hidden = true;
-    }
-    dispose() {
-      this.clearHover();
-      this.themeDispose?.();
-      this.host.remove();
-    }
-    previewIndex(index) {
-      this.hover(index);
-    }
-    hover(index) {
-      if (index === this.hovered || !this.turns[index]) return;
-      this.clearHover();
-      this.hovered = index;
-      for (let n = Math.max(0, index - 3); n <= Math.min(this.buttons.length - 1, index + 3); n++) {
-        this.buttons[n].dataset.distance = String(Math.abs(n - index));
-      }
-      this.preview.dataset.expanded = "false";
-      this.showPreview();
-      this.timer = window.setTimeout(() => {
-        this.preview.dataset.expanded = "true";
-        this.showPreview();
-      }, 1e3);
-    }
-    showPreview() {
-      const turn = this.turns[this.hovered];
-      const button = this.buttons[this.hovered];
-      if (!turn || !button) return;
-      renderPreviewContent(this.preview, turn, this.assistant);
-      this.preview.hidden = false;
-      const rect = button.getBoundingClientRect();
-      const width = this.preview.getBoundingClientRect().width || Math.min(340, innerWidth - 24);
-      this.preview.style.left = `${Math.max(8, Math.min(innerWidth - width - 8, rect.left - width - 12))}px`;
-      this.preview.style.maxHeight = `${innerHeight - 16}px`;
-      const height = this.preview.getBoundingClientRect().height;
-      this.preview.style.top = `${Math.max(8, Math.min(innerHeight - height - 8, rect.top + rect.height / 2 - height / 2))}px`;
-    }
-  };
 
   // src/rail/controller.ts
   var YadaRailController = class {
@@ -3174,16 +3395,17 @@ ${timestamp ? `${timestamp}
       this.toolbar.mount();
       this.prep = new NativePreparationController();
       this.officialNav = new OfficialNavigationVisibilityController();
-      this.officialNav.setEnabled(true);
       this.prepDispose = this.sync.subscribe((snapshot) => {
-        if (!snapshot) return;
-        this.prep?.evaluate(snapshot.conversationId, snapshot.activeTurns);
+        this.prep?.evaluate(snapshot?.conversationId ?? null, snapshot?.activeTurns ?? []);
+        this.updateOfficialVisibility(snapshot);
       });
       this.syncPageState();
       this.routeDispose = observeRouteChange(() => {
         this.toolbar?.closePanels();
         this.rail?.clear();
         this.navigator?.cancel();
+        this.prep?.cancelWait();
+        this.updateOfficialVisibility(null);
         this.syncPageState();
       });
       const onMessage = (message, _sender, sendResponse) => {
@@ -3214,6 +3436,7 @@ ${timestamp ? `${timestamp}
       this.prepDispose = null;
       this.officialNav?.dispose();
       this.officialNav = null;
+      this.prep?.dispose();
       this.prep = null;
       this.quota?.dispose();
       this.quota = null;
@@ -3232,6 +3455,13 @@ ${timestamp ? `${timestamp}
       const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
       if (copy) copy.hidden = !isChatGptConversationPage();
       this.sync?.setActiveConversation(getConversationIdFromUrl());
+      if (!isChatGptConversationPage()) this.updateOfficialVisibility(null);
+    }
+    updateOfficialVisibility(snapshot) {
+      this.officialNav?.update(officialNavigationHideGate({
+        conversationPage: isChatGptConversationPage(),
+        snapshot
+      }));
     }
   };
   if (isChatGptPage()) {

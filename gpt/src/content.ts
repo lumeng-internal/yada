@@ -1,7 +1,11 @@
 import { ConversationSync } from "./core/conversationSync";
+import type { ConversationSnapshot } from "./core/types";
 import { NativePreparationController } from "./navigation/nativePreparation";
 import { NavigatorController } from "./navigation/navigatorController";
-import { OfficialNavigationVisibilityController } from "./navigation/officialVisibility";
+import {
+  officialNavigationHideGate,
+  OfficialNavigationVisibilityController
+} from "./navigation/officialVisibility";
 import { isChatGptConversationPage, isChatGptPage, getConversationIdFromUrl } from "./platform/chatgptAdapter";
 import { QuotaTracker } from "./quota/tracker";
 import { YadaRailController } from "./rail/controller";
@@ -35,16 +39,17 @@ class ChatGptYadaApp {
     this.toolbar.mount();
     this.prep = new NativePreparationController();
     this.officialNav = new OfficialNavigationVisibilityController();
-    this.officialNav.setEnabled(true);
     this.prepDispose = this.sync.subscribe((snapshot) => {
-      if (!snapshot) return;
-      this.prep?.evaluate(snapshot.conversationId, snapshot.activeTurns);
+      this.prep?.evaluate(snapshot?.conversationId ?? null, snapshot?.activeTurns ?? []);
+      this.updateOfficialVisibility(snapshot);
     });
     this.syncPageState();
     this.routeDispose = observeRouteChange(() => {
       this.toolbar?.closePanels();
       this.rail?.clear();
       this.navigator?.cancel();
+      this.prep?.cancelWait();
+      this.updateOfficialVisibility(null);
       this.syncPageState();
     });
     const onMessage = (
@@ -82,6 +87,7 @@ class ChatGptYadaApp {
     this.prepDispose = null;
     this.officialNav?.dispose();
     this.officialNav = null;
+    this.prep?.dispose();
     this.prep = null;
     this.quota?.dispose();
     this.quota = null;
@@ -101,6 +107,14 @@ class ChatGptYadaApp {
     const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector<HTMLButtonElement>("[data-copy-all]");
     if (copy) copy.hidden = !isChatGptConversationPage();
     this.sync?.setActiveConversation(getConversationIdFromUrl());
+    if (!isChatGptConversationPage()) this.updateOfficialVisibility(null);
+  }
+
+  private updateOfficialVisibility(snapshot: ConversationSnapshot | null): void {
+    this.officialNav?.update(officialNavigationHideGate({
+      conversationPage: isChatGptConversationPage(),
+      snapshot
+    }));
   }
 }
 

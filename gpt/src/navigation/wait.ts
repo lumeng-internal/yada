@@ -27,3 +27,28 @@ export function sleep(ms: number, signal?: AbortSignal): Promise<void> {
 export async function waitWhileAborted(signal: AbortSignal): Promise<void> {
   if (signal.aborted) throw abortError();
 }
+
+export function nextFrame(signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(abortError());
+      return;
+    }
+    const canRaf = typeof requestAnimationFrame === "function";
+    const id = canRaf
+      ? requestAnimationFrame(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      })
+      : window.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, 16);
+    const onAbort = (): void => {
+      if (canRaf) cancelAnimationFrame(id);
+      else window.clearTimeout(id);
+      reject(abortError());
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
+}

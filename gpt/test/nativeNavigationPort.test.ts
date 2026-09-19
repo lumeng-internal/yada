@@ -5,10 +5,12 @@ import { normalizeConversation } from "../src/conversation/normalizeConversation
 import { linearConversation } from "./helpers";
 import {
   installScrollTopCounter,
+  inViewportRect,
   mountMain,
   mountOfficialButtons,
   mountStableSlots,
   mountUserMessages,
+  outOfViewportRect,
   turns
 } from "./navFixtures";
 
@@ -197,6 +199,61 @@ describe("NativeNavigationPort", () => {
       result: "direct"
     });
     expect(JSON.stringify(globalThis.__YADA_NAV_DIAGNOSTICS__)).not.toMatch(/identical user question|Assistant /);
+    port.dispose();
+  });
+
+  it("treats unsupported native prep as reloadAttempted", async () => {
+    const scroller = mountMain();
+    mountUserMessages(["u0"], scroller);
+    sessionStorage.setItem("chatgpt-yada:native-prepared:conversation-1", "unsupported");
+    const port = new NativeNavigationPort();
+    await port.navigateTo("u0", turns(1), "conversation-1");
+    expect(port.lastDiagnostics?.reloadAttempted).toBe(true);
+    sessionStorage.removeItem("chatgpt-yada:native-prepared:conversation-1");
+    port.dispose();
+  });
+
+  it("does not report Direct success when the node stays out of the viewport", async () => {
+    vi.useFakeTimers();
+    const scroller = mountMain();
+    mountUserMessages(["u0"], scroller);
+    outOfViewportRect(document.querySelector<HTMLElement>('[data-message-id="u0"]')!);
+    const port = new NativeNavigationPort();
+    const pending = port.navigateTo("u0", turns(1), "conversation-1");
+    await vi.advanceTimersByTimeAsync(800);
+    await expect(pending).resolves.toEqual({ ok: false, status: "unsupported" });
+    expect(port.lastDiagnostics?.path).not.toBe("direct");
+    port.dispose();
+  });
+
+  it("falls through to official buttons when Direct cannot enter the viewport", async () => {
+    vi.useFakeTimers();
+    const scroller = mountMain();
+    mountUserMessages(["u0"], scroller);
+    const node = document.querySelector<HTMLElement>('[data-message-id="u0"]')!;
+    outOfViewportRect(node);
+    mountOfficialButtons(1, () => inViewportRect(node));
+    const port = new NativeNavigationPort();
+    const pending = port.navigateTo("u0", turns(1), "conversation-1");
+    await vi.advanceTimersByTimeAsync(800);
+    await expect(pending).resolves.toEqual({ ok: true, path: "official-button" });
+    port.dispose();
+  });
+
+  it("falls through to a stable slot when Direct cannot enter the viewport", async () => {
+    vi.useFakeTimers();
+    const scroller = mountMain();
+    mountUserMessages(["u0"], scroller);
+    const node = document.querySelector<HTMLElement>('[data-message-id="u0"]')!;
+    outOfViewportRect(node);
+    const slots = mountStableSlots(1, scroller);
+    slots[0]!.scrollIntoView = (() => {
+      inViewportRect(node);
+    }) as typeof slots[0]["scrollIntoView"];
+    const port = new NativeNavigationPort();
+    const pending = port.navigateTo("u0", turns(1), "conversation-1");
+    await vi.advanceTimersByTimeAsync(800);
+    await expect(pending).resolves.toEqual({ ok: true, path: "stable-slot" });
     port.dispose();
   });
 });

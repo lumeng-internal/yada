@@ -5,23 +5,27 @@ import { resolveNavigationTurn, turnUserMessageId } from "./identity";
 import {
   attachUserNavigationCancel,
   findMountedUserMessage,
+  isInViewport,
   isOfficialNavigationComplete,
   isStableSlotsComplete,
+  pageConversationMatches,
   readMessageId,
   readNativeCapability,
   scrollElementIntoView
 } from "./nativeCapability";
 import { jumpOfficialButton } from "./nativeButtonDriver";
-import { readNativePrepState } from "./nativePreparation";
+import { nativePrepReloadAttempted } from "./nativePreparation";
 import { jumpStableSlot } from "./stableSlotDriver";
 import type { NavigationDiagnostics, NavigationResult, NavigateToOptions } from "./types";
-import { isAbortError, sleep } from "./wait";
+import { isAbortError, nextFrame } from "./wait";
 
 type ActiveNavigation = {
   key: string;
   controller: AbortController;
   promise: Promise<NavigationResult>;
 };
+
+type DirectJumpResult = "ok" | "miss" | "cancelled" | "stale-target";
 
 function targetKey(conversationId: string, turn: YadaTurn): string {
   return `${conversationId}|${turnUserMessageId(turn)}|${turn.index}`;
@@ -33,6 +37,40 @@ function linkAbortSignal(source: AbortSignal | undefined, target: AbortControlle
   if (source.aborted) target.abort();
   source.addEventListener("abort", abort, { once: true });
   return () => source.removeEventListener("abort", abort);
+}
+
+async function jumpDirect(
+  userMessageId: string,
+  conversationId: string,
+  signal: AbortSignal,
+  timeoutAt: number
+): Promise<DirectJumpResult> {
+  if (signal.aborted) return "cancelled";
+  if (!pageConversationMatches(conversationId)) return "stale-target";
+  const node = findMountedUserMessage(userMessageId);
+  if (!node || !node.isConnected || readMessageId(node) !== userMessageId) return "miss";
+  scrollElementIntoView(node);
+
+  const deadline = Math.min(timeoutAt, Date.now() + NATIVE_NAV_CONFIG.directViewportMs);
+  try {
+    while (true) {
+      if (signal.aborted) return "cancelled";
+      if (!pageConversationMatches(conversationId)) return "stale-target";
+      const current = findMountedUserMessage(userMessageId);
+      if (
+        current?.isConnected
+        && readMessageId(current) === userMessageId
+        && isInViewport(current)
+      ) {
+        return "ok";
+      }
+      if (Date.now() >= deadline) return "miss";
+      await nextFrame(signal);
+    }
+  } catch (error) {
+    if (signal.aborted || isAbortError(error)) return "cancelled";
+    throw error;
+  }
 }
 
 export class NativeNavigationPort {
@@ -101,18 +139,22 @@ export class NativeNavigationPort {
     try {
       if (controller.signal.aborted && !timedOut) return { ok: false, status: "cancelled" };
 
-      const direct = findMountedUserMessage(userMessageId);
-      if (direct && readMessageId(direct) === userMessageId) {
-        path = "direct";
-        scrollElementIntoView(direct);
-        await sleep(NATIVE_NAV_CONFIG.directSettleMs, controller.signal);
-        const still = findMountedUserMessage(userMessageId);
-        if (still && readMessageId(still) === userMessageId) {
+      const mounted = findMountedUserMessage(userMessageId);
+      if (mounted && readMessageId(mounted) === userMessageId) {
+        const jumped = await jumpDirect(userMessageId, conversationId, controller.signal, timeoutAt);
+        if (jumped === "ok") {
+          path = "direct";
           result = { ok: true, path: "direct" };
           return result;
         }
-        result = { ok: false, status: "failed" };
-        return result;
+        if (jumped === "cancelled") {
+          result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
+          return result;
+        }
+        if (jumped === "stale-target") {
+          result = { ok: false, status: "stale-target" };
+          return result;
+        }
       }
 
       if (isOfficialNavigationComplete(turns.length, conversationId)) {
@@ -163,7 +205,7 @@ export class NativeNavigationPort {
         officialButtonCount: capability.officialButtonCount,
         expectedTurnCount: turns.length,
         slotCount: capability.slotCount,
-        reloadAttempted: readNativePrepState(conversationId) === "attempted" || readNativePrepState(conversationId) === "ready",
+        reloadAttempted: nativePrepReloadAttempted(conversationId),
         yadaScrollWrites: 0,
         alignmentAttempts,
         result: result.ok ? result.path : result.status,
