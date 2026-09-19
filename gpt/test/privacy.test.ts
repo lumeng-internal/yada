@@ -27,6 +27,7 @@ describe("privacy boundary", () => {
     const root = join(process.cwd(), "src");
     const text = walk(root).filter((path) => path.endsWith(".ts") || path.endsWith(".js") || path.endsWith(".html")).map((path) => readFileSync(path, "utf8")).join("\n");
     expect(text).not.toMatch(/native-bootstrap-page|NativeBootstrapController|HistoryTracker|导航准备中|导航未完整/);
+    expect(text).not.toMatch(/定位中|jumpVirtual|searchVirtualPrompt|luna-navigation/);
     expect(text).not.toMatch(/google-analytics|sentry\.io|api[_-]?key/i);
     expect(text).not.toMatch(/\bECS\b|\bRDS\b|\bOSS\b/);
   });
