@@ -7,6 +7,10 @@
     inner: "#1ad6d0",
     track: "rgba(255,255,255,0.18)"
   };
+  var DARK_ICON_PALETTE = {
+    track: COLORS.track,
+    center: "#f5f5f7"
+  };
   function remainingToRatio(remaining, limit) {
     if (limit <= 0) return 0;
     return Math.max(0, Math.min(1, remaining / limit));
@@ -27,7 +31,7 @@
       { radius: innerRadius, width: innerWidth }
     ];
   }
-  function renderQuotaIcon(size, rings) {
+  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
     const canvas = new OffscreenCanvas(size, size);
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("OffscreenCanvas is unavailable");
@@ -38,11 +42,11 @@
     const values = [rings.outer, rings.middle, rings.inner];
     const colors = [COLORS.outer, COLORS.middle, COLORS.inner];
     geometry.forEach((ring, index) => {
-      drawTrack(ctx, cx, cy, ring.radius, ring.width);
+      drawTrack(ctx, cx, cy, ring.radius, ring.width, palette.track);
       drawArc(ctx, cx, cy, ring.radius, ring.width, colors[index], values[index]);
     });
     if (size >= 32 && rings.center) {
-      ctx.fillStyle = "#f5f5f7";
+      ctx.fillStyle = palette.center;
       ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -50,9 +54,9 @@
     }
     return ctx.getImageData(0, 0, size, size);
   }
-  function drawTrack(ctx, cx, cy, radius, width) {
+  function drawTrack(ctx, cx, cy, radius, width, color) {
     ctx.beginPath();
-    ctx.strokeStyle = COLORS.track;
+    ctx.strokeStyle = color;
     ctx.lineWidth = width;
     ctx.lineCap = "round";
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);
@@ -80,6 +84,27 @@
       inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
       center: incomplete ? "?" : String(snapshot.tightestRemainingPercent ?? 0)
     };
+  }
+
+  // src/quota/presentation.ts
+  function metricRemainingLabel(metric) {
+    if (!metric) return "当前套餐无此桶";
+    if (metric.estimatedRemaining == null) return `已记录 ${metric.used} / ${metric.limit}`;
+    return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  }
+  function metricPercentLabel(metric) {
+    if (!metric || metric.remainingRatio == null) return "?";
+    return `${Math.round(metric.remainingRatio * 100)}%`;
+  }
+  function historySyncLabel(snapshot) {
+    return snapshot.historyComplete ? "历史同步完整" : "历史同步不完整";
+  }
+  function planStatusNote(snapshot) {
+    if (!snapshot.plan) return "未确认 ChatGPT 套餐，不猜测额度桶。";
+    return null;
+  }
+  function workspaceStatusNote(snapshot) {
+    return snapshot.personalProEligible ? null : "当前工作区不计入个人 Pro Chat 额度";
   }
 
   // src/shared/timeout.ts
@@ -176,8 +201,9 @@
     }
     rings.append(canvas);
     root.append(rings);
-    if (!snapshot.plan) {
-      root.append(el("p", "warn", "未确认 ChatGPT 套餐，不猜测额度桶。"));
+    const planNote = planStatusNote(snapshot);
+    if (planNote) {
+      root.append(el("p", "warn", planNote));
     } else if (snapshot.plan === "prolite") {
       root.append(metricBlock("两个 Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
     } else {
@@ -188,15 +214,14 @@
     root.append(el("p", "note", "预计剩余"));
     root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
     root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
-    root.append(el("p", "note", snapshot.historyComplete ? "历史同步完整" : "历史同步不完整"));
+    root.append(el("p", "note", historySyncLabel(snapshot)));
     root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
     root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
     if (snapshot.fallbackModel) {
       root.append(el("p", "note", `当前 fallback 模型：${snapshot.fallbackModel}`));
     }
-    if (!snapshot.personalProEligible) {
-      root.append(el("p", "warn", "当前工作区不计入个人 Pro Chat 额度"));
-    }
+    const workspace = workspaceStatusNote(snapshot);
+    if (workspace) root.append(el("p", "warn", workspace));
     const button = document.createElement("button");
     button.type = "button";
     button.textContent = "立即刷新";
@@ -209,14 +234,12 @@
     const wrap = el("section", "metric");
     wrap.append(el("div", "metric-title", title));
     if (!metric) {
-      wrap.append(el("p", "note", "当前套餐无此桶"));
+      wrap.append(el("p", "note", metricRemainingLabel(null)));
       return wrap;
     }
     const row = el("div", "metric-row");
-    const remaining = metric.estimatedRemaining == null ? `已记录 ${metric.used} / ${metric.limit}` : `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
-    row.append(document.createTextNode(remaining));
-    const percent = metric.remainingRatio == null ? "?" : `${Math.round(metric.remainingRatio * 100)}%`;
-    row.append(el("span", "", percent));
+    row.append(document.createTextNode(metricRemainingLabel(metric)));
+    row.append(el("span", "", metricPercentLabel(metric)));
     wrap.append(row);
     const bar = el("div", "bar");
     const fill = document.createElement("span");

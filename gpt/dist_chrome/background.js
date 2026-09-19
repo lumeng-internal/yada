@@ -263,6 +263,10 @@
     inner: "#1ad6d0",
     track: "rgba(255,255,255,0.18)"
   };
+  var DARK_ICON_PALETTE = {
+    track: COLORS.track,
+    center: "#f5f5f7"
+  };
   function remainingToRatio(remaining, limit) {
     if (limit <= 0) return 0;
     return Math.max(0, Math.min(1, remaining / limit));
@@ -283,7 +287,7 @@
       { radius: innerRadius, width: innerWidth }
     ];
   }
-  function renderQuotaIcon(size, rings) {
+  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
     const canvas = new OffscreenCanvas(size, size);
     const ctx = canvas.getContext("2d");
     if (!ctx) throw new Error("OffscreenCanvas is unavailable");
@@ -294,11 +298,11 @@
     const values = [rings.outer, rings.middle, rings.inner];
     const colors = [COLORS.outer, COLORS.middle, COLORS.inner];
     geometry.forEach((ring, index) => {
-      drawTrack(ctx, cx, cy, ring.radius, ring.width);
+      drawTrack(ctx, cx, cy, ring.radius, ring.width, palette.track);
       drawArc(ctx, cx, cy, ring.radius, ring.width, colors[index], values[index]);
     });
     if (size >= 32 && rings.center) {
-      ctx.fillStyle = "#f5f5f7";
+      ctx.fillStyle = palette.center;
       ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
@@ -314,9 +318,9 @@
       128: renderQuotaIcon(128, rings)
     };
   }
-  function drawTrack(ctx, cx, cy, radius, width) {
+  function drawTrack(ctx, cx, cy, radius, width, color) {
     ctx.beginPath();
-    ctx.strokeStyle = COLORS.track;
+    ctx.strokeStyle = color;
     ctx.lineWidth = width;
     ctx.lineCap = "round";
     ctx.arc(cx, cy, radius, 0, Math.PI * 2);

@@ -5,6 +5,7 @@ import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import { YADA_ACCENT, YADA_ACCENT_SOFT, YADA_TOOLBAR_HOST_ID } from "../styles";
+import { QuotaIndicator } from "./quotaIndicator";
 import { detectYadaTheme, observeYadaTheme } from "./theme";
 
 type CopyState = "idle" | "pending" | "success" | "error" | "empty";
@@ -19,13 +20,17 @@ export class YadaToolbar {
   private placementTimer = 0;
 
   private prompts: PromptPanel | null = null;
+  private quota: QuotaIndicator | null = null;
   private previewAssistant = false;
   constructor(
     private readonly onPreviewMode: (assistant: boolean) => void = () => {},
     private readonly sync: ConversationSync | null = null
   ) {}
 
-  closePanels(): void { this.prompts?.close(); }
+  closePanels(): void {
+    this.prompts?.close();
+    this.quota?.close();
+  }
 
   mount(): void {
     if (this.host?.isConnected) return;
@@ -45,6 +50,7 @@ export class YadaToolbar {
       void this.copyAll();
     });
 
+    this.quota = new QuotaIndicator(this.query<HTMLButtonElement>("[data-quota]")!);
     this.prompts = new PromptPanel( this.query<HTMLButtonElement>("[data-prompts]")!);
     const mode = this.query<HTMLButtonElement>("[data-preview-mode]")!;
     const applyMode = (): void => {
@@ -96,6 +102,8 @@ export class YadaToolbar {
   }
 
   dispose(): void {
+    this.quota?.dispose();
+    this.quota = null;
     this.prompts?.dispose();
     window.clearTimeout(this.copyResetTimer);
     window.clearTimeout(this.placementTimer);
@@ -193,10 +201,30 @@ export class YadaToolbar {
           cursor: default;
           opacity: 0.66;
         }
-        [data-preview-mode] { padding: 0; width: 20px; height: 20px; font-size: 16px; color: var(--yada-muted); border: 0; background: transparent; }
-        [data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        button[data-preview-mode],
+        button[data-quota] {
+          padding: 0;
+          width: 20px;
+          height: 20px;
+          border: 0;
+          background: transparent;
+          border-radius: 50%;
+          flex-shrink: 0;
+          line-height: 0;
+        }
+        button[data-preview-mode] {
+          font-size: 16px;
+          color: var(--yada-muted);
+        }
+        button[data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        button[data-quota] canvas {
+          display: block;
+          width: 20px;
+          height: 20px;
+        }
       </style>
       <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
+      <button type="button" data-quota aria-haspopup="dialog" aria-expanded="false" aria-label="Pro 额度：读取中" title="Pro 额度：读取中"><canvas width="32" height="32" aria-hidden="true"></canvas></button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
     `;

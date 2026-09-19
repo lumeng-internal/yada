@@ -15,6 +15,21 @@ const COLORS = {
   track: "rgba(255,255,255,0.18)"
 };
 
+export type QuotaIconPalette = {
+  track: string;
+  center: string;
+};
+
+export const DARK_ICON_PALETTE: QuotaIconPalette = {
+  track: COLORS.track,
+  center: "#f5f5f7"
+};
+
+export const LIGHT_ICON_PALETTE: QuotaIconPalette = {
+  track: "rgba(32, 33, 35, 0.18)",
+  center: "#202123"
+};
+
 export function remainingToRatio(remaining: number, limit: number): number {
   if (limit <= 0) return 0;
   return Math.max(0, Math.min(1, remaining / limit));
@@ -37,7 +52,11 @@ export function ringGeometry(size: number): Array<{ radius: number; width: numbe
   ];
 }
 
-export function renderQuotaIcon(size: IconSize, rings: RingValues): ImageData {
+export function renderQuotaIcon(
+  size: IconSize,
+  rings: RingValues,
+  palette: QuotaIconPalette = DARK_ICON_PALETTE
+): ImageData {
   const canvas = new OffscreenCanvas(size, size);
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("OffscreenCanvas is unavailable");
@@ -48,17 +67,39 @@ export function renderQuotaIcon(size: IconSize, rings: RingValues): ImageData {
   const values = [rings.outer, rings.middle, rings.inner];
   const colors = [COLORS.outer, COLORS.middle, COLORS.inner];
   geometry.forEach((ring, index) => {
-    drawTrack(ctx, cx, cy, ring.radius, ring.width);
+    drawTrack(ctx, cx, cy, ring.radius, ring.width, palette.track);
     drawArc(ctx, cx, cy, ring.radius, ring.width, colors[index], values[index]);
   });
   if (size >= 32 && rings.center) {
-    ctx.fillStyle = "#f5f5f7";
+    ctx.fillStyle = palette.center;
     ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.fillText(rings.center, cx, cy + size * 0.02);
   }
   return ctx.getImageData(0, 0, size, size);
+}
+
+export function paintQuotaCanvas(
+  canvas: HTMLCanvasElement,
+  rings: RingValues,
+  palette: QuotaIconPalette = DARK_ICON_PALETTE
+): void {
+  const image = renderQuotaIcon(32, rings, palette);
+  canvas.width = 32;
+  canvas.height = 32;
+  let ctx: CanvasRenderingContext2D | null = null;
+  try {
+    ctx = canvas.getContext("2d");
+  } catch {
+    return;
+  }
+  if (!ctx) return;
+  try {
+    ctx.putImageData(image, 0, 0);
+  } catch {
+    // jsdom and some test canvases cannot paint ImageData.
+  }
 }
 
 export function renderQuotaIcons(rings: RingValues): Record<IconSize, ImageData> {
@@ -75,10 +116,11 @@ function drawTrack(
   cx: number,
   cy: number,
   radius: number,
-  width: number
+  width: number,
+  color: string
 ): void {
   ctx.beginPath();
-  ctx.strokeStyle = COLORS.track;
+  ctx.strokeStyle = color;
   ctx.lineWidth = width;
   ctx.lineCap = "round";
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);

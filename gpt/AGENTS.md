@@ -15,7 +15,7 @@ Current version: **4.0.0**. This is still the pre-release architecture closeout.
 ```text
 业务事件 → ConversationSync → readConversation() → ConversationSnapshot
   ├─ activeTurns → Rail / Preview / Copy All
-  └─ quota source → Vibe Bar parser → Local Ledger → Action rings / Popup
+  └─ quota source → Vibe Bar parser → Local Ledger → Action rings / page toolbar rings / Popup
 
 Navigation:
   NativeNavigationPort

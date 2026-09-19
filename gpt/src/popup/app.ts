@@ -1,5 +1,12 @@
 import { remainingToRatio, renderQuotaIcon } from "../quota/iconRenderer";
 import { snapshotToRings } from "../quota/iconState";
+import {
+  historySyncLabel,
+  metricPercentLabel,
+  metricRemainingLabel,
+  planStatusNote,
+  workspaceStatusNote
+} from "../quota/presentation";
 import type { QuotaMetric, QuotaSnapshot } from "../quota/types";
 import { MESSAGE_TIMEOUT_MS, REFRESH_TIMEOUT_MS, sendRuntimeMessage } from "../shared/messages";
 import { withTimeout } from "../shared/timeout";
@@ -98,8 +105,9 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
   rings.append(canvas);
   root.append(rings);
 
-  if (!snapshot.plan) {
-    root.append(el("p", "warn", "未确认 ChatGPT 套餐，不猜测额度桶。"));
+  const planNote = planStatusNote(snapshot);
+  if (planNote) {
+    root.append(el("p", "warn", planNote));
   } else if (snapshot.plan === "prolite") {
     root.append(metricBlock("两个 Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
   } else {
@@ -111,15 +119,14 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
   root.append(el("p", "note", "预计剩余"));
   root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
   root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
-  root.append(el("p", "note", snapshot.historyComplete ? "历史同步完整" : "历史同步不完整"));
+  root.append(el("p", "note", historySyncLabel(snapshot)));
   root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
   root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
   if (snapshot.fallbackModel) {
     root.append(el("p", "note", `当前 fallback 模型：${snapshot.fallbackModel}`));
   }
-  if (!snapshot.personalProEligible) {
-    root.append(el("p", "warn", "当前工作区不计入个人 Pro Chat 额度"));
-  }
+  const workspace = workspaceStatusNote(snapshot);
+  if (workspace) root.append(el("p", "warn", workspace));
 
   const button = document.createElement("button");
   button.type = "button";
@@ -132,16 +139,12 @@ function metricBlock(title: string, metric: QuotaMetric | null, snapshot: QuotaS
   const wrap = el("section", "metric");
   wrap.append(el("div", "metric-title", title));
   if (!metric) {
-    wrap.append(el("p", "note", "当前套餐无此桶"));
+    wrap.append(el("p", "note", metricRemainingLabel(null)));
     return wrap;
   }
   const row = el("div", "metric-row");
-  const remaining = metric.estimatedRemaining == null
-    ? `已记录 ${metric.used} / ${metric.limit}`
-    : `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
-  row.append(document.createTextNode(remaining));
-  const percent = metric.remainingRatio == null ? "?" : `${Math.round(metric.remainingRatio * 100)}%`;
-  row.append(el("span", "", percent));
+  row.append(document.createTextNode(metricRemainingLabel(metric)));
+  row.append(el("span", "", metricPercentLabel(metric)));
   wrap.append(row);
   const bar = el("div", "bar");
   const fill = document.createElement("span");

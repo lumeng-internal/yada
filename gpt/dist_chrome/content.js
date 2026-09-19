@@ -3084,6 +3084,420 @@ ${timestamp ? `${timestamp}
   var YADA_ACCENT_SOFT = "rgba(16, 163, 127, 0.14)";
   var YADA_TOOLBAR_HOST_ID = "chatgpt-yada-toolbar-host";
 
+  // src/quota/iconRenderer.ts
+  var COLORS = {
+    outer: "#ff375f",
+    middle: "#9cd326",
+    inner: "#1ad6d0",
+    track: "rgba(255,255,255,0.18)"
+  };
+  var DARK_ICON_PALETTE = {
+    track: COLORS.track,
+    center: "#f5f5f7"
+  };
+  var LIGHT_ICON_PALETTE = {
+    track: "rgba(32, 33, 35, 0.18)",
+    center: "#202123"
+  };
+  function remainingToRatio(remaining, limit) {
+    if (limit <= 0) return 0;
+    return Math.max(0, Math.min(1, remaining / limit));
+  }
+  function ringGeometry(size) {
+    const padding = Math.max(1, size * 0.045);
+    const outerWidth = Math.max(1.5, size * 0.11);
+    const gap = Math.max(0.75, size * 0.045);
+    const cx = size / 2;
+    const outerRadius = cx - padding - outerWidth / 2;
+    const middleWidth = outerWidth * 0.92;
+    const innerWidth2 = outerWidth * 0.84;
+    const middleRadius = outerRadius - outerWidth / 2 - gap - middleWidth / 2;
+    const innerRadius = middleRadius - middleWidth / 2 - gap - innerWidth2 / 2;
+    return [
+      { radius: outerRadius, width: outerWidth },
+      { radius: middleRadius, width: middleWidth },
+      { radius: innerRadius, width: innerWidth2 }
+    ];
+  }
+  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
+    const canvas = new OffscreenCanvas(size, size);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+    ctx.clearRect(0, 0, size, size);
+    const cx = size / 2;
+    const cy = size / 2;
+    const geometry = ringGeometry(size);
+    const values = [rings.outer, rings.middle, rings.inner];
+    const colors = [COLORS.outer, COLORS.middle, COLORS.inner];
+    geometry.forEach((ring, index) => {
+      drawTrack(ctx, cx, cy, ring.radius, ring.width, palette.track);
+      drawArc(ctx, cx, cy, ring.radius, ring.width, colors[index], values[index]);
+    });
+    if (size >= 32 && rings.center) {
+      ctx.fillStyle = palette.center;
+      ctx.font = `600 ${Math.round(size * (rings.center === "?" ? 0.42 : 0.34))}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(rings.center, cx, cy + size * 0.02);
+    }
+    return ctx.getImageData(0, 0, size, size);
+  }
+  function paintQuotaCanvas(canvas, rings, palette = DARK_ICON_PALETTE) {
+    const image = renderQuotaIcon(32, rings, palette);
+    canvas.width = 32;
+    canvas.height = 32;
+    let ctx = null;
+    try {
+      ctx = canvas.getContext("2d");
+    } catch {
+      return;
+    }
+    if (!ctx) return;
+    try {
+      ctx.putImageData(image, 0, 0);
+    } catch {
+    }
+  }
+  function drawTrack(ctx, cx, cy, radius, width, color) {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  function drawArc(ctx, cx, cy, radius, width, color, ratio) {
+    const filled = Math.max(0, Math.min(0.999, ratio));
+    if (filled <= 0) return;
+    const start = -Math.PI / 2;
+    const end = start + filled * Math.PI * 2;
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.arc(cx, cy, radius, start, end);
+    ctx.stroke();
+  }
+
+  // src/quota/iconState.ts
+  function snapshotToRings(snapshot) {
+    const incomplete = snapshot.coverageLabel !== "完整" || snapshot.tightestRemainingPercent == null;
+    return {
+      outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
+      middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
+      inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
+      center: incomplete ? "?" : String(snapshot.tightestRemainingPercent ?? 0)
+    };
+  }
+  function snapshotTitle(snapshot) {
+    const workspace = snapshot.personalProEligible ? "" : "\n当前工作区不计入个人 Pro Chat 额度";
+    return [
+      "ChatGPT Yada Pro 额度",
+      "",
+      metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
+      metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
+      metricLine("两个 Pro", snapshot.combinedDaily),
+      "",
+      `历史同步：${snapshot.historyComplete ? "完整" : "不完整"}`,
+      `未分类轮次：${snapshot.unclassifiedTurns}`,
+      snapshot.updatedLabel,
+      workspace
+    ].join("\n").trim();
+  }
+  function metricLine(label, metric) {
+    if (!metric) return `${label}：当前套餐无此桶`;
+    if (metric.estimatedRemaining == null) return `${label}：已记录 ${metric.used}，历史同步不完整`;
+    return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  }
+
+  // src/quota/presentation.ts
+  function metricRemainingLabel(metric) {
+    if (!metric) return "当前套餐无此桶";
+    if (metric.estimatedRemaining == null) return `已记录 ${metric.used} / ${metric.limit}`;
+    return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  }
+  function metricPercentLabel(metric) {
+    if (!metric || metric.remainingRatio == null) return "?";
+    return `${Math.round(metric.remainingRatio * 100)}%`;
+  }
+  function historySyncLabel(snapshot) {
+    return snapshot.historyComplete ? "历史同步完整" : "历史同步不完整";
+  }
+  function planStatusNote(snapshot) {
+    if (!snapshot.plan) return "未确认 ChatGPT 套餐，不猜测额度桶。";
+    return null;
+  }
+  function workspaceStatusNote(snapshot) {
+    return snapshot.personalProEligible ? null : "当前工作区不计入个人 Pro Chat 额度";
+  }
+  function snapshotBucketViews(snapshot) {
+    if (!snapshot.plan) return [];
+    if (snapshot.plan === "prolite") {
+      return [{ title: "两个 Pro", metric: snapshot.combinedDaily }];
+    }
+    return [
+      { title: "GPT-6 Pro", metric: snapshot.gpt6ProWeekly },
+      { title: "GPT-5.6 Sol Pro", metric: snapshot.solProDaily },
+      { title: "两个 Pro", metric: snapshot.combinedDaily }
+    ];
+  }
+
+  // src/quota/types.ts
+  var LEDGER_KEY = "chatgpt-yada:quota-ledger:v2";
+  var STATE_KEY = "chatgpt-yada:quota-state:v2";
+  var EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1e3;
+
+  // src/ui/quotaIndicator.ts
+  var QUOTA_INDICATOR_DEBOUNCE_MS = 80;
+  var UNKNOWN_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "?" };
+  var POPOVER_CSS = `
+  [data-quota-popover] {
+    position: absolute;
+    z-index: 30;
+    box-sizing: border-box;
+    width: 260px;
+    max-width: calc(100vw - 16px);
+    padding: 12px;
+    border: 1px solid var(--yada-button-border);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--yada-text);
+    box-shadow: 0 10px 28px rgba(15, 15, 15, 0.12);
+    font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-align: left;
+    white-space: normal;
+  }
+  :host([data-yada-theme="dark"]) [data-quota-popover] {
+    background: #2a2a2a;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+  }
+  [data-quota-popover] h2 {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 700;
+  }
+  [data-quota-popover] h3 {
+    margin: 10px 0 2px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  [data-quota-popover] p {
+    margin: 0;
+  }
+  [data-quota-popover] [data-quota-note],
+  [data-quota-popover] [data-quota-warn],
+  [data-quota-popover] [data-quota-error] {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--yada-muted);
+  }
+  [data-quota-popover] [data-quota-warn],
+  [data-quota-popover] [data-quota-error] {
+    color: var(--yada-text);
+  }
+`;
+  var QuotaIndicator = class {
+    constructor(button, options = {}) {
+      this.button = button;
+      this.send = options.send ?? ((message, timeoutMs) => sendRuntimeMessage(message, timeoutMs));
+      this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
+      this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
+      this.canvas.setAttribute("aria-hidden", "true");
+      const root = this.root();
+      this.styleEl = document.createElement("style");
+      this.styleEl.textContent = POPOVER_CSS;
+      this.popover = document.createElement("div");
+      this.popover.hidden = true;
+      this.popover.dataset.quotaPopover = "true";
+      this.popover.setAttribute("role", "dialog");
+      this.popover.setAttribute("aria-label", "Pro 模型额度");
+      root.append(this.styleEl, this.popover);
+      this.themeObserver = new MutationObserver(() => this.paint(this.rings));
+      const host = this.host();
+      if (host) this.themeObserver.observe(host, { attributes: true, attributeFilter: ["data-yada-theme"] });
+      this.button.setAttribute("aria-haspopup", "dialog");
+      this.button.addEventListener("click", this.onClick);
+      document.addEventListener("pointerdown", this.onPointerDown, true);
+      document.addEventListener("keydown", this.onKeyDown, true);
+      chrome.storage?.onChanged?.addListener(this.onStorageChanged);
+      this.apply(null, "loading");
+      void this.loadState();
+    }
+    send;
+    debounceMs;
+    canvas;
+    popover;
+    styleEl;
+    themeObserver;
+    disposed = false;
+    generation = 0;
+    refreshTimer = 0;
+    status = "loading";
+    snapshot = null;
+    rings = UNKNOWN_QUOTA_RINGS;
+    close = () => {
+      this.popover.hidden = true;
+      this.button.setAttribute("aria-expanded", "false");
+    };
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.close();
+      this.generation += 1;
+      window.clearTimeout(this.refreshTimer);
+      this.refreshTimer = 0;
+      this.themeObserver.disconnect();
+      this.button.removeEventListener("click", this.onClick);
+      document.removeEventListener("pointerdown", this.onPointerDown, true);
+      document.removeEventListener("keydown", this.onKeyDown, true);
+      chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
+      this.popover.remove();
+      this.styleEl.remove();
+    }
+    onClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.popover.hidden) this.open();
+      else this.close();
+    };
+    onPointerDown = (event) => {
+      if (this.popover.hidden) return;
+      const path = event.composedPath();
+      if (path.includes(this.button) || path.includes(this.popover)) return;
+      this.close();
+    };
+    onKeyDown = (event) => {
+      if (this.popover.hidden || event.key !== "Escape") return;
+      event.stopPropagation();
+      this.close();
+      this.button.focus();
+    };
+    onStorageChanged = (changes, area) => {
+      if (this.disposed || area !== "local") return;
+      if (!changes[LEDGER_KEY] && !changes[STATE_KEY]) return;
+      window.clearTimeout(this.refreshTimer);
+      this.refreshTimer = window.setTimeout(() => {
+        this.refreshTimer = 0;
+        void this.loadState();
+      }, this.debounceMs);
+    };
+    async loadState() {
+      const generation = ++this.generation;
+      try {
+        const response = await this.send({ type: "quota/get-state" });
+        if (this.disposed || generation !== this.generation) return;
+        if (response?.error) throw new Error(response.error);
+        if (!response?.snapshot) throw new Error("无法读取额度账本");
+        this.apply(response.snapshot, "ready");
+      } catch {
+        if (this.disposed || generation !== this.generation) return;
+        this.apply(null, "error");
+      }
+    }
+    apply(snapshot, status) {
+      this.snapshot = snapshot;
+      this.status = status;
+      const rings = snapshot ? snapshotToRings(snapshot) : UNKNOWN_QUOTA_RINGS;
+      this.paint(rings);
+      this.setTitle(
+        status === "error" ? "Pro 额度暂不可用" : snapshot ? snapshotTitle(snapshot) : "Pro 额度：读取中"
+      );
+      if (!this.popover.hidden) {
+        this.renderPopover();
+        this.positionPopover();
+      }
+    }
+    paint(rings) {
+      this.rings = rings;
+      this.canvas.dataset.quotaCenter = rings.center ?? "";
+      this.canvas.dataset.quotaOuter = String(rings.outer);
+      this.canvas.dataset.quotaMiddle = String(rings.middle);
+      this.canvas.dataset.quotaInner = String(rings.inner);
+      paintQuotaCanvas(
+        this.canvas,
+        rings,
+        this.theme() === "light" ? LIGHT_ICON_PALETTE : DARK_ICON_PALETTE
+      );
+    }
+    setTitle(title) {
+      this.button.title = title;
+      this.button.setAttribute("aria-label", title);
+    }
+    open() {
+      this.renderPopover();
+      this.popover.hidden = false;
+      this.button.setAttribute("aria-expanded", "true");
+      this.positionPopover();
+    }
+    renderPopover() {
+      this.popover.replaceChildren();
+      const heading = document.createElement("h2");
+      heading.textContent = "Pro 模型额度";
+      this.popover.append(heading);
+      if (this.status === "error" || this.status === "ready" && !this.snapshot) {
+        this.popover.append(note("无法读取额度账本", "quota-error"));
+        return;
+      }
+      if (!this.snapshot) return;
+      const planNote = planStatusNote(this.snapshot);
+      if (planNote) this.popover.append(note(planNote, "quota-warn"));
+      else {
+        for (const bucket of snapshotBucketViews(this.snapshot)) {
+          const section = document.createElement("section");
+          const title = document.createElement("h3");
+          title.textContent = bucket.title;
+          const remaining = document.createElement("p");
+          remaining.textContent = metricRemainingLabel(bucket.metric);
+          const percent = document.createElement("p");
+          percent.textContent = metricPercentLabel(bucket.metric);
+          section.append(title, remaining, percent);
+          this.popover.append(section);
+        }
+      }
+      this.popover.append(note("预计剩余", "quota-note"));
+      this.popover.append(note(historySyncLabel(this.snapshot), "quota-note"));
+      this.popover.append(note("只统计个人 Chat，不统计 Work 和 Codex", "quota-note"));
+      this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
+      const workspace = workspaceStatusNote(this.snapshot);
+      if (workspace) this.popover.append(note(workspace, "quota-warn"));
+    }
+    positionPopover() {
+      const host = this.host();
+      const width = 260;
+      if (!host) {
+        this.popover.style.width = `${width}px`;
+        return;
+      }
+      const hostRect = host.getBoundingClientRect();
+      const buttonRect = this.button.getBoundingClientRect();
+      const minLeft = 8 - hostRect.left;
+      const maxLeft = window.innerWidth - 8 - width - hostRect.left;
+      const preferred = buttonRect.right - hostRect.left - width;
+      const left = Math.min(Math.max(preferred, minLeft), Math.max(minLeft, maxLeft));
+      this.popover.style.width = `${width}px`;
+      this.popover.style.left = `${left}px`;
+      this.popover.style.right = "auto";
+      this.popover.style.top = `${buttonRect.bottom - hostRect.top + 6}px`;
+    }
+    theme() {
+      return this.host()?.getAttribute("data-yada-theme") === "dark" ? "dark" : "light";
+    }
+    host() {
+      const root = this.button.getRootNode();
+      return root instanceof ShadowRoot ? root.host : this.button.parentElement;
+    }
+    root() {
+      const root = this.button.getRootNode();
+      return root instanceof ShadowRoot ? root : document;
+    }
+  };
+  function note(text, kind) {
+    const node = document.createElement("p");
+    node.dataset[kind === "quota-note" ? "quotaNote" : kind === "quota-warn" ? "quotaWarn" : "quotaError"] = "true";
+    node.textContent = text;
+    return node;
+  }
+
   // src/ui/toolbar.ts
   var YadaToolbar = class {
     constructor(onPreviewMode = () => {
@@ -3099,9 +3513,11 @@ ${timestamp ? `${timestamp}
     placementObserver = null;
     placementTimer = 0;
     prompts = null;
+    quota = null;
     previewAssistant = false;
     closePanels() {
       this.prompts?.close();
+      this.quota?.close();
     }
     mount() {
       if (this.host?.isConnected) return;
@@ -3118,6 +3534,7 @@ ${timestamp ? `${timestamp}
       this.query("[data-copy-all]")?.addEventListener("click", () => {
         void this.copyAll();
       });
+      this.quota = new QuotaIndicator(this.query("[data-quota]"));
       this.prompts = new PromptPanel(this.query("[data-prompts]"));
       const mode = this.query("[data-preview-mode]");
       const applyMode = () => {
@@ -3167,6 +3584,8 @@ ${timestamp ? `${timestamp}
       this.host.dataset.placement = "fixed";
     }
     dispose() {
+      this.quota?.dispose();
+      this.quota = null;
       this.prompts?.dispose();
       window.clearTimeout(this.copyResetTimer);
       window.clearTimeout(this.placementTimer);
@@ -3263,10 +3682,30 @@ ${timestamp ? `${timestamp}
           cursor: default;
           opacity: 0.66;
         }
-        [data-preview-mode] { padding: 0; width: 20px; height: 20px; font-size: 16px; color: var(--yada-muted); border: 0; background: transparent; }
-        [data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        button[data-preview-mode],
+        button[data-quota] {
+          padding: 0;
+          width: 20px;
+          height: 20px;
+          border: 0;
+          background: transparent;
+          border-radius: 50%;
+          flex-shrink: 0;
+          line-height: 0;
+        }
+        button[data-preview-mode] {
+          font-size: 16px;
+          color: var(--yada-muted);
+        }
+        button[data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        button[data-quota] canvas {
+          display: block;
+          width: 20px;
+          height: 20px;
+        }
       </style>
       <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
+      <button type="button" data-quota aria-haspopup="dialog" aria-expanded="false" aria-label="Pro 额度：读取中" title="Pro 额度：读取中"><canvas width="32" height="32" aria-hidden="true"></canvas></button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
     `;

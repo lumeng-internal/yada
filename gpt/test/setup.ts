@@ -123,3 +123,10 @@ class MemoryCanvas {
 if (!(globalThis as { OffscreenCanvas?: unknown }).OffscreenCanvas) {
   Object.assign(globalThis, { OffscreenCanvas: MemoryCanvas, ImageData: MemoryImageData });
 }
+
+Object.defineProperty(HTMLCanvasElement.prototype, "getContext", {
+  configurable: true,
+  value() {
+    return new MemoryCanvas(this.width, this.height).getContext();
+  }
+});
