@@ -52,6 +52,10 @@ export async function fetchCurrentConversation(conversationId = getConversationI
   return fetchConversation(conversationId, signal);
 }
 
+function abortError(): DOMException {
+  return new DOMException("Aborted", "AbortError");
+}
+
 export async function chatgptApi(path: string, init: RequestInit = {}): Promise<Response> {
   const headers = new Headers(init.headers);
   headers.set("Accept", headers.get("Accept") ?? "application/json");
@@ -64,7 +68,22 @@ export async function chatgptApi(path: string, init: RequestInit = {}): Promise<
   if (accountId && !headers.has("Chatgpt-Account-Id")) {
     headers.set("Chatgpt-Account-Id", accountId);
   }
-  return fetch(path, { credentials: "include", cache: "no-store", ...init, headers });
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  init.signal?.addEventListener("abort", abort, { once: true });
+  if (init.signal?.aborted) controller.abort();
+  const timer = setTimeout(abort, 15_000);
+  try {
+    if (controller.signal.aborted && init.signal?.aborted) throw abortError();
+    return await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
+  } catch (error) {
+    if (init.signal?.aborted) throw abortError();
+    if (controller.signal.aborted) throw new Error("ChatGPT API timed out");
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener("abort", abort);
+  }
 }
 
 export async function fetchConversation(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {

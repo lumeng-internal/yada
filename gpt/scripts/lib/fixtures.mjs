@@ -40,15 +40,21 @@ export async function runLocalFixtures(cdp, createdTargetIds) {
     targetId = await cdp.createTarget(url);
     createdTargetIds.add(targetId);
     await cdp.attach(targetId);
-    await cdp.navigate(targetId, url);
-    const deadline = Date.now() + 180_000;
+    const deadline = Date.now() + 90_000;
     let result;
+    let lastError = null;
     while (Date.now() < deadline) {
-      result = await cdp.evaluate(targetId, "globalThis.yadaVerification", { awaitPromise: false });
+      try {
+        result = await cdp.evaluate(targetId, "globalThis.yadaVerification", { awaitPromise: false, timeoutMs: 3_000 });
+        lastError = null;
+      } catch (error) {
+        lastError = String(error.message || error);
+        result = null;
+      }
       if (result?.done) break;
       await new Promise((resolveWait) => setTimeout(resolveWait, 200));
     }
-    if (!result?.done) throw new Error(`Fixture timeout: ${JSON.stringify(result)}`);
+    if (!result?.done) throw new Error(`Fixture timeout: ${JSON.stringify({ result, lastError })}`);
     if (result.error) throw new Error(result.error);
     return { checks: result.checks ?? [], url };
   } finally {

@@ -82,26 +82,82 @@
     };
   }
 
-  // src/popup/popup.ts
-  var app = document.getElementById("app");
-  if (!app) throw new Error("popup root missing");
-  void refresh();
-  async function refresh(manual = false) {
-    renderLoading(app, manual);
-    if (manual) {
-      await chrome.runtime.sendMessage({ type: "quota/refresh-current", conversationId: "" });
+  // src/shared/timeout.ts
+  function withTimeout(promise, timeoutMs, message = "timeout") {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.reject(new Error(message));
     }
-    const response = await chrome.runtime.sendMessage({ type: "quota/get-state" });
-    if (!response?.snapshot) {
-      app.textContent = "无法读取额度账本";
-      return;
-    }
-    render(app, response.snapshot);
+    let timer;
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
   }
-  function renderLoading(root, manual) {
+
+  // src/shared/messages.ts
+  var MESSAGE_TIMEOUT_MS = 15e3;
+  var REFRESH_TIMEOUT_MS = 45e3;
+  function sendRuntimeMessage(message, timeoutMs = MESSAGE_TIMEOUT_MS) {
+    return withTimeout(Promise.resolve(chrome.runtime.sendMessage(message)), timeoutMs, "扩展消息超时");
+  }
+
+  // src/popup/app.ts
+  function setPopupState(root, state) {
+    root.dataset.state = state;
+  }
+  function renderPopupLoading(root, manual = false) {
+    setPopupState(root, "loading");
     if (!root.childElementCount) root.textContent = manual ? "刷新中…" : "读取中…";
   }
-  function render(root, snapshot) {
+  function renderPopupError(root, message) {
+    root.replaceChildren();
+    setPopupState(root, "error");
+    const node = document.createElement("p");
+    node.className = "error";
+    node.textContent = message;
+    root.append(node);
+  }
+  async function loadQuotaPopup(root, send = sendRuntimeMessage, options = {}) {
+    const manual = options.manual === true;
+    const timeoutMs = options.timeoutMs ?? (manual ? REFRESH_TIMEOUT_MS : MESSAGE_TIMEOUT_MS);
+    renderPopupLoading(root, manual);
+    try {
+      const response = await withTimeout(
+        Promise.resolve(send(messageFor(manual), timeoutMs)),
+        timeoutMs,
+        manual ? "刷新超时，后台未响应" : "读取超时，后台未响应"
+      );
+      if (response?.error) throw new Error(response.error);
+      if (!response?.snapshot) throw new Error("无法读取额度账本");
+      renderPopup(root, response.snapshot);
+      setPopupState(root, "ready");
+    } catch (error) {
+      renderPopupError(root, popupErrorText(error, manual));
+    }
+  }
+  function popupErrorText(error, manual = false) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (/超时|timeout/i.test(message)) return manual ? "刷新超时，后台未响应" : "读取超时，后台未响应";
+    if (/无法读取额度账本/.test(message)) return message;
+    if (/扩展消息/.test(message) || /Could not establish connection|Receiving end does not exist/i.test(message)) {
+      return "无法连接扩展后台";
+    }
+    if (/没有可刷新/.test(message)) return message;
+    return message && /[\u4e00-\u9fff]/.test(message) ? message : "无法读取额度账本";
+  }
+  function messageFor(manual) {
+    return manual ? { type: "quota/refresh-current", conversationId: "" } : { type: "quota/get-state" };
+  }
+  function renderPopup(root, snapshot) {
     root.replaceChildren();
     const header = el("div", "header");
     header.append(el("h1", "", "Pro 模型额度"), el("time", "", snapshot.updatedLabel));
@@ -145,7 +201,7 @@
     button.type = "button";
     button.textContent = "立即刷新";
     button.addEventListener("click", () => {
-      void refresh(true);
+      void loadQuotaPopup(root, sendRuntimeMessage, { manual: true });
     });
     root.append(button);
   }
@@ -183,4 +239,9 @@
     if (text) node.textContent = text;
     return node;
   }
+
+  // src/popup/popup.ts
+  var app = document.getElementById("app");
+  if (!app) throw new Error("popup root missing");
+  void loadQuotaPopup(app);
 })();

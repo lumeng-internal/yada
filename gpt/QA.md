@@ -17,3 +17,5 @@ npm run candidate
 - **BUSY**：会议浏览器正在执行会议任务，晚点重跑。不要杀掉会议任务。
 
 不要为了拿 PASS 自动制造 ChatGPT 对话或消耗 Pro 额度。
+
+Gate 会写 `artifacts/candidate/<git-sha>.json`。无论 PASS / FAIL / SETUP_REQUIRED / BUSY，进程都必须自行退出。会议浏览器账号如果不是 Pro / ProLite，额度 live 记为 `NOT_APPLICABLE`，不把非 Pro 账号写成 PASS。

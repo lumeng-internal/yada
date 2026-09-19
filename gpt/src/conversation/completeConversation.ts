@@ -70,11 +70,28 @@ function buildConversationMappingFromMessages(messages: ApiConversationMessage[]
   return { id, mapping, current_node: current || parent };
 }
 
-function isRateLimited(error: unknown): boolean {
-  return error instanceof Error && /API failed: 429\b/.test(error.message);
+export type CompleteConversationOptions = {
+  requestTimeoutMs?: number;
+  rateLimitWaitMs?: number;
+};
+
+export function isTransientTransportError(error: unknown): boolean {
+  if (isAbortError(error)) return true;
+  if (!(error instanceof Error)) return false;
+  return /timed out/i.test(error.message)
+    || /API failed: 429\b/.test(error.message)
+    || /API failed: 5\d{2}\b/.test(error.message)
+    || /Failed to fetch|NetworkError|network/i.test(error.message);
+}
+
+export function shouldFallbackToLegacyConversation(error: unknown): boolean {
+  if (isAbortError(error) || isTransientTransportError(error)) return false;
+  if (error instanceof Error && /API failed: \d+/.test(error.message)) return false;
+  return true;
 }
 
 async function wait(ms: number, signal?: AbortSignal): Promise<void> {
+  if (ms <= 0) return;
   if (signal?.aborted) throw abortError();
   await new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -89,22 +106,32 @@ async function wait(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-export async function fetchCompleteConversation(id: string, headers: HeadersInit, signal?: AbortSignal): Promise<ApiConversation> {
+export async function fetchCompleteConversation(
+  id: string,
+  headers: HeadersInit,
+  signal?: AbortSignal,
+  options: CompleteConversationOptions = {}
+): Promise<ApiConversation> {
+  const requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+  const rateLimitWaitMs = options.rateLimitWaitMs ?? 1_000;
   const request = async (url: string): Promise<ConversationResponse> => {
     const once = async (): Promise<Response> => {
       const controller = new AbortController();
       const abort = (): void => controller.abort();
       signal?.addEventListener("abort", abort, { once: true });
       if (signal?.aborted) controller.abort();
-      const timer = setTimeout(abort, 10000);
+      const timer = setTimeout(abort, requestTimeoutMs);
       try {
         if (signal?.aborted || controller.signal.aborted) throw abortError();
         const response = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
-        if (signal?.aborted || controller.signal.aborted) throw abortError();
+        if (signal?.aborted) throw abortError();
+        if (controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
         return response;
       } catch (error) {
         if (signal?.aborted) throw abortError();
-        if (controller.signal.aborted || isAbortError(error)) throw new Error("ChatGPT conversation API timed out");
+        if (controller.signal.aborted || (isAbortError(error) && !signal?.aborted)) {
+          throw new Error("ChatGPT conversation API timed out");
+        }
         throw error;
       } finally {
         clearTimeout(timer);
@@ -113,7 +140,7 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
     };
     let response = await once();
     if (response.status === 429) {
-      await wait(1000, signal);
+      await wait(rateLimitWaitMs, signal);
       response = await once();
     }
     if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
@@ -136,7 +163,7 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
       const seen = new Set<string>();
       let count = 1;
       while (cursor) {
-        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
+        if (signal?.aborted) throw abortError();
         if (seen.has(cursor) || count >= MAX_PAGES) throw new Error('Conversation pagination stalled');
         seen.add(cursor);
         const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
@@ -153,17 +180,20 @@ export async function fetchCompleteConversation(id: string, headers: HeadersInit
     throw new Error('Paginated conversation API returned no messages');
   } catch (error) {
     lastError = error;
-    if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
+    if (!shouldFallbackToLegacyConversation(error)) throw error;
   }
   try {
     return complete(await request(`${base}?include_full_conversation=true`));
   } catch (error) {
     lastError = error;
-    if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
+    if (!shouldFallbackToLegacyConversation(error)) throw error;
   }
   for (const url of [base, `${base}?offset=0&limit=100000`]) {
     try { return complete(await request(url)); }
-    catch (error) { lastError = error; if (signal?.aborted) throw error; }
+    catch (error) {
+      lastError = error;
+      if (!shouldFallbackToLegacyConversation(error)) throw error;
+    }
   }
   throw lastError;
 }

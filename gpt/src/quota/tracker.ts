@@ -1,6 +1,8 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
 import { chatgptApi, fetchConversation } from "../conversation/fetchConversation";
+import { MESSAGE_TIMEOUT_MS, REFRESH_TIMEOUT_MS, sendRuntimeMessage } from "../shared/messages";
+import { withTimeout } from "../shared/timeout";
 import { readChatAccount, readModelLimits } from "./pageClient";
 import type { QuotaClassification, QuotaUsageEvent } from "./types";
 import { createChromeHistoryStore, readChatHistory } from "./vibebar/historyReader";
@@ -23,8 +25,8 @@ export class QuotaTracker {
   }
 
   async refreshCurrent(): Promise<void> {
-    await this.sync.requestSync("popup");
-    await this.ingestQueue;
+    await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
+    await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
   }
 
   dispose(): void {
@@ -57,7 +59,7 @@ export class QuotaTracker {
     const events = snapshot.quotaIsWork
       ? []
       : toEvents(snapshot.quotaTurns, account.identity, classification);
-    await chrome.runtime.sendMessage({
+    await sendRuntimeMessage({
       type: "quota/ingest",
       events,
       plan: account.plan,
@@ -88,7 +90,7 @@ export class QuotaTracker {
     });
     if (this.disposed) return;
     const events = toEvents(result.turns, account.identity, "personal");
-    await chrome.runtime.sendMessage({
+    await sendRuntimeMessage({
       type: "quota/ingest",
       events,
       plan: account.plan,

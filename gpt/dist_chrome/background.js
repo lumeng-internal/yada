@@ -383,6 +383,30 @@
     return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
   }
 
+  // src/shared/timeout.ts
+  function withTimeout(promise, timeoutMs, message = "timeout") {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.reject(new Error(message));
+    }
+    let timer;
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  // src/shared/messages.ts
+  var REFRESH_TIMEOUT_MS = 45e3;
+
   // src/background/serviceWorker.ts
   var ALARM_NAME = "chatgpt-yada-quota-window";
   var ledger = new QuotaLedger();
@@ -409,7 +433,13 @@
     if (message.type === "quota/refresh-current") {
       const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       const tabId = tabs[0]?.id;
-      if (tabId != null) await chrome.tabs.sendMessage(tabId, message);
+      if (tabId == null) throw new Error("没有可刷新的 ChatGPT 标签页");
+      const result = await withTimeout(
+        Promise.resolve(chrome.tabs.sendMessage(tabId, message)),
+        REFRESH_TIMEOUT_MS,
+        "刷新超时，后台未响应"
+      );
+      if (result?.error) throw new Error(result.error);
       return getState({ type: "quota/get-state" });
     }
     return { error: "unknown-message" };

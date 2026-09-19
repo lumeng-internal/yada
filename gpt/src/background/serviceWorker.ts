@@ -3,6 +3,8 @@ import { applyQuotaIcon, nextAlarmAt } from "../quota/iconState";
 import { calculateQuotaSnapshot } from "../quota/calculator";
 import { STATE_KEY, type QuotaSnapshot } from "../quota/types";
 import type { QuotaGetState, QuotaIngest, YadaRequest } from "../shared/messages";
+import { REFRESH_TIMEOUT_MS } from "../shared/messages";
+import { withTimeout } from "../shared/timeout";
 
 const ALARM_NAME = "chatgpt-yada-quota-window";
 const ledger = new QuotaLedger();
@@ -27,7 +29,13 @@ async function handle(message: YadaRequest): Promise<unknown> {
   if (message.type === "quota/refresh-current") {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tabId = tabs[0]?.id;
-    if (tabId != null) await chrome.tabs.sendMessage(tabId, message);
+    if (tabId == null) throw new Error("没有可刷新的 ChatGPT 标签页");
+    const result = await withTimeout(
+      Promise.resolve(chrome.tabs.sendMessage(tabId, message)),
+      REFRESH_TIMEOUT_MS,
+      "刷新超时，后台未响应"
+    ) as { ok?: boolean; error?: string } | undefined;
+    if (result?.error) throw new Error(result.error);
     return getState({ type: "quota/get-state" });
   }
   return { error: "unknown-message" };

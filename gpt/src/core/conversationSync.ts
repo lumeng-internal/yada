@@ -8,19 +8,17 @@ export class ConversationSync {
   private dirty = false;
   private abortController: AbortController | null = null;
   private latestSnapshot: ConversationSnapshot | null = null;
+  private lastError: Error | null = null;
   private readonly listeners = new Set<ConversationListener>();
   private observer: MutationObserver | null = null;
   private lastStreamingState = false;
   private readonly seenAssistantMessageIds = new Set<string>();
   private disposed = false;
   private published = 0;
-  private failures = 0;
   private readonly read: ReadConversation;
-  private readonly retryDelayMs: number;
 
-  constructor(options: { readConversation?: ReadConversation; retryDelayMs?: number } = {}) {
+  constructor(options: { readConversation?: ReadConversation } = {}) {
     this.read = options.readConversation ?? readConversationFromApi;
-    this.retryDelayMs = options.retryDelayMs ?? 800;
   }
 
   subscribe(listener: ConversationListener): () => void {
@@ -46,7 +44,7 @@ export class ConversationSync {
     this.seenAssistantMessageIds.clear();
     this.lastStreamingState = false;
     this.latestSnapshot = null;
-    this.failures = 0;
+    this.lastError = null;
     if (!conversationId) {
       this.dirty = false;
       void this.publish(null);
@@ -58,6 +56,10 @@ export class ConversationSync {
 
   getSnapshot(): ConversationSnapshot | null {
     return this.latestSnapshot;
+  }
+
+  getLastError(): Error | null {
+    return this.lastError;
   }
 
   getActiveConversationId(): string | null {
@@ -107,19 +109,15 @@ export class ConversationSync {
           if (this.disposed || signal.aborted) throw abortError();
           if (this.activeConversationId === conversationId && this.generation === generation) {
             snapshot.revision = ++this.published;
-            this.failures = 0;
+            this.lastError = null;
             await this.publish(snapshot);
           }
         } catch (error) {
           if (this.disposed) return;
           if (isAbortError(error) || this.generation !== generation) continue;
           if (this.activeConversationId === conversationId) {
-            await this.publish(null);
-            this.failures += 1;
-            if (this.failures <= 3) {
-              this.dirty = true;
-              if (this.retryDelayMs > 0) await delay(this.retryDelayMs);
-            }
+            this.lastError = error instanceof Error ? error : new Error(String(error));
+            if (!this.latestSnapshot) await this.publish(null);
           }
         }
       }
@@ -176,8 +174,4 @@ function collectStableAssistantMessageIds(root: ParentNode = document): string[]
     if (id) ids.push(id);
   }
   return ids;
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

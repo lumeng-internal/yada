@@ -62,10 +62,18 @@
     if (current && !mapping[current]) throw new Error("Active branch tip missing after pagination");
     return { id, mapping, current_node: current || parent };
   }
-  function isRateLimited(error) {
-    return error instanceof Error && /API failed: 429\b/.test(error.message);
+  function isTransientTransportError(error) {
+    if (isAbortError(error)) return true;
+    if (!(error instanceof Error)) return false;
+    return /timed out/i.test(error.message) || /API failed: 429\b/.test(error.message) || /API failed: 5\d{2}\b/.test(error.message) || /Failed to fetch|NetworkError|network/i.test(error.message);
+  }
+  function shouldFallbackToLegacyConversation(error) {
+    if (isAbortError(error) || isTransientTransportError(error)) return false;
+    if (error instanceof Error && /API failed: \d+/.test(error.message)) return false;
+    return true;
   }
   async function wait(ms, signal) {
+    if (ms <= 0) return;
     if (signal?.aborted) throw abortError();
     await new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -79,22 +87,27 @@
       signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
-  async function fetchCompleteConversation(id, headers, signal) {
+  async function fetchCompleteConversation(id, headers, signal, options = {}) {
+    const requestTimeoutMs = options.requestTimeoutMs ?? 1e4;
+    const rateLimitWaitMs = options.rateLimitWaitMs ?? 1e3;
     const request = async (url) => {
       const once = async () => {
         const controller = new AbortController();
         const abort = () => controller.abort();
         signal?.addEventListener("abort", abort, { once: true });
         if (signal?.aborted) controller.abort();
-        const timer = setTimeout(abort, 1e4);
+        const timer = setTimeout(abort, requestTimeoutMs);
         try {
           if (signal?.aborted || controller.signal.aborted) throw abortError();
           const response2 = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
-          if (signal?.aborted || controller.signal.aborted) throw abortError();
+          if (signal?.aborted) throw abortError();
+          if (controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
           return response2;
         } catch (error) {
           if (signal?.aborted) throw abortError();
-          if (controller.signal.aborted || isAbortError(error)) throw new Error("ChatGPT conversation API timed out");
+          if (controller.signal.aborted || isAbortError(error) && !signal?.aborted) {
+            throw new Error("ChatGPT conversation API timed out");
+          }
           throw error;
         } finally {
           clearTimeout(timer);
@@ -103,7 +116,7 @@
       };
       let response = await once();
       if (response.status === 429) {
-        await wait(1e3, signal);
+        await wait(rateLimitWaitMs, signal);
         response = await once();
       }
       if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
@@ -126,7 +139,7 @@
         const seen = /* @__PURE__ */ new Set();
         let count = 1;
         while (cursor) {
-          if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+          if (signal?.aborted) throw abortError();
           if (seen.has(cursor) || count >= MAX_PAGES) throw new Error("Conversation pagination stalled");
           seen.add(cursor);
           const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
@@ -144,20 +157,20 @@
       throw new Error("Paginated conversation API returned no messages");
     } catch (error) {
       lastError = error;
-      if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
+      if (!shouldFallbackToLegacyConversation(error)) throw error;
     }
     try {
       return complete(await request(`${base}?include_full_conversation=true`));
     } catch (error) {
       lastError = error;
-      if (signal?.aborted || isAbortError(error) || isRateLimited(error)) throw error;
+      if (!shouldFallbackToLegacyConversation(error)) throw error;
     }
     for (const url of [base, `${base}?offset=0&limit=100000`]) {
       try {
         return complete(await request(url));
       } catch (error) {
         lastError = error;
-        if (signal?.aborted) throw error;
+        if (!shouldFallbackToLegacyConversation(error)) throw error;
       }
     }
     throw lastError;
@@ -189,6 +202,9 @@
     if (!conversationId) return null;
     return fetchConversation(conversationId, signal);
   }
+  function abortError2() {
+    return new DOMException("Aborted", "AbortError");
+  }
   async function chatgptApi(path, init = {}) {
     const headers = new Headers(init.headers);
     headers.set("Accept", headers.get("Accept") ?? "application/json");
@@ -201,7 +217,22 @@
     if (accountId && !headers.has("Chatgpt-Account-Id")) {
       headers.set("Chatgpt-Account-Id", accountId);
     }
-    return fetch(path, { credentials: "include", cache: "no-store", ...init, headers });
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    init.signal?.addEventListener("abort", abort, { once: true });
+    if (init.signal?.aborted) controller.abort();
+    const timer = setTimeout(abort, 15e3);
+    try {
+      if (controller.signal.aborted && init.signal?.aborted) throw abortError2();
+      return await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
+    } catch (error) {
+      if (init.signal?.aborted) throw abortError2();
+      if (controller.signal.aborted) throw new Error("ChatGPT API timed out");
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", abort);
+    }
   }
   async function fetchConversation(conversationId, signal) {
     const headers = { Accept: "application/json" };
@@ -829,7 +860,7 @@ ${text}
         let offset = 0;
         let reachedEnd = false;
         for (let page = 0; page < maxPages; page++) {
-          if (aborted()) throw abortError2();
+          if (aborted()) throw abortError3();
           if (clock() >= deadline) {
             hitDeadline = true;
             break;
@@ -917,7 +948,7 @@ ${text}
       }
     };
   }
-  function abortError2() {
+  function abortError3() {
     return new DOMException("Aborted", "AbortError");
   }
   function isAbortError2(error) {
@@ -925,17 +956,17 @@ ${text}
   }
 
   // src/conversation/readConversation.ts
-  function abortError3() {
+  function abortError4() {
     return new DOMException("Aborted", "AbortError");
   }
   function isAbortError3(error) {
     return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
   }
   async function readConversation(conversationId, signal) {
-    if (signal?.aborted) throw abortError3();
+    if (signal?.aborted) throw abortError4();
     if (!conversationId) throw new Error("No active ChatGPT conversation");
     const conversation = await fetchCurrentConversation(conversationId, signal);
-    if (signal?.aborted) throw abortError3();
+    if (signal?.aborted) throw abortError4();
     if (!conversation) throw new Error("ChatGPT conversation was not returned");
     const now = Date.now();
     const parsed = await parseConversation(
@@ -966,18 +997,16 @@ ${text}
     dirty = false;
     abortController = null;
     latestSnapshot = null;
+    lastError = null;
     listeners = /* @__PURE__ */ new Set();
     observer = null;
     lastStreamingState = false;
     seenAssistantMessageIds = /* @__PURE__ */ new Set();
     disposed = false;
     published = 0;
-    failures = 0;
     read;
-    retryDelayMs;
     constructor(options = {}) {
       this.read = options.readConversation ?? readConversation;
-      this.retryDelayMs = options.retryDelayMs ?? 800;
     }
     subscribe(listener) {
       this.listeners.add(listener);
@@ -985,7 +1014,7 @@ ${text}
       return () => this.listeners.delete(listener);
     }
     requestSync(_reason) {
-      if (this.disposed) return Promise.reject(abortError3());
+      if (this.disposed) return Promise.reject(abortError4());
       this.dirty = true;
       if (this.runningPromise) return this.runningPromise;
       this.runningPromise = Promise.resolve().then(() => this.runLoop());
@@ -1000,7 +1029,7 @@ ${text}
       this.seenAssistantMessageIds.clear();
       this.lastStreamingState = false;
       this.latestSnapshot = null;
-      this.failures = 0;
+      this.lastError = null;
       if (!conversationId) {
         this.dirty = false;
         void this.publish(null);
@@ -1011,6 +1040,9 @@ ${text}
     }
     getSnapshot() {
       return this.latestSnapshot;
+    }
+    getLastError() {
+      return this.lastError;
     }
     getActiveConversationId() {
       return this.activeConversationId;
@@ -1053,22 +1085,18 @@ ${text}
           const signal = this.abortController.signal;
           try {
             const snapshot = await this.read(conversationId, signal);
-            if (this.disposed || signal.aborted) throw abortError3();
+            if (this.disposed || signal.aborted) throw abortError4();
             if (this.activeConversationId === conversationId && this.generation === generation) {
               snapshot.revision = ++this.published;
-              this.failures = 0;
+              this.lastError = null;
               await this.publish(snapshot);
             }
           } catch (error) {
             if (this.disposed) return;
             if (isAbortError3(error) || this.generation !== generation) continue;
             if (this.activeConversationId === conversationId) {
-              await this.publish(null);
-              this.failures += 1;
-              if (this.failures <= 3) {
-                this.dirty = true;
-                if (this.retryDelayMs > 0) await delay(this.retryDelayMs);
-              }
+              this.lastError = error instanceof Error ? error : new Error(String(error));
+              if (!this.latestSnapshot) await this.publish(null);
             }
           }
         }
@@ -1116,9 +1144,6 @@ ${text}
       if (id) ids.push(id);
     }
     return ids;
-  }
-  function delay(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // src/navigation/config.ts
@@ -3280,6 +3305,34 @@ ${text}
     }
   };
 
+  // src/shared/timeout.ts
+  function withTimeout(promise, timeoutMs, message = "timeout") {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.reject(new Error(message));
+    }
+    let timer;
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  // src/shared/messages.ts
+  var MESSAGE_TIMEOUT_MS = 15e3;
+  var REFRESH_TIMEOUT_MS = 45e3;
+  function sendRuntimeMessage(message, timeoutMs = MESSAGE_TIMEOUT_MS) {
+    return withTimeout(Promise.resolve(chrome.runtime.sendMessage(message)), timeoutMs, "扩展消息超时");
+  }
+
   // src/quota/vibebar/allowances.ts
   var WEEK_SECONDS = 7 * 86400;
   function parsePlanType(value) {
@@ -3360,8 +3413,8 @@ ${text}
       }, 4e3);
     }
     async refreshCurrent() {
-      await this.sync.requestSync("popup");
-      await this.ingestQueue;
+      await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
+      await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
     }
     dispose() {
       this.disposed = true;
@@ -3388,7 +3441,7 @@ ${text}
       const limits = await readModelLimits();
       const classification = classifySnapshot(snapshot);
       const events = snapshot.quotaIsWork ? [] : toEvents(snapshot.quotaTurns, account.identity, classification);
-      await chrome.runtime.sendMessage({
+      await sendRuntimeMessage({
         type: "quota/ingest",
         events,
         plan: account.plan,
@@ -3418,7 +3471,7 @@ ${text}
       });
       if (this.disposed) return;
       const events = toEvents(result.turns, account.identity, "personal");
-      await chrome.runtime.sendMessage({
+      await sendRuntimeMessage({
         type: "quota/ingest",
         events,
         plan: account.plan,

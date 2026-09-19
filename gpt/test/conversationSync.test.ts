@@ -207,21 +207,40 @@ describe("ConversationSync", () => {
     sync.dispose();
   });
 
-  it("retries a failed read and publishes the later snapshot", async () => {
+  it("does not retry a failed read and keeps the last good snapshot", async () => {
     let reads = 0;
     const sync = new ConversationSync({
-      retryDelayMs: 0,
       async readConversation(id) {
         reads += 1;
-        if (reads === 1) throw new Error("not ready");
-        return snapshotFor(id, 2);
+        if (reads === 1) return snapshotFor(id, 2);
+        throw new Error("not ready");
       }
     });
     sync.setActiveConversation("conversation-1");
     await sync.requestSync("init");
-    expect(reads).toBe(2);
-    expect(sync.getSnapshot()?.conversationId).toBe("conversation-1");
     expect(sync.getSnapshot()?.activeTurns).toHaveLength(2);
+    await sync.requestSync("refresh");
+    expect(reads).toBe(2);
+    expect(sync.getSnapshot()?.activeTurns).toHaveLength(2);
+    expect(sync.getLastError()?.message).toBe("not ready");
+    sync.dispose();
+  });
+
+  it("publishes unavailable once when the first read fails", async () => {
+    let reads = 0;
+    const published: Array<string | null> = [];
+    const sync = new ConversationSync({
+      async readConversation() {
+        reads += 1;
+        throw new Error("down");
+      }
+    });
+    sync.subscribe((snapshot) => { published.push(snapshot?.conversationId ?? null); });
+    sync.setActiveConversation("conversation-1");
+    await sync.requestSync("init");
+    expect(reads).toBe(1);
+    expect(sync.getSnapshot()).toBeNull();
+    expect(published.includes(null)).toBe(true);
     sync.dispose();
   });
 });

@@ -1,5 +1,13 @@
 import type { QuotaSnapshot, QuotaUsageEvent } from "../quota/types";
 import type { ChatGPTChatModelLimit, ChatPlan } from "../quota/vibebar/types";
+import { withTimeout } from "./timeout";
+
+export const MESSAGE_TIMEOUT_MS = 15_000;
+export const REFRESH_TIMEOUT_MS = 45_000;
+
+export function sendRuntimeMessage<T>(message: unknown, timeoutMs = MESSAGE_TIMEOUT_MS): Promise<T> {
+  return withTimeout(Promise.resolve(chrome.runtime.sendMessage(message)), timeoutMs, "扩展消息超时");
+}
 
 export type QuotaIngest = {
   type: "quota/ingest";
