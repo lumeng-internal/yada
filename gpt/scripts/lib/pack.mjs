@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join, relative, resolve } from "node:path";
 
@@ -40,6 +40,7 @@ export function zipDist({ projectRoot, zipName, distDir = "dist_chrome" }) {
 export function zipMatchesDist(projectRoot, zipName, distDir = resolve(projectRoot, "dist_chrome")) {
   const extractDir = resolve(projectRoot, "artifacts/candidate/.zip-compare");
   rmSync(extractDir, { recursive: true, force: true });
+  mkdirSync(extractDir, { recursive: true });
   execFileSync("unzip", ["-q", zipName, "-d", extractDir], { cwd: projectRoot });
   const zipped = distFileMap(resolve(extractDir, "dist_chrome"));
   const dist = distFileMap(distDir);
