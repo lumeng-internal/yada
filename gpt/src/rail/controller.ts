@@ -1,6 +1,7 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
 import type { NavigatorController } from "../navigation/navigatorController";
+import { NATIVE_NAV_CONFIG } from "../navigation/config";
 import { findScrollRoot, readVisibleUserMessageId, type ScrollRoot } from "./active";
 import { placeRail } from "./layout";
 import { RailView } from "./view";
@@ -14,6 +15,8 @@ export class YadaRailController {
   private raf = 0;
   private jumping = false;
   private jumpGeneration = 0;
+  private jumpTarget: string | null = null;
+  private failTimer = 0;
 
   constructor(
     private readonly sync: ConversationSync,
@@ -36,8 +39,13 @@ export class YadaRailController {
 
   clear(): void {
     this.snapshot = null;
+    this.jumping = false;
+    this.jumpTarget = null;
+    window.clearTimeout(this.failTimer);
     this.view.setTurns([]);
     this.view.clearHover();
+    this.view.setPending(null);
+    this.view.setFailed(null);
   }
 
   dispose(): void {
@@ -45,6 +53,7 @@ export class YadaRailController {
     this.unsubscribe?.();
     this.unsubscribe = null;
     window.cancelAnimationFrame(this.raf);
+    window.clearTimeout(this.failTimer);
     window.removeEventListener("resize", this.onLayout);
     window.removeEventListener("scroll", this.onScroll, true);
     this.root?.removeEventListener("scroll", this.onScroll);
@@ -58,31 +67,48 @@ export class YadaRailController {
     this.view.setTurns(turns);
     if (turns.length) {
       this.layout();
-      this.syncActive();
+      if (!this.jumping) this.syncActive();
     }
   }
 
   private async jump(turnId: string): Promise<void> {
+    if (this.jumping && this.jumpTarget === turnId) return;
     const generation = ++this.jumpGeneration;
-    this.navigator.cancel();
+    this.jumpTarget = turnId;
+    window.clearTimeout(this.failTimer);
+    this.view.setFailed(null);
     this.jumping = true;
-    this.view.setStatus("定位中");
+    const index = this.turnIndex(turnId);
+    this.view.setPending(index);
     try {
       const result = await this.navigator.navigateTo(turnId);
       if (generation !== this.jumpGeneration) return;
-      if (result.status === "cancelled") {
-        this.view.setStatus("");
+      this.view.setPending(null);
+      if (!result.ok && result.status === "cancelled") {
+        this.syncActive();
         return;
       }
       if (!result.ok) {
-        this.view.setStatus("定位失败");
+        this.view.setFailed(index);
+        this.failTimer = window.setTimeout(() => {
+          if (generation !== this.jumpGeneration) return;
+          this.view.setFailed(null);
+          this.syncActive();
+        }, NATIVE_NAV_CONFIG.failStyleMs);
         return;
       }
-      this.view.setStatus("");
-      this.syncActive();
+      if (index >= 0) this.view.setActive(index);
     } finally {
-      if (generation === this.jumpGeneration) this.jumping = false;
+      if (generation === this.jumpGeneration) {
+        this.jumping = false;
+        this.jumpTarget = null;
+      }
     }
+  }
+
+  private turnIndex(turnId: string): number {
+    const turns = this.snapshot?.activeTurns ?? [];
+    return turns.findIndex((turn) => turn.id === turnId || turn.userMessageId === turnId);
   }
 
   private readonly onLayout = (): void => {
@@ -103,6 +129,7 @@ export class YadaRailController {
   }
 
   private syncActive(): void {
+    if (this.jumping) return;
     const turns = this.snapshot?.activeTurns ?? [];
     if (!turns.length) return;
     this.root = findScrollRoot();

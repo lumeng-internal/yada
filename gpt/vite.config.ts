@@ -4,11 +4,9 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type UserConfig } from "vite";
 
 const rootDir = dirname(fileURLToPath(import.meta.url));
-const alias = { "@": resolve(rootDir, "vendor/luna-navigation/src") };
 
 function extensionEntry(name: string, input: string, emptyOutDir: boolean): UserConfig {
   return {
-    resolve: { alias },
     publicDir: false,
     build: {
       outDir: "dist_chrome",

@@ -336,6 +336,65 @@
     '[contenteditable="true"]',
     ".ProseMirror"
   ].join(", ");
+  function isComposerElement(element) {
+    if (!(element instanceof Element)) return false;
+    if (element.matches(DIRECT_COMPOSER_SELECTOR)) return true;
+    const className = String(element.getAttribute("class") ?? "");
+    if (/\bProseMirror\b/i.test(className) && hasComposerAncestor(element)) return true;
+    if (/prompt/i.test(className) && hasComposerEvidence(element)) return true;
+    if (isStickyBottomComposerContainer(element)) return true;
+    return false;
+  }
+  function isInsideComposer(element) {
+    if (!(element instanceof Element)) return false;
+    if (element.closest(DIRECT_COMPOSER_SELECTOR)) return true;
+    let current = element;
+    while (current && current !== document.documentElement) {
+      if (isComposerElement(current)) return true;
+      current = current.parentElement;
+    }
+    return false;
+  }
+  function hasUnsentComposerDraft(root = document) {
+    try {
+      for (const node of root.querySelectorAll(DRAFT_CONTROL_SELECTOR)) {
+        if (!(node instanceof HTMLElement)) continue;
+        if (!isComposerElement(node) && !isInsideComposer(node)) continue;
+        if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+          if (node.value.trim()) return true;
+          continue;
+        }
+        if ((node.innerText || node.textContent || "").trim()) return true;
+      }
+    } catch {
+      return false;
+    }
+    return false;
+  }
+  function hasComposerAncestor(element) {
+    return Boolean(element.closest([
+      "form",
+      "#prompt-textarea",
+      '[id*="prompt-textarea" i]',
+      '[data-testid*="composer" i]',
+      '[data-testid*="prompt-textarea" i]',
+      '[class*="composer" i]',
+      '[class*="prompt-textarea" i]'
+    ].join(", ")));
+  }
+  function hasComposerEvidence(element) {
+    return hasComposerAncestor(element) || Boolean(element.querySelector(DRAFT_CONTROL_SELECTOR)) || isStickyBottomComposerContainer(element);
+  }
+  function isStickyBottomComposerContainer(element) {
+    if (!(element instanceof HTMLElement)) return false;
+    if (!element.querySelector(DRAFT_CONTROL_SELECTOR)) return false;
+    const style = window.getComputedStyle(element);
+    const rect = element.getBoundingClientRect();
+    const nearBottom = rect.bottom >= window.innerHeight - 180 && rect.top >= window.innerHeight * 0.35;
+    const compactEnough = rect.height > 0 && rect.height <= Math.max(460, window.innerHeight * 0.55);
+    const positionedAtBottom = style.position === "fixed" || style.position === "sticky";
+    return (positionedAtBottom || nearBottom) && compactEnough;
+  }
 
   // src/conversation/attachmentSummary.ts
   var FILE_EXTENSION_LABELS = [
@@ -1146,2140 +1205,613 @@ ${text}
     return ids;
   }
 
+  // src/navigation/nativeCapability.ts
+  var CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR = [
+    `main [class$="_convSearchResultHighlightRoot"]`,
+    `main [class*="_convSearchResultHighlightRoot "]`
+  ].join(",");
+  var CHATGPT_OFFICIAL_NAV_FIXED_CHILD_SELECTOR = [
+    "fixed",
+    "inset-e-4",
+    "top-1/2",
+    "z-20",
+    "-translate-y-1/2"
+  ];
+  var CANCEL_KEYS = /* @__PURE__ */ new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " ", "Space"]);
+  function cssEscape(value) {
+    return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"');
+  }
+  function isOfficialFixedChild(element) {
+    return element instanceof HTMLElement && CHATGPT_OFFICIAL_NAV_FIXED_CHILD_SELECTOR.every((token) => element.classList.contains(token)) && !element.closest("[data-yada-root]");
+  }
+  function listOfficialNavigationRoots(root = document) {
+    return [...root.querySelectorAll(CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR)].filter((node) => [...node.children].some(isOfficialFixedChild));
+  }
+  function parsePromptNumber(button) {
+    const toc = button.dataset.tocItemIndex;
+    if (toc != null && /^\d+$/.test(toc)) return Number(toc);
+    const label = button.getAttribute("aria-label") ?? "";
+    const description = button.getAttribute("aria-description") ?? "";
+    const match = /Prompt\s+(\d+)/i.exec(label) || /Prompt\s+(\d+)/i.exec(description);
+    return match ? Number(match[1]) : null;
+  }
+  function readOfficialButtonsFromRoot(root) {
+    const fixed = [...root.children].find(isOfficialFixedChild);
+    if (!fixed) return null;
+    const buttons = [...fixed.querySelectorAll("button")].filter((node) => node instanceof HTMLButtonElement);
+    if (!buttons.length) return null;
+    const parsed = buttons.map((element) => ({ element, raw: parsePromptNumber(element) }));
+    if (parsed.some((item) => item.raw == null)) return null;
+    const values = parsed.map((item) => item.raw);
+    if (new Set(values).size !== values.length) return null;
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const zeroBased = min === 0 && max === values.length - 1;
+    const oneBased = min === 1 && max === values.length;
+    if (!zeroBased && !oneBased) return null;
+    const offset = oneBased ? 1 : 0;
+    return parsed.map((item) => ({ element: item.element, index: item.raw - offset })).sort((left, right) => left.index - right.index);
+  }
+  function collectOfficialButtons(root = document) {
+    const navRoots = listOfficialNavigationRoots(root);
+    if (navRoots.length !== 1) return [];
+    return readOfficialButtonsFromRoot(navRoots[0]) ?? [];
+  }
+  function isOfficialNavigationComplete(expectedTurnCount, conversationId, root = document) {
+    if (expectedTurnCount <= 0) return false;
+    const pageId = getConversationIdFromUrl();
+    if (pageId && pageId !== conversationId) return false;
+    const buttons = collectOfficialButtons(root);
+    if (buttons.length !== expectedTurnCount) return false;
+    return buttons.every((button, index) => button.index === index);
+  }
+  function isEphemeralTurnIndexMarker(id) {
+    return /^conversation-turn-\d+$/i.test(id.trim());
+  }
+  function slotRole(slot) {
+    const known = /* @__PURE__ */ new Set();
+    if (slot.matches('[data-message-author-role="user"]')) known.add("user");
+    if (slot.matches('[data-message-author-role="assistant"]')) known.add("assistant");
+    for (const node of slot.querySelectorAll("[data-message-author-role]")) {
+      const role = node.getAttribute("data-message-author-role");
+      if (role === "user" || role === "assistant") known.add(role);
+    }
+    if (known.size === 1) return [...known][0];
+    return "unknown";
+  }
+  function collectStableSlots(root = document) {
+    const containers = [...root.querySelectorAll("[data-turn-id-container]")];
+    const groups = /* @__PURE__ */ new Map();
+    for (const container of containers) {
+      const parent = container.parentElement;
+      if (!parent) continue;
+      const group = groups.get(parent);
+      if (group) group.push(container);
+      else groups.set(parent, [container]);
+    }
+    const largest = [...groups.values()].sort((left, right) => right.length - left.length)[0] ?? [];
+    const seen = /* @__PURE__ */ new Map();
+    const duplicates = /* @__PURE__ */ new Set();
+    for (const element of largest) {
+      const id = element.getAttribute("data-turn-id-container")?.trim() ?? "";
+      if (!id || id === "client-created-root" || isEphemeralTurnIndexMarker(id)) continue;
+      if (duplicates.has(id)) continue;
+      if (seen.has(id)) {
+        seen.delete(id);
+        duplicates.add(id);
+        continue;
+      }
+      seen.set(id, element);
+    }
+    return [...seen.entries()].map(([id, element]) => ({ id, element, role: slotRole(element) }));
+  }
+  function isStableSlotsComplete(turns, root = document) {
+    if (!turns.length) return false;
+    const slots = collectStableSlots(root);
+    if (slots.length < turns.length) return false;
+    return turns.every((turn) => resolveStableSlot(turn, slots) != null);
+  }
+  function resolveStableSlot(turn, slots) {
+    const byId = new Map(slots.map((slot) => [slot.id, slot]));
+    const user = turn.userMessageId ? byId.get(turn.userMessageId) : void 0;
+    if (user && (user.role === "user" || user.role === "unknown")) return user.element;
+    const round = byId.get(turn.id);
+    if (round && (round.role === "user" || round.role === "unknown")) return round.element;
+    const assistant = turn.assistantMessageId ? byId.get(turn.assistantMessageId) : void 0;
+    if (assistant && (assistant.role === "assistant" || assistant.role === "unknown") && !user) {
+      return assistant.element;
+    }
+    return null;
+  }
+  function countMountedUserMessages(root = document) {
+    let count = 0;
+    for (const node of root.querySelectorAll('[data-message-author-role="user"][data-message-id]')) {
+      if (isInsideComposer(node)) continue;
+      if (node.dataset.messageId) count += 1;
+    }
+    return count;
+  }
+  function findMountedUserMessage(messageId, root = document) {
+    const exact = root.querySelector(`[data-message-author-role="user"][data-message-id="${cssEscape(messageId)}"]`);
+    if (exact && !isInsideComposer(exact) && readMessageId(exact) === messageId) return exact;
+    for (const node of root.querySelectorAll("[data-message-id]")) {
+      if (isInsideComposer(node)) continue;
+      if (readMessageId(node) !== messageId) continue;
+      const role = node.getAttribute("data-message-author-role") ?? node.querySelector("[data-message-author-role]")?.getAttribute("data-message-author-role");
+      if (role === "user") return node;
+    }
+    return null;
+  }
+  function readMessageId(element) {
+    return element.dataset.messageId ?? element.closest("[data-message-id]")?.dataset.messageId ?? null;
+  }
+  function scrollElementIntoView(element) {
+    if (typeof element.scrollIntoView !== "function") return;
+    try {
+      element.scrollIntoView({ behavior: "auto", block: "start" });
+    } catch {
+    }
+  }
+  function isInViewport(element) {
+    const rect = element.getBoundingClientRect();
+    if (!element.isConnected) return false;
+    if (rect.width === 0 && rect.height === 0 && rect.top === 0 && rect.left === 0) return true;
+    const height = window.innerHeight || 800;
+    return rect.bottom > 8 && rect.top < height - 8;
+  }
+  function isChatGptGenerating(root = document) {
+    return Boolean(
+      root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming, button[data-testid="stop-button"]')
+    );
+  }
+  function composerHasDraft() {
+    return hasUnsentComposerDraft();
+  }
+  function attachUserNavigationCancel(abort) {
+    const onWheel = () => abort();
+    const onTouch = () => abort();
+    const onPointer = (event) => {
+      if (event.pointerType === "mouse" && event.buttons === 0) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("[data-yada-root]")) return;
+      abort();
+    };
+    const onKey = (event) => {
+      if (CANCEL_KEYS.has(event.key)) abort();
+    };
+    window.addEventListener("wheel", onWheel, { passive: true, capture: true });
+    window.addEventListener("touchstart", onTouch, { passive: true, capture: true });
+    window.addEventListener("touchmove", onTouch, { passive: true, capture: true });
+    window.addEventListener("pointerdown", onPointer, { capture: true });
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => {
+      window.removeEventListener("wheel", onWheel, true);
+      window.removeEventListener("touchstart", onTouch, true);
+      window.removeEventListener("touchmove", onTouch, true);
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("keydown", onKey, true);
+    };
+  }
+  function readNativeCapability(turns, conversationId, root = document) {
+    const officialButtons = collectOfficialButtons(root);
+    const slots = collectStableSlots(root);
+    return {
+      officialButtonCount: officialButtons.length,
+      officialComplete: isOfficialNavigationComplete(turns.length, conversationId, root),
+      slotCount: slots.length,
+      slotsComplete: isStableSlotsComplete(turns, root),
+      mountedUserCount: countMountedUserMessages(root),
+      generating: isChatGptGenerating(root),
+      composerDraft: composerHasDraft()
+    };
+  }
+
+  // src/navigation/nativePreparation.ts
+  var defaultHost = {
+    getSession(key) {
+      try {
+        return sessionStorage.getItem(key);
+      } catch {
+        return null;
+      }
+    },
+    setSession(key, value) {
+      try {
+        sessionStorage.setItem(key, value);
+      } catch {
+      }
+    },
+    locationHref: () => location.href,
+    assign: (url) => {
+      location.assign(url);
+    },
+    replaceUrl: (url) => {
+      history.replaceState(history.state, "", url);
+    }
+  };
+  function nativePrepKey(conversationId) {
+    return `chatgpt-yada:native-prepared:${conversationId}`;
+  }
+  function readNativePrepState(conversationId, host = defaultHost) {
+    const value = host.getSession(nativePrepKey(conversationId));
+    if (value === "attempted" || value === "ready" || value === "unsupported") return value;
+    return "unseen";
+  }
+  function writeNativePrepState(conversationId, state, host = defaultHost) {
+    host.setSession(nativePrepKey(conversationId), state);
+  }
+  function messageQueryValue(href) {
+    try {
+      const url = new URL(href, "https://chatgpt.com");
+      if (!url.searchParams.has("message")) return null;
+      return url.searchParams.get("message") ?? "";
+    } catch {
+      return null;
+    }
+  }
+  function hasNonEmptyMessageQuery(href) {
+    const value = messageQueryValue(href);
+    return value != null && value !== "";
+  }
+  function hasEmptyMessageQuery(href) {
+    return messageQueryValue(href) === "";
+  }
+  function withEmptyMessageTrigger(href) {
+    if (hasNonEmptyMessageQuery(href)) return null;
+    try {
+      const url = new URL(href, "https://chatgpt.com");
+      url.searchParams.set("message", "");
+      return url.toString();
+    } catch {
+      return null;
+    }
+  }
+  function stripEmptyMessageQuery(href) {
+    try {
+      const url = new URL(href, "https://chatgpt.com");
+      if (url.searchParams.get("message") === "") url.searchParams.delete("message");
+      return url.toString();
+    } catch {
+      return href;
+    }
+  }
+  function shouldAttemptNativePreparation(turns, capability) {
+    if (!turns.length) return false;
+    if (capability.generating || capability.composerDraft) return false;
+    if (capability.officialComplete || capability.slotsComplete) return false;
+    return turns.length > capability.mountedUserCount;
+  }
+  function decideNativePreparation(conversationId, turns, href, capability, host = defaultHost) {
+    const state = readNativePrepState(conversationId, host);
+    if (hasNonEmptyMessageQuery(href)) return { action: "none", state };
+    if (state === "ready" || state === "unsupported") return { action: "none", state };
+    const complete = capability.officialComplete || capability.slotsComplete;
+    if (state === "attempted") {
+      if (complete) {
+        writeNativePrepState(conversationId, "ready", host);
+        return { action: "ready", state: "ready", url: stripEmptyMessageQuery(href) };
+      }
+      if (!hasEmptyMessageQuery(href)) return { action: "none", state: "attempted" };
+      writeNativePrepState(conversationId, "unsupported", host);
+      return { action: "unsupported", state: "unsupported" };
+    }
+    if (hasEmptyMessageQuery(href)) {
+      writeNativePrepState(conversationId, "attempted", host);
+      if (complete) {
+        writeNativePrepState(conversationId, "ready", host);
+        return { action: "ready", state: "ready", url: stripEmptyMessageQuery(href) };
+      }
+      writeNativePrepState(conversationId, "unsupported", host);
+      return { action: "unsupported", state: "unsupported" };
+    }
+    if (!shouldAttemptNativePreparation(turns, capability)) return { action: "none", state: "unseen" };
+    const next = withEmptyMessageTrigger(href);
+    if (!next) return { action: "none", state: "unseen" };
+    writeNativePrepState(conversationId, "attempted", host);
+    return { action: "assign", state: "attempted", url: next };
+  }
+  var NativePreparationController = class {
+    constructor(host = defaultHost) {
+      this.host = host;
+    }
+    evaluate(conversationId, turns) {
+      if (!conversationId || !turns.length) return { action: "none", state: "unseen" };
+      const href = this.host.locationHref();
+      const capability = readNativeCapability(turns, conversationId);
+      const decision = decideNativePreparation(conversationId, turns, href, capability, this.host);
+      if (decision.action === "assign") this.host.assign(decision.url);
+      if (decision.action === "ready") this.host.replaceUrl(decision.url);
+      return decision;
+    }
+    blockedByPage(turns, conversationId) {
+      return isChatGptGenerating() || composerHasDraft() || !turns.length || !conversationId;
+    }
+  };
+
   // src/navigation/config.ts
-  var NAVIGATION_CONFIG = {
-    promptTopOffsetPx: 16,
-    fingerprint: {
-      countPerAssistant: 3,
-      probeLength: 40,
-      verificationLength: 256,
-      segmentViewportRatio: 0.75,
-      segmentOverlapRatio: 0.15,
-      estimatedCharsPerVisualLine: 60,
-      estimatedRowsPerViewport: 30,
-      maximumSegmentsPerAssistant: 20,
-      buildBatchSize: 10,
-      buildTimeBudgetMs: 8,
-      observationDebounceMs: 750
-    },
-    anchorCache: {
-      maxConversations: 50,
-      maxAnchorsPerConversation: 100,
-      maxAgeMs: 30 * 24 * 60 * 60 * 1e3,
-      viewportWidthTolerance: 48
-    },
-    search: {
-      maxAttempts: 32,
-      maxUnproductiveAttempts: 6,
-      renderWaitMs: 80,
-      maxDurationMs: 3e4,
-      edgeBackfillWaitMs: 1200,
-      maximumWindowSlideCycles: 16,
-      interpolationFailuresBeforeBinary: 2,
-      relativeViewportRatio: 0.75,
-      minimumRelativeViewportRatio: 0.25,
-      maximumRelativeViewportCount: 16,
-      maximumLearnedRelativeViewportCount: 64,
-      nearTargetPromptDistance: 4,
-      maximumNearTargetViewportCount: 8,
-      stalledStepGrowthRatio: 1.5,
-      crossingStepRatio: 0.5,
-      promptMountScanViewportRatio: 0.2,
-      minimumPromptMountViewportRatio: 0.05,
-      maximumPromptMountViewportCount: 2,
-      promptMountStepGrowthRatio: 1.5,
-      promptMountCrossingStepRatio: 0.5,
-      maximumPromptMountAttempts: 12
-    }
-  };
-  var APP_CONFIG = {
-    platforms: {
-      chatgpt: {
-        promptTopOffsetPx: NAVIGATION_CONFIG.promptTopOffsetPx,
-        settleAttempts: 3
-      }
-    },
-    navigation: {
-      fingerprint: NAVIGATION_CONFIG.fingerprint,
-      anchorCache: NAVIGATION_CONFIG.anchorCache,
-      search: NAVIGATION_CONFIG.search
-    }
+  var NATIVE_NAV_CONFIG = {
+    timeoutMs: 15e3,
+    directSettleMs: 48,
+    pollMs: 32,
+    alignmentQuietMs: 80,
+    alignmentTolerancePx: 8,
+    maxAlignmentAttempts: 2,
+    failStyleMs: 1500
   };
 
-  // vendor/luna-navigation/src/navigation/jump/navigationAnchorStore.ts
-  var CACHE_VERSION = 2;
-  var DEFAULT_STORAGE_KEY = "chatToc:navigationAnchors";
-  function createNavigationAnchorStore(options = {}) {
-    const config = APP_CONFIG.navigation.anchorCache;
-    const storage = options.storage || createChromeNavigationAnchorStorage();
-    const now = options.now || Date.now;
-    const maxConversations = options.maxConversations ?? config.maxConversations;
-    const maxAnchorsPerConversation = options.maxAnchorsPerConversation ?? config.maxAnchorsPerConversation;
-    const maxAgeMs = options.maxAgeMs ?? config.maxAgeMs;
-    const viewportWidthTolerance = options.viewportWidthTolerance ?? config.viewportWidthTolerance;
-    const observedByConversation = /* @__PURE__ */ new Map();
-    let persistentCachePromise = null;
-    function recordObservation(input) {
-      const anchor = createNavigationAnchor(input, now());
-      const conversationAnchors = observedByConversation.get(anchor.conversationKey) || /* @__PURE__ */ new Map();
-      conversationAnchors.set(anchor.promptId, anchor);
-      observedByConversation.set(anchor.conversationKey, conversationAnchors);
-      return cloneAnchor(anchor);
+  // src/navigation/diagnostics.ts
+  var DEBUG_KEY = "chatgpt-yada:nav-debug";
+  function isNavDebugEnabled() {
+    try {
+      return localStorage.getItem(DEBUG_KEY) === "1";
+    } catch {
+      return false;
     }
-    function getObservedAnchors(conversationKey) {
-      return sortAnchors(
-        [...observedByConversation.get(conversationKey)?.values() || []].map(
-          cloneAnchor
-        )
-      );
+  }
+  function publishNavigationDiagnostics(snapshot) {
+    if (!isNavDebugEnabled() || !snapshot) {
+      delete globalThis.__YADA_NAV_DIAGNOSTICS__;
+      return;
     }
-    async function recordConfirmed(input) {
-      const anchor = createNavigationAnchor(input, now());
-      const cache = await getPersistentCache();
-      const conversation = cache.conversations[anchor.conversationKey] || {
-        lastUsedAt: anchor.updatedAt,
-        anchors: []
-      };
-      const nextAnchors = conversation.anchors.filter(
-        ({ promptId }) => promptId !== anchor.promptId
-      );
-      nextAnchors.push(anchor);
-      conversation.lastUsedAt = anchor.updatedAt;
-      conversation.anchors = keepMostRecent(
-        nextAnchors,
-        maxAnchorsPerConversation
-      );
-      cache.conversations[anchor.conversationKey] = conversation;
-      prunePersistentCache(cache, now(), {
-        maxAgeMs,
-        maxConversations
-      });
-      await storage.write(clonePersistentCache(cache));
-      return cloneAnchor(anchor);
-    }
-    async function findConfirmed(query) {
-      const cache = await getPersistentCache();
-      const currentTime = now();
-      const conversation = cache.conversations[query.conversationKey];
-      if (!conversation) return null;
-      const anchor = conversation.anchors.find(
-        (candidate) => candidate.promptId === query.promptId && candidate.promptIndex === query.promptIndex && currentTime - candidate.updatedAt <= maxAgeMs && Math.abs(candidate.viewportWidth - query.viewportWidth) <= viewportWidthTolerance
-      );
-      return anchor ? cloneAnchor(anchor) : null;
-    }
-    async function removeConfirmed(conversationKey, promptId) {
-      const cache = await getPersistentCache();
-      const conversation = cache.conversations[conversationKey];
-      if (!conversation) return false;
-      const nextAnchors = conversation.anchors.filter(
-        (anchor) => anchor.promptId !== promptId
-      );
-      if (nextAnchors.length === conversation.anchors.length) return false;
-      if (nextAnchors.length === 0) {
-        delete cache.conversations[conversationKey];
-      } else {
-        conversation.anchors = nextAnchors;
-        conversation.lastUsedAt = now();
-      }
-      await storage.write(clonePersistentCache(cache));
-      return true;
-    }
-    async function getConfirmedAnchors(conversationKey) {
-      const cache = await getPersistentCache();
-      const currentTime = now();
-      const anchors = cache.conversations[conversationKey]?.anchors || [];
-      return sortAnchors(
-        anchors.filter((anchor) => currentTime - anchor.updatedAt <= maxAgeMs).map(cloneAnchor)
-      );
-    }
-    async function getPersistentCache() {
-      persistentCachePromise ||= storage.read().then((value) => {
-        const cache = parsePersistentCache(value);
-        prunePersistentCache(cache, now(), {
-          maxAgeMs,
-          maxConversations
-        });
-        return cache;
-      });
-      return persistentCachePromise;
-    }
-    return {
-      recordObservation,
-      getObservedAnchors,
-      recordConfirmed,
-      removeConfirmed,
-      findConfirmed,
-      getConfirmedAnchors
-    };
-  }
-  function createChromeNavigationAnchorStorage(storageKey = DEFAULT_STORAGE_KEY) {
-    return {
-      async read() {
-        const localStorage = getChromeLocalStorage();
-        if (!localStorage) return void 0;
-        try {
-          const values = await localStorage.get(storageKey);
-          return values[storageKey];
-        } catch {
-          return void 0;
-        }
-      },
-      async write(value) {
-        const localStorage = getChromeLocalStorage();
-        if (!localStorage) return;
-        try {
-          await localStorage.set({ [storageKey]: value });
-        } catch {
-        }
-      }
-    };
-  }
-  function getChromeLocalStorage() {
-    if (typeof chrome === "undefined" || !chrome.storage?.local) return null;
-    return chrome.storage.local;
-  }
-  function createNavigationAnchor(input, updatedAt = Date.now()) {
-    const maximumScrollTop = Math.max(
-      0,
-      input.scrollHeight - input.viewportHeight
-    );
-    const scrollTop = clamp(input.scrollTop, 0, maximumScrollTop);
-    return {
-      conversationKey: input.conversationKey,
-      promptId: input.promptId,
-      promptIndex: Math.max(0, Math.trunc(input.promptIndex)),
-      scrollTop,
-      scrollHeight: Math.max(0, input.scrollHeight),
-      viewportWidth: Math.max(0, input.viewportWidth),
-      viewportHeight: Math.max(0, input.viewportHeight),
-      scrollProgress: maximumScrollTop > 0 ? scrollTop / maximumScrollTop : 0,
-      updatedAt
-    };
-  }
-  function parsePersistentCache(value) {
-    if (!isRecord(value) || value.version !== CACHE_VERSION) {
-      return createEmptyPersistentCache();
-    }
-    const conversationsValue = value.conversations;
-    if (!isRecord(conversationsValue)) return createEmptyPersistentCache();
-    const conversations = {};
-    Object.entries(conversationsValue).forEach(
-      ([conversationKey, conversationValue]) => {
-        if (!isRecord(conversationValue)) return;
-        const lastUsedAt = conversationValue.lastUsedAt;
-        const anchorsValue = conversationValue.anchors;
-        if (typeof lastUsedAt !== "number" || !Array.isArray(anchorsValue)) {
-          return;
-        }
-        const anchors = anchorsValue.filter(isNavigationAnchor).map(cloneAnchor);
-        if (anchors.length === 0) return;
-        conversations[conversationKey] = {
-          lastUsedAt,
-          anchors
-        };
-      }
-    );
-    return {
-      version: CACHE_VERSION,
-      conversations
-    };
-  }
-  function prunePersistentCache(cache, currentTime, limits) {
-    Object.entries(cache.conversations).forEach(
-      ([conversationKey, conversation]) => {
-        conversation.anchors = conversation.anchors.filter(
-          ({ updatedAt }) => currentTime - updatedAt <= limits.maxAgeMs
-        );
-        if (conversation.anchors.length === 0) {
-          delete cache.conversations[conversationKey];
-        }
-      }
-    );
-    const retainedConversations = Object.entries(cache.conversations).sort(
-      ([, first], [, second]) => second.lastUsedAt - first.lastUsedAt
-    ).slice(0, Math.max(0, limits.maxConversations));
-    cache.conversations = Object.fromEntries(retainedConversations);
-  }
-  function keepMostRecent(anchors, limit) {
-    return [...anchors].sort((first, second) => second.updatedAt - first.updatedAt).slice(0, Math.max(0, limit));
-  }
-  function sortAnchors(anchors) {
-    return anchors.sort(
-      (first, second) => first.promptIndex - second.promptIndex || first.updatedAt - second.updatedAt
-    );
-  }
-  function isNavigationAnchor(value) {
-    if (!isRecord(value)) return false;
-    return typeof value.conversationKey === "string" && typeof value.promptId === "string" && [
-      value.promptIndex,
-      value.scrollTop,
-      value.scrollHeight,
-      value.viewportWidth,
-      value.viewportHeight,
-      value.scrollProgress,
-      value.updatedAt
-    ].every((field) => typeof field === "number" && Number.isFinite(field));
-  }
-  function isRecord(value) {
-    return typeof value === "object" && value !== null;
-  }
-  function createEmptyPersistentCache() {
-    return {
-      version: CACHE_VERSION,
-      conversations: {}
-    };
-  }
-  function cloneAnchor(anchor) {
-    return { ...anchor };
-  }
-  function clonePersistentCache(cache) {
-    return {
-      version: cache.version,
-      conversations: Object.fromEntries(
-        Object.entries(cache.conversations).map(
-          ([conversationKey, conversation]) => [
-            conversationKey,
-            {
-              lastUsedAt: conversation.lastUsedAt,
-              anchors: conversation.anchors.map(cloneAnchor)
-            }
-          ]
-        )
-      )
-    };
-  }
-  function clamp(value, minimum, maximum) {
-    return Math.min(Math.max(value, minimum), maximum);
+    globalThis.__YADA_NAV_DIAGNOSTICS__ = snapshot;
   }
 
-  // vendor/luna-navigation/src/navigation/jump/relativeSearchPlanner.ts
-  function planRelativeSearch({
-    targetPromptIndex,
-    currentSample,
-    previousSample,
-    lastScrollDelta,
-    maximumScrollTop,
-    viewportHeight
-  }) {
-    const viewport2 = Math.max(1, viewportHeight);
-    const logicalDelta = targetPromptIndex - currentSample.logicalPosition;
-    const direction = logicalDelta >= 0 ? 1 : -1;
-    const distance = Math.abs(logicalDelta);
-    const config = APP_CONFIG.navigation.search;
-    const defaultMovementLimit = config.maximumRelativeViewportCount * viewport2;
-    let movementLimit = defaultMovementLimit;
-    let planningBasis = "distance-default";
-    let estimatedPixelsPerPrompt = null;
-    let movement = clamp2(
-      distance * config.relativeViewportRatio * viewport2,
-      config.minimumRelativeViewportRatio * viewport2,
-      movementLimit
-    );
-    if (previousSample) {
-      const previousLogicalDelta = targetPromptIndex - previousSample.logicalPosition;
-      const crossedTarget = previousLogicalDelta !== 0 && Math.sign(previousLogicalDelta) !== Math.sign(logicalDelta);
-      const observedPromptDelta = Math.abs(
-        currentSample.logicalPosition - previousSample.logicalPosition
-      );
-      const observedScrollDelta = Math.abs(
-        currentSample.scrollTop - previousSample.scrollTop
-      );
-      if (crossedTarget && lastScrollDelta !== null) {
-        planningBasis = "target-crossing";
-        movement = Math.max(
-          config.minimumRelativeViewportRatio * viewport2,
-          Math.abs(lastScrollDelta) * config.crossingStepRatio
-        );
-      } else if (observedPromptDelta > 0 && observedScrollDelta > 0) {
-        planningBasis = "learned-rate";
-        estimatedPixelsPerPrompt = observedScrollDelta / observedPromptDelta;
-        movementLimit = distance <= config.nearTargetPromptDistance ? config.maximumNearTargetViewportCount * viewport2 : config.maximumLearnedRelativeViewportCount * viewport2;
-        movement = clamp2(
-          distance * estimatedPixelsPerPrompt,
-          config.minimumRelativeViewportRatio * viewport2,
-          movementLimit
-        );
-      } else if (lastScrollDelta !== null) {
-        planningBasis = "stalled-growth";
-        movement = clamp2(
-          Math.abs(lastScrollDelta) * config.stalledStepGrowthRatio,
-          config.minimumRelativeViewportRatio * viewport2,
-          movementLimit
-        );
-      }
-    }
-    return {
-      ...createRelativePlan(
-        targetPromptIndex,
-        currentSample.scrollTop + direction * movement,
-        maximumScrollTop
-      ),
-      planningBasis,
-      estimatedPixelsPerPrompt,
-      movementLimit
-    };
-  }
-  function planPromptMountScan({
-    targetPromptIndex,
-    currentScrollTop,
-    maximumScrollTop,
-    viewportHeight,
-    direction,
-    viewportRatio = APP_CONFIG.navigation.search.promptMountScanViewportRatio
-  }) {
-    const movement = Math.max(1, viewportHeight) * Math.max(0, viewportRatio);
-    return createRelativePlan(
-      targetPromptIndex,
-      currentScrollTop + direction * movement,
-      maximumScrollTop
-    );
-  }
-  function createRelativePlan(targetPromptIndex, scrollTop, maximumScrollTop) {
-    return {
-      method: "linear-probe",
-      targetPromptIndex,
-      scrollTop: clamp2(scrollTop, 0, Math.max(0, maximumScrollTop)),
-      lowerAnchor: null,
-      upperAnchor: null
-    };
-  }
-  function clamp2(value, minimum, maximum) {
-    return Math.min(Math.max(value, minimum), maximum);
-  }
-
-  // vendor/luna-navigation/src/navigation/jump/virtualSearchMachine.ts
-  function createVirtualSearchMachine() {
-    return {
-      phase: "initial-estimate",
-      mountAttempts: 0,
-      mountDirection: null,
-      mountStepViewportRatio: 0
-    };
-  }
-  function advanceVirtualSearchMachine(state, targetResponseLocated) {
-    if (state.phase === "mount-prompt") return state;
-    return targetResponseLocated ? {
-      phase: "mount-prompt",
-      mountAttempts: 0,
-      mountDirection: null,
-      mountStepViewportRatio: 0
-    } : { ...state, phase: "seek-response" };
-  }
-  function updatePromptMountFeedback(state, {
-    targetPromptIndex,
-    logicalPosition,
-    initialDirection,
-    initialStepViewportRatio,
-    minimumStepViewportRatio,
-    maximumStepViewportRatio,
-    growthRatio,
-    crossingRatio
-  }) {
-    if (state.phase !== "mount-prompt") return state;
-    const desiredDirection = logicalPosition === null || logicalPosition >= targetPromptIndex ? initialDirection : initialDirection === 1 ? -1 : 1;
-    const crossedBoundary = state.mountDirection !== null && state.mountDirection !== desiredDirection;
-    const nextStep = state.mountDirection === null ? initialStepViewportRatio : crossedBoundary ? state.mountStepViewportRatio * crossingRatio : state.mountStepViewportRatio * growthRatio;
-    return {
-      ...state,
-      mountAttempts: state.mountAttempts + 1,
-      mountDirection: desiredDirection,
-      mountStepViewportRatio: Math.min(
-        Math.max(nextStep, minimumStepViewportRatio),
-        maximumStepViewportRatio
-      )
-    };
-  }
-
-  // vendor/luna-navigation/src/navigation/jump/virtualSearchPlanner.ts
-  function planVirtualSearch({
-    targetPromptIndex,
-    promptCount,
-    maximumScrollTop,
-    viewportWidth,
-    observedAnchors,
-    confirmedAnchors,
-    failedInterpolationAttempts = 0
-  }) {
-    const safePromptCount = Math.max(1, Math.trunc(promptCount));
-    const safeMaximumScrollTop = Math.max(0, maximumScrollTop);
-    const safeTargetPromptIndex = clamp3(
-      Math.trunc(targetPromptIndex),
-      0,
-      safePromptCount - 1
-    );
-    const anchors = mergeCompatibleAnchors({
-      observedAnchors,
-      confirmedAnchors,
-      viewportWidth,
-      maximumScrollTop: safeMaximumScrollTop
-    });
-    const exactAnchor = anchors.find(
-      ({ promptIndex }) => promptIndex === safeTargetPromptIndex
-    );
-    if (exactAnchor) {
-      return createPlan(
-        "exact-anchor",
-        safeTargetPromptIndex,
-        exactAnchor.scrollTop,
-        exactAnchor,
-        exactAnchor,
-        safeMaximumScrollTop
-      );
-    }
-    if (anchors.length === 0) {
-      const denominator = Math.max(1, safePromptCount - 1);
-      const proportionalScrollTop = safeTargetPromptIndex / denominator * safeMaximumScrollTop;
-      return createPlan(
-        "proportional",
-        safeTargetPromptIndex,
-        proportionalScrollTop,
-        null,
-        null,
-        safeMaximumScrollTop
-      );
-    }
-    const lowerAnchor = findNearestLowerAnchor(anchors, safeTargetPromptIndex) || createBoundaryAnchor(0, 0);
-    const upperAnchor = findNearestUpperAnchor(anchors, safeTargetPromptIndex) || createBoundaryAnchor(safePromptCount - 1, safeMaximumScrollTop);
-    if (lowerAnchor.scrollTop >= upperAnchor.scrollTop) {
-      const denominator = Math.max(1, safePromptCount - 1);
-      const proportionalScrollTop = safeTargetPromptIndex / denominator * safeMaximumScrollTop;
-      return createPlan(
-        "proportional",
-        safeTargetPromptIndex,
-        proportionalScrollTop,
-        null,
-        null,
-        safeMaximumScrollTop
-      );
-    }
-    const shouldUseBinary = failedInterpolationAttempts >= APP_CONFIG.navigation.search.interpolationFailuresBeforeBinary;
-    const scrollTop = shouldUseBinary ? (lowerAnchor.scrollTop + upperAnchor.scrollTop) / 2 : interpolateScrollTop(
-      safeTargetPromptIndex,
-      lowerAnchor,
-      upperAnchor
-    );
-    return createPlan(
-      shouldUseBinary ? "binary" : "interpolation",
-      safeTargetPromptIndex,
-      scrollTop,
-      lowerAnchor,
-      upperAnchor,
-      safeMaximumScrollTop
-    );
-  }
-  function mergeCompatibleAnchors({
-    observedAnchors,
-    confirmedAnchors,
-    viewportWidth,
-    maximumScrollTop
-  }) {
-    const tolerance = APP_CONFIG.navigation.anchorCache.viewportWidthTolerance;
-    const anchorsByPromptIndex = /* @__PURE__ */ new Map();
-    confirmedAnchors.filter(
-      (anchor) => Math.abs(anchor.viewportWidth - viewportWidth) <= tolerance
-    ).forEach((anchor) => {
-      anchorsByPromptIndex.set(anchor.promptIndex, {
-        promptIndex: anchor.promptIndex,
-        scrollTop: anchor.scrollProgress * maximumScrollTop,
-        source: "confirmed"
-      });
-    });
-    observedAnchors.forEach((anchor) => {
-      anchorsByPromptIndex.set(anchor.promptIndex, {
-        promptIndex: anchor.promptIndex,
-        scrollTop: anchor.scrollTop,
-        source: "observed"
-      });
-    });
-    return [...anchorsByPromptIndex.values()].sort(
-      (first, second) => first.promptIndex - second.promptIndex
-    );
-  }
-  function findNearestLowerAnchor(anchors, targetPromptIndex) {
-    for (let index = anchors.length - 1; index >= 0; index -= 1) {
-      const anchor = anchors[index];
-      if (anchor.promptIndex < targetPromptIndex) return anchor;
-    }
-    return null;
-  }
-  function findNearestUpperAnchor(anchors, targetPromptIndex) {
-    return anchors.find(({ promptIndex }) => promptIndex > targetPromptIndex) || null;
-  }
-  function interpolateScrollTop(targetPromptIndex, lowerAnchor, upperAnchor) {
-    const indexDistance = upperAnchor.promptIndex - lowerAnchor.promptIndex;
-    if (indexDistance <= 0) {
-      return (lowerAnchor.scrollTop + upperAnchor.scrollTop) / 2;
-    }
-    const targetRatio = (targetPromptIndex - lowerAnchor.promptIndex) / indexDistance;
-    return lowerAnchor.scrollTop + targetRatio * (upperAnchor.scrollTop - lowerAnchor.scrollTop);
-  }
-  function createBoundaryAnchor(promptIndex, scrollTop) {
-    return {
-      promptIndex,
-      scrollTop,
-      source: "boundary"
-    };
-  }
-  function createPlan(method, targetPromptIndex, scrollTop, lowerAnchor, upperAnchor, maximumScrollTop) {
-    return {
-      method,
-      targetPromptIndex,
-      scrollTop: clamp3(scrollTop, 0, maximumScrollTop),
-      lowerAnchor,
-      upperAnchor
-    };
-  }
-  function clamp3(value, minimum, maximum) {
-    return Math.min(Math.max(value, minimum), maximum);
-  }
-
-  // vendor/luna-navigation/src/navigation/jump/virtualSearchController.ts
-  var SCROLL_POSITION_TOLERANCE_PX = 1;
-  async function searchVirtualPrompt({
-    targetPromptId,
-    targetPromptIndex,
-    promptCount,
-    getConfirmedAnchors,
-    invalidateConfirmedAnchor,
-    getObservedAnchors,
-    recordObservation,
-    getScrollMetrics,
-    observePosition,
-    isTargetRendered,
-    scrollTo,
-    waitForRender = waitForVirtualRender,
-    now = () => performance.now(),
-    signal,
-    maxAttempts = APP_CONFIG.navigation.search.maxAttempts,
-    maxUnproductiveAttempts = APP_CONFIG.navigation.search.maxUnproductiveAttempts,
-    maxDurationMs = APP_CONFIG.navigation.search.maxDurationMs,
-    targetDomRecoveryDirection = null,
-    onDiagnosticEvent,
-    onProgress
-  }) {
-    const startedAt = now();
-    const confirmedAnchors = await getConfirmedAnchors();
-    let machine = createVirtualSearchMachine();
-    let attempts = 0;
-    let unproductiveAttempts = 0;
-    let previousDistance = null;
-    let previousSample = null;
-    let lastScrollDelta = null;
-    let lastDirection = null;
-    let lastPlan = null;
-    let lastPosition = { status: "none" };
-    let networkBackfillDone = false;
-    const finish = (status) => {
-      onDiagnosticEvent?.({
-        eventName: "SEARCH_FINISHED",
-        details: {
-          status,
-          phase: machine.phase,
-          attempts,
-          unproductiveAttempts,
-          lastPlanMethod: lastPlan?.method || null,
-          lastPositionStatus: lastPosition.status
-        }
-      });
-      return { status, attempts, lastPlan, lastPosition };
-    };
-    onDiagnosticEvent?.({
-      eventName: "SEARCH_STARTED",
-      details: {
-        targetPromptId,
-        targetPromptIndex,
-        promptCount,
-        confirmedAnchorCount: confirmedAnchors.length,
-        maxAttempts,
-        maxUnproductiveAttempts,
-        maxDurationMs
-      }
-    });
-    while (attempts < Math.max(0, maxAttempts)) {
-      onProgress?.({ remaining: Math.max(0, maxAttempts - attempts) });
-      const terminalStatus = getTerminalStatus({
-        signal,
-        startedAt,
-        currentTime: now(),
-        maxDurationMs,
-        isTargetRendered
-      });
-      if (terminalStatus) return finish(terminalStatus);
-      const observation = await observePosition();
-      lastPosition = observation.position;
-      observation.anchors.forEach(recordObservation);
-      if (isTargetRendered()) return finish("found");
-      const metrics = getScrollMetrics();
-      const logicalPosition = getClosestLogicalPosition(
-        targetPromptIndex,
-        observation.position
-      );
-      const currentDistance = logicalPosition === null ? null : Math.abs(targetPromptIndex - logicalPosition);
-      const targetResponseLocated = logicalPosition !== null && getMatchedLogicalPositions(observation.position).some(
-        (position) => Math.trunc(position) === targetPromptIndex
-      );
-      onDiagnosticEvent?.({
-        eventName: "POSITION_OBSERVED",
-        details: {
-          ...getPositionDiagnosticDetails(
-            observation.position,
-            observation.anchors.length
-          ),
-          logicalPosition,
-          currentDistance,
-          phase: machine.phase
-        }
-      });
-      if (attempts === 1 && lastPlan?.method === "exact-anchor" && lastPlan.lowerAnchor?.source === "confirmed" && logicalPosition !== null && Math.trunc(logicalPosition) !== targetPromptIndex) {
-        await invalidateConfirmedAnchor?.(
-          targetPromptId,
-          targetPromptIndex
-        );
-        onDiagnosticEvent?.({
-          eventName: "EXACT_ANCHOR_INVALIDATED",
-          details: {
-            targetPromptId,
-            targetPromptIndex,
-            observedLogicalPosition: logicalPosition
-          }
-        });
-      }
-      machine = advanceVirtualSearchMachine(
-        machine,
-        targetResponseLocated
-      );
-      const madeProgress = currentDistance !== null && (previousDistance === null || currentDistance < previousDistance);
-      if (attempts > 0 && machine.phase !== "mount-prompt") {
-        unproductiveAttempts = madeProgress ? 0 : unproductiveAttempts + 1;
-        if (unproductiveAttempts >= Math.max(1, maxUnproductiveAttempts)) {
-          return finish(
-            logicalPosition === null ? "unresolved" : "exhausted"
-          );
-        }
-      }
-      let plan;
-      let phase = machine.phase;
-      let relativePlanningDetails = {};
-      const currentSample = logicalPosition === null ? null : {
-        logicalPosition,
-        scrollTop: metrics.scrollTop
-      };
-      if (machine.phase === "mount-prompt") {
-        if (machine.mountAttempts >= APP_CONFIG.navigation.search.maximumPromptMountAttempts) {
-          onDiagnosticEvent?.({
-            eventName: "PROMPT_MOUNT_EXHAUSTED",
-            details: {
-              targetPromptId,
-              targetPromptIndex,
-              mountAttempts: machine.mountAttempts,
-              mountDirection: machine.mountDirection,
-              mountStepViewportRatio: machine.mountStepViewportRatio,
-              lastPosition: getPositionDiagnosticDetails(
-                lastPosition,
-                observation.anchors.length
-              )
-            }
-          });
-          return finish("exhausted");
-        }
-        const searchConfig = APP_CONFIG.navigation.search;
-        machine = updatePromptMountFeedback(machine, {
-          targetPromptIndex,
-          logicalPosition,
-          initialDirection: targetDomRecoveryDirection ?? -1,
-          initialStepViewportRatio: searchConfig.promptMountScanViewportRatio,
-          minimumStepViewportRatio: searchConfig.minimumPromptMountViewportRatio,
-          maximumStepViewportRatio: searchConfig.maximumPromptMountViewportCount,
-          growthRatio: searchConfig.promptMountStepGrowthRatio,
-          crossingRatio: searchConfig.promptMountCrossingStepRatio
-        });
-        phase = "mount-prompt";
-        plan = planPromptMountScan({
-          targetPromptIndex,
-          currentScrollTop: metrics.scrollTop,
-          maximumScrollTop: metrics.maximumScrollTop,
-          viewportHeight: metrics.viewportHeight,
-          direction: machine.mountDirection,
-          viewportRatio: machine.mountStepViewportRatio
-        });
-      } else if (attempts === 0) {
-        plan = planVirtualSearch({
-          targetPromptIndex,
-          promptCount,
-          maximumScrollTop: metrics.maximumScrollTop,
-          viewportWidth: metrics.viewportWidth,
-          observedAnchors: getObservedAnchors(),
-          confirmedAnchors
-        });
-        phase = "initial-estimate";
-        if (logicalPosition === null && isSameScrollTop(plan.scrollTop, metrics.scrollTop)) {
-          plan = createRelativePlan2(
-            targetPromptIndex,
-            metrics.scrollTop,
-            metrics.maximumScrollTop,
-            metrics.viewportHeight,
-            getInteriorRecoveryDirection(
-              targetPromptIndex,
-              promptCount
-            )
-          );
-          phase = "initial-mount-recovery";
-        }
-      } else if (currentSample) {
-        const relativePlan = planRelativeSearch({
-          targetPromptIndex,
-          currentSample,
-          previousSample,
-          lastScrollDelta,
-          maximumScrollTop: metrics.maximumScrollTop,
-          viewportHeight: metrics.viewportHeight
-        });
-        plan = relativePlan;
-        relativePlanningDetails = {
-          planningBasis: relativePlan.planningBasis,
-          estimatedPixelsPerPrompt: relativePlan.estimatedPixelsPerPrompt,
-          movementLimit: relativePlan.movementLimit
-        };
-        phase = "seek-response";
-        lastDirection = targetPromptIndex >= currentSample.logicalPosition ? 1 : -1;
-      } else {
-        const recoveryDirection = getUnresolvedRecoveryDirection({
-          scrollTop: metrics.scrollTop,
-          maximumScrollTop: metrics.maximumScrollTop,
-          lastDirection,
-          targetPromptIndex,
-          promptCount
-        });
-        plan = createRelativePlan2(
-          targetPromptIndex,
-          metrics.scrollTop,
-          metrics.maximumScrollTop,
-          metrics.viewportHeight,
-          recoveryDirection
-        );
-        lastDirection = recoveryDirection;
-        phase = "unresolved-recovery";
-      }
-      if (isSameScrollTop(plan.scrollTop, metrics.scrollTop)) {
-        const atScrollEdge = plan.scrollTop <= SCROLL_POSITION_TOLERANCE_PX || plan.scrollTop >= metrics.maximumScrollTop - SCROLL_POSITION_TOLERANCE_PX;
-        if (atScrollEdge && !isTargetRendered()) {
-          const slideDirection = plan.scrollTop <= SCROLL_POSITION_TOLERANCE_PX ? -1 : 1;
-          onDiagnosticEvent?.({
-            eventName: "EDGE_BACKFILL_WAIT",
-            details: {
-              phase,
-              scrollTop: metrics.scrollTop,
-              maximumScrollTop: metrics.maximumScrollTop,
-              targetPromptIndex
-            }
-          });
-          if (!networkBackfillDone) {
-            networkBackfillDone = true;
-            const backfillLanded = await waitForTargetBackfill({
-              signal,
-              isTargetRendered,
-              getScrollMetrics
-            });
-            onDiagnosticEvent?.({
-              eventName: "BACKFILL_RESULT",
-              details: {
-                backfillLanded,
-                maximumScrollTop: getScrollMetrics().maximumScrollTop,
-                targetPromptIndex
-              }
-            });
-          }
-          const slideCycles = APP_CONFIG.navigation.search.maximumWindowSlideCycles;
-          for (let cycle = 0; cycle < slideCycles; cycle++) {
-            if (signal?.aborted || isTargetRendered()) break;
-            const slideMetrics = getScrollMetrics();
-            const edge = slideDirection === -1 ? 0 : slideMetrics.maximumScrollTop;
-            const inward = slideDirection === -1 ? Math.min(
-              slideMetrics.maximumScrollTop,
-              slideMetrics.scrollTop + slideMetrics.viewportHeight
-            ) : Math.max(
-              0,
-              slideMetrics.scrollTop - slideMetrics.viewportHeight
-            );
-            scrollTo(inward);
-            await waitForRender();
-            scrollTo(edge);
-            await waitForRender();
-            onDiagnosticEvent?.({
-              eventName: "WINDOW_SLIDE_STEP",
-              details: {
-                cycle: cycle + 1,
-                direction: slideDirection,
-                inward: Math.round(inward),
-                edge: Math.round(edge),
-                targetPromptIndex
-              }
-            });
-          }
-          attempts += 1;
-          continue;
-        }
-        lastPlan = plan;
-        return finish("exhausted");
-      }
-      onDiagnosticEvent?.({
-        eventName: "SEARCH_PLAN",
-        details: {
-          phase,
-          method: plan.method,
-          scrollTop: plan.scrollTop,
-          logicalPosition,
-          currentDistance,
-          madeProgress,
-          unproductiveAttempts,
-          mountAttempt: machine.phase === "mount-prompt" ? machine.mountAttempts : null,
-          mountDirection: machine.phase === "mount-prompt" ? machine.mountDirection : null,
-          mountStepViewportRatio: machine.phase === "mount-prompt" ? machine.mountStepViewportRatio : null,
-          ...relativePlanningDetails,
-          relativeDelta: plan.scrollTop - metrics.scrollTop
-        }
-      });
-      lastPlan = plan;
-      lastScrollDelta = plan.scrollTop - metrics.scrollTop;
-      previousSample = currentSample;
-      previousDistance = currentDistance;
-      scrollTo(plan.scrollTop);
-      onDiagnosticEvent?.({
-        eventName: "SCROLL_APPLIED",
-        details: {
-          phase,
-          plannedScrollTop: plan.scrollTop,
-          scrollTopBefore: metrics.scrollTop,
-          scrollTopAfter: getScrollMetrics().scrollTop,
-          maximumScrollTop: metrics.maximumScrollTop
-        }
-      });
-      attempts += 1;
-      await waitForRender();
-      if (isTargetRendered()) return finish("found");
-    }
-    return finish("exhausted");
-  }
-  function waitForVirtualRender() {
-    return new Promise((resolve) => {
-      setTimeout(resolve, APP_CONFIG.navigation.search.renderWaitMs);
-    });
-  }
-  async function waitForTargetBackfill({
-    signal,
-    isTargetRendered,
-    getScrollMetrics
-  }) {
-    const deadline = Date.now() + APP_CONFIG.navigation.search.edgeBackfillWaitMs;
-    let previousMaximumScrollTop = getScrollMetrics().maximumScrollTop;
-    let sawChange = false;
-    let stableRounds = 0;
-    while (Date.now() < deadline) {
-      if (signal?.aborted || isTargetRendered()) return sawChange;
-      await new Promise((resolve) => setTimeout(resolve, 120));
-      const currentMaximumScrollTop = getScrollMetrics().maximumScrollTop;
-      if (Math.abs(currentMaximumScrollTop - previousMaximumScrollTop) > SCROLL_POSITION_TOLERANCE_PX) {
-        previousMaximumScrollTop = currentMaximumScrollTop;
-        sawChange = true;
-        stableRounds = 0;
-      } else {
-        stableRounds += 1;
-        if (sawChange && stableRounds >= 2) return true;
-      }
-    }
-    return sawChange;
-  }
-  function getClosestLogicalPosition(targetPromptIndex, position) {
-    const positions = getMatchedLogicalPositions(position);
-    if (positions.length === 0) return null;
-    return positions.reduce(
-      (closest, candidate) => Math.abs(targetPromptIndex - candidate) < Math.abs(targetPromptIndex - closest) ? candidate : closest
-    );
-  }
-  function getMatchedLogicalPositions(position) {
-    if (position.status !== "located") return [];
-    return position.matchedBlocks.length > 0 ? position.matchedBlocks.map(
-      ({ promptIndex, source, positionRatio = 0 }) => promptIndex + (source === "segment" ? positionRatio : 0)
-    ) : position.matchedPromptIndexes;
-  }
-  function getInteriorRecoveryDirection(targetPromptIndex, promptCount) {
-    return targetPromptIndex >= Math.max(0, promptCount - 1) / 2 ? -1 : 1;
-  }
-  function getUnresolvedRecoveryDirection({
-    scrollTop,
-    maximumScrollTop,
-    lastDirection,
-    targetPromptIndex,
-    promptCount
-  }) {
-    if (scrollTop <= SCROLL_POSITION_TOLERANCE_PX) return 1;
-    if (maximumScrollTop - scrollTop <= SCROLL_POSITION_TOLERANCE_PX) {
-      return -1;
-    }
-    return lastDirection ?? getInteriorRecoveryDirection(targetPromptIndex, promptCount);
-  }
-  function createRelativePlan2(targetPromptIndex, currentScrollTop, maximumScrollTop, viewportHeight, direction) {
-    return {
-      method: "linear-probe",
-      targetPromptIndex,
-      scrollTop: clamp4(
-        currentScrollTop + direction * Math.max(1, viewportHeight),
-        0,
-        maximumScrollTop
-      ),
-      lowerAnchor: null,
-      upperAnchor: null
-    };
-  }
-  function getPositionDiagnosticDetails(position, anchorCount) {
-    if (position.status !== "located") {
-      return { status: position.status, anchorCount };
-    }
-    return {
-      status: position.status,
-      firstPromptIndex: position.firstPromptIndex,
-      lastPromptIndex: position.lastPromptIndex,
-      matchedBlocks: position.matchedBlocks,
-      matchSource: position.matchedBlocks[0]?.source || null,
-      anchorCount
-    };
-  }
-  function getTerminalStatus({
-    signal,
-    startedAt,
-    currentTime,
-    maxDurationMs,
-    isTargetRendered
-  }) {
-    if (signal?.aborted) return "cancelled";
-    if (isTargetRendered()) return "found";
-    if (currentTime - startedAt >= Math.max(0, maxDurationMs)) {
-      return "timed-out";
-    }
-    return null;
-  }
-  function isSameScrollTop(first, second) {
-    return Math.abs(first - second) <= SCROLL_POSITION_TOLERANCE_PX;
-  }
-  function clamp4(value, minimum, maximum) {
-    return Math.min(Math.max(value, minimum), maximum);
-  }
-
-  // vendor/luna-navigation/src/navigation/fingerprint/comparableText.ts
-  function stripMarkdownPayloads(text) {
-    return text.replace(/!\[[^\]]*]\([^)]*\)/g, " ").replace(/!\[[^\]]*]\[[^\]]*]/g, " ").replace(/\[([^\]]+)]\([^)]*\)/g, "$1").replace(/\[([^\]]+)]\[[^\]]*]/g, "$1").replace(/^[ \t]*\[[^\]]+]:\s+\S+.*$/gm, " ").replace(/^[ \t]*(?:```|~~~)[^\r\n]*$/gm, " ").replace(/(?:https?|ftp):\/\/[^\s<>)\]]+/giu, " ").replace(/<[^>]*>/g, " ");
-  }
-  function normalizeWhitespace(text) {
-    return text.replace(/\s+/g, " ").trim();
-  }
-  function normalizeComparableText(text) {
-    const textWithoutPayloads = stripMarkdownPayloads(text.normalize("NFKC"));
-    const lettersAndNumbers = textWithoutPayloads.replace(
-      /[^\p{L}\p{N}]+/gu,
-      " "
-    );
-    return normalizeWhitespace(lettersAndNumbers);
-  }
-
-  // vendor/luna-navigation/src/navigation/fingerprint/generator.ts
-  function calculateFingerprintOffsets(textLength, options) {
-    if (textLength <= 0 || options.countPerAssistant <= 0) return [];
-    const sampleWindowLength = options.probeLength + options.verificationLength;
-    const sampleCount = Math.min(
-      options.countPerAssistant,
-      Math.max(1, Math.ceil(textLength / sampleWindowLength))
-    );
-    const maximumOffset = Math.max(0, textLength - sampleWindowLength);
-    if (sampleCount === 1) return [0];
-    return Array.from(
-      { length: sampleCount },
-      (_, index) => Math.round(maximumOffset * index / (sampleCount - 1))
-    );
-  }
-  async function createSha256(text) {
-    const bytes = new TextEncoder().encode(text);
-    const digest = await crypto.subtle.digest("SHA-256", bytes);
-    return Array.from(
-      new Uint8Array(digest),
-      (byte) => byte.toString(16).padStart(2, "0")
-    ).join("");
-  }
-  async function createResponseFingerprints(response, options = APP_CONFIG.navigation.fingerprint) {
-    const text = normalizeComparableText(response.text);
-    const offsets = calculateFingerprintOffsets(text.length, options);
-    return Promise.all(
-      offsets.map(async (textOffset, sampleIndex) => {
-        const probeText = text.slice(
-          textOffset,
-          textOffset + options.probeLength
-        );
-        const verificationText = text.slice(
-          textOffset + probeText.length,
-          textOffset + probeText.length + options.verificationLength
-        );
-        const hashSource = verificationText || probeText;
-        return {
-          responseId: response.id,
-          sampleIndex,
-          textOffset,
-          probeText,
-          verificationHash: await createSha256(hashSource),
-          verificationLength: verificationText.length
-        };
-      })
-    );
-  }
-
-  // vendor/luna-navigation/src/navigation/fingerprint/index.ts
-  function flattenResponseTasks(turns) {
-    return turns.flatMap(
-      (turn) => turn.responses.map((response) => ({
-        promptIndex: turn.promptIndex,
-        response
-      }))
-    );
-  }
-  function yieldToMainThread() {
-    return new Promise((resolve) => {
-      setTimeout(resolve, 0);
-    });
-  }
-  async function buildFingerprintIndex(turns, quality = "derived", options = APP_CONFIG.navigation.fingerprint, yieldControl = yieldToMainThread) {
-    const index = [];
-    const tasks = flattenResponseTasks(turns);
-    const batchSize = Math.max(1, options.buildBatchSize);
-    const timeBudgetMs = Math.max(0, options.buildTimeBudgetMs);
-    let batchStartedAt = performance.now();
-    let batchTaskCount = 0;
-    for (const [taskIndex, task] of tasks.entries()) {
-      const fingerprints = await createResponseFingerprints(
-        task.response,
-        options
-      );
-      if (fingerprints.length > 0) {
-        index.push({
-          responseId: task.response.id,
-          promptIndex: task.promptIndex,
-          quality,
-          fingerprints
-        });
-      }
-      batchTaskCount += 1;
-      const hasMoreTasks = taskIndex < tasks.length - 1;
-      const reachedBatchSize = batchTaskCount >= batchSize;
-      const reachedTimeBudget = performance.now() - batchStartedAt >= timeBudgetMs;
-      if (hasMoreTasks && (reachedBatchSize || reachedTimeBudget)) {
-        await yieldControl();
-        batchStartedAt = performance.now();
-        batchTaskCount = 0;
-      }
-    }
-    return index;
-  }
-
-  // vendor/luna-navigation/src/navigation/fingerprint/segments.ts
-  function calculateDerivedSegmentRanges(text, options = APP_CONFIG.navigation.fingerprint) {
-    if (!normalizeComparableText(text)) return [];
-    const units = createEstimatedVisualUnits(
-      text,
-      options.estimatedCharsPerVisualLine
-    );
-    if (units.length === 0) return [];
-    const rowsPerSegment = Math.max(
-      1,
-      options.estimatedRowsPerViewport * options.segmentViewportRatio
-    );
-    const segmentCount = Math.min(
-      Math.max(1, Math.trunc(options.maximumSegmentsPerAssistant)),
-      Math.max(1, Math.ceil(units.length / rowsPerSegment))
-    );
-    const unitsPerSegment = Math.ceil(units.length / segmentCount);
-    const overlapUnits = Math.max(
-      0,
-      Math.round(unitsPerSegment * options.segmentOverlapRatio)
-    );
-    return Array.from({ length: segmentCount }, (_, segmentIndex) => {
-      const coreStartIndex = Math.min(
-        units.length - 1,
-        segmentIndex * unitsPerSegment
-      );
-      const coreEndIndex = Math.min(
-        units.length,
-        (segmentIndex + 1) * unitsPerSegment
-      );
-      const startIndex = Math.max(0, coreStartIndex - overlapUnits);
-      const endIndex = Math.min(
-        units.length,
-        coreEndIndex + overlapUnits
-      );
-      return {
-        startOffset: units[startIndex].startOffset,
-        endOffset: units[endIndex - 1].endOffset,
-        positionRatio: units.length === 1 ? 0 : coreStartIndex / (units.length - 1)
-      };
-    });
-  }
-  async function createDerivedResponseSegments(response, promptIndex, options = APP_CONFIG.navigation.fingerprint) {
-    const ranges = calculateDerivedSegmentRanges(response.text, options);
-    const candidates = ranges.map((range) => ({
-      range,
-      comparableText: normalizeComparableText(
-        response.text.slice(range.startOffset, range.endOffset)
-      )
-    })).filter(({ comparableText }) => comparableText.length > 0);
-    return Promise.all(
-      candidates.map(async ({ range, comparableText }, segmentIndex) => {
-        const probeText = comparableText.slice(0, options.probeLength);
-        const verificationText = comparableText.slice(
-          probeText.length,
-          probeText.length + options.verificationLength
-        );
-        return {
-          responseId: response.id,
-          promptIndex,
-          segmentIndex,
-          segmentCount: candidates.length,
-          positionRatio: range.positionRatio,
-          probeText,
-          verificationHash: await createSha256(
-            verificationText || probeText
-          ),
-          verificationLength: verificationText.length,
-          quality: "derived"
-        };
-      })
-    );
-  }
-  async function buildDerivedSegmentIndex(turns, options = APP_CONFIG.navigation.fingerprint, yieldControl = yieldSegmentBuild) {
-    const tasks = turns.flatMap(
-      (turn) => turn.responses.map((response) => ({
-        promptIndex: turn.promptIndex,
-        response
-      }))
-    );
-    const index = [];
-    const batchSize = Math.max(1, options.buildBatchSize);
-    const timeBudgetMs = Math.max(0, options.buildTimeBudgetMs);
-    let batchStartedAt = performance.now();
-    let batchTaskCount = 0;
-    for (const [taskIndex, task] of tasks.entries()) {
-      index.push(
-        ...await createDerivedResponseSegments(
-          task.response,
-          task.promptIndex,
-          options
-        )
-      );
-      batchTaskCount += 1;
-      const hasMoreTasks = taskIndex < tasks.length - 1;
-      const reachedBatchSize = batchTaskCount >= batchSize;
-      const reachedTimeBudget = performance.now() - batchStartedAt >= timeBudgetMs;
-      if (hasMoreTasks && (reachedBatchSize || reachedTimeBudget)) {
-        await yieldControl();
-        batchStartedAt = performance.now();
-        batchTaskCount = 0;
-      }
-    }
-    return index;
-  }
-  function extractRenderedTextWithinVerticalBounds(contentElements, top, bottom) {
-    if (bottom <= top) return "";
-    const textNodes = collectTextNodes(
-      contentElements.filter((element) => element.isConnected)
-    );
-    if (textNodes.length === 0) return "";
-    const start = findObservedTextPosition(textNodes, top);
-    const end = findObservedTextPosition(textNodes, bottom);
-    if (!start || !end) return "";
-    return getTextBetweenObservedPositions(textNodes, start, end);
-  }
-  function createEstimatedVisualUnits(text, estimatedCharsPerVisualLine) {
-    const safeLineLength = Math.max(
-      1,
-      Math.trunc(estimatedCharsPerVisualLine)
-    );
-    const units = [];
-    let lineStartOffset = 0;
-    for (const line of text.split(/\r\n|\r|\n/)) {
-      if (line.length === 0) {
-        units.push({
-          startOffset: lineStartOffset,
-          endOffset: lineStartOffset
-        });
-      } else {
-        for (let lineOffset = 0; lineOffset < line.length; lineOffset += safeLineLength) {
-          units.push({
-            startOffset: lineStartOffset + lineOffset,
-            endOffset: lineStartOffset + Math.min(line.length, lineOffset + safeLineLength)
-          });
-        }
-      }
-      lineStartOffset += line.length + 1;
-    }
-    return units;
-  }
-  function collectTextNodes(elements) {
-    return elements.flatMap((element) => {
-      const walker = document.createTreeWalker(
-        element,
-        NodeFilter.SHOW_TEXT
-      );
-      const nodes = [];
-      let currentNode = walker.nextNode();
-      while (currentNode) {
-        if (currentNode.textContent?.trim()) {
-          nodes.push(currentNode);
-        }
-        currentNode = walker.nextNode();
-      }
-      return nodes;
-    });
-  }
-  function findObservedTextPosition(textNodes, targetY) {
-    for (const [nodeIndex, textNode] of textNodes.entries()) {
-      const textLength = textNode.data.length;
-      if (textLength === 0) continue;
-      const nodeRect = measureTextRange(textNode, 0, textLength);
-      if (nodeRect.bottom < targetY) continue;
-      let lowerOffset = 0;
-      let upperOffset = textLength - 1;
-      while (lowerOffset < upperOffset) {
-        const middleOffset = Math.floor((lowerOffset + upperOffset) / 2);
-        const characterRect = measureTextRange(
-          textNode,
-          middleOffset,
-          middleOffset + 1
-        );
-        if (characterRect.bottom < targetY) {
-          lowerOffset = middleOffset + 1;
-        } else {
-          upperOffset = middleOffset;
-        }
-      }
-      return {
-        nodeIndex,
-        characterOffset: lowerOffset
-      };
-    }
-    const lastNode = textNodes.at(-1);
-    if (!lastNode) return null;
-    return {
-      nodeIndex: textNodes.length - 1,
-      characterOffset: Math.max(0, lastNode.data.length - 1)
-    };
-  }
-  function getTextBetweenObservedPositions(textNodes, start, end) {
-    return textNodes.slice(start.nodeIndex, end.nodeIndex + 1).map((node, relativeIndex, selectedNodes) => {
-      const isFirst = relativeIndex === 0;
-      const isLast = relativeIndex === selectedNodes.length - 1;
-      const startOffset = isFirst ? start.characterOffset : 0;
-      const endOffset = isLast ? end.characterOffset + 1 : node.data.length;
-      return node.data.slice(startOffset, endOffset);
-    }).join(" ");
-  }
-  function measureTextRange(textNode, startOffset, endOffset) {
-    const range = document.createRange();
-    range.setStart(textNode, startOffset);
-    range.setEnd(textNode, endOffset);
-    return range.getBoundingClientRect();
-  }
-  function yieldSegmentBuild() {
-    return new Promise((resolve) => setTimeout(resolve, 0));
-  }
-
-  // vendor/luna-navigation/src/navigation/fingerprint/matcher.ts
-  async function verifyFingerprintMatch(renderedText, fingerprint) {
-    const normalizedText = normalizeComparableText(renderedText);
-    const probeText = fingerprint.probeText;
-    const offsets = findProbeOffsetsInNormalizedText(
-      normalizedText,
-      probeText
-    );
-    for (const offset of offsets) {
-      const verificationStart = offset + probeText.length;
-      const verificationText = normalizedText.slice(
-        verificationStart,
-        verificationStart + fingerprint.verificationLength
-      );
-      if (fingerprint.verificationLength > 0 && verificationText.length !== fingerprint.verificationLength) {
-        continue;
-      }
-      const hashSource = verificationText || probeText;
-      if (await createSha256(hashSource) === fingerprint.verificationHash) {
-        return true;
-      }
-    }
-    return false;
-  }
-  async function matchFingerprintIndex(blocks, fingerprintIndex) {
-    const normalizedBlocks = blocks.map((block2) => ({
-      id: block2.id,
-      text: normalizeComparableText(block2.text)
-    }));
-    const matchesByPrompt = /* @__PURE__ */ new Map();
-    for (const record of fingerprintIndex) {
-      const promptMatch = matchesByPrompt.get(record.promptIndex) || {
-        matchedFingerprintCount: 0,
-        responseIds: /* @__PURE__ */ new Set(),
-        blockIds: /* @__PURE__ */ new Set()
-      };
-      let matchedFingerprintCount = 0;
-      const matchingResponseBlockIds = /* @__PURE__ */ new Set();
-      for (const fingerprint of record.fingerprints) {
-        const matchingBlockIds = [];
-        for (const block2 of normalizedBlocks) {
-          if (await verifyFingerprintMatch(block2.text, fingerprint)) {
-            matchingBlockIds.push(block2.id);
-          }
-        }
-        if (matchingBlockIds.length === 0) continue;
-        matchedFingerprintCount += 1;
-        matchingBlockIds.forEach(
-          (blockId) => matchingResponseBlockIds.add(blockId)
-        );
-      }
-      if (matchedFingerprintCount === 0) continue;
-      promptMatch.matchedFingerprintCount += matchedFingerprintCount;
-      promptMatch.responseIds.add(record.responseId);
-      matchingResponseBlockIds.forEach(
-        (blockId) => promptMatch.blockIds.add(blockId)
-      );
-      matchesByPrompt.set(record.promptIndex, promptMatch);
-    }
-    const matches = Array.from(
-      matchesByPrompt,
-      ([
-        promptIndex,
-        { matchedFingerprintCount, responseIds, blockIds }
-      ]) => ({
-        promptIndex,
-        matchedFingerprintCount,
-        responseIds: [...responseIds],
-        blockIds: [...blockIds]
-      })
-    );
-    return matches.sort(
-      (first, second) => second.matchedFingerprintCount - first.matchedFingerprintCount || first.promptIndex - second.promptIndex
-    );
-  }
-  function selectBestPromptMatch(matches) {
-    if (matches.length === 0) return { status: "none" };
-    const highestScore = Math.max(
-      ...matches.map(({ matchedFingerprintCount }) => matchedFingerprintCount)
-    );
-    const strongestMatches = matches.filter(
-      ({ matchedFingerprintCount }) => matchedFingerprintCount === highestScore
-    );
-    if (strongestMatches.length > 1) {
-      return {
-        status: "ambiguous",
-        matches: strongestMatches
-      };
-    }
-    return {
-      status: "matched",
-      match: strongestMatches[0]
-    };
-  }
-  function findProbeOffsetsInNormalizedText(normalizedText, normalizedProbe) {
-    if (!normalizedText || !normalizedProbe) return [];
-    const offsets = [];
-    let searchStart = 0;
-    while (searchStart <= normalizedText.length - normalizedProbe.length) {
-      const offset = normalizedText.indexOf(normalizedProbe, searchStart);
-      if (offset === -1) break;
-      offsets.push(offset);
-      searchStart = offset + 1;
-    }
-    return offsets;
-  }
-
-  // vendor/luna-navigation/src/navigation/fingerprint/segmentMatcher.ts
-  async function matchSegmentIndex(blocks, segmentIndex) {
-    const matches = [];
-    for (const segment of segmentIndex) {
-      const blockIds = [];
-      for (const block2 of blocks) {
-        if (await verifyFingerprintMatch(block2.text, segment)) {
-          blockIds.push(block2.id);
-        }
-      }
-      if (blockIds.length === 0) continue;
-      matches.push({
-        responseId: segment.responseId,
-        promptIndex: segment.promptIndex,
-        segmentIndex: segment.segmentIndex,
-        segmentCount: segment.segmentCount,
-        positionRatio: segment.positionRatio,
-        quality: segment.quality,
-        blockIds
-      });
-    }
-    return matches.sort(
-      (first, second) => getQualityScore(second.quality) - getQualityScore(first.quality) || first.promptIndex - second.promptIndex || first.segmentIndex - second.segmentIndex
-    );
-  }
-  function selectBestSegmentMatch(matches) {
-    if (matches.length === 0) return { status: "none" };
-    const highestQuality = Math.max(
-      ...matches.map(({ quality }) => getQualityScore(quality))
-    );
-    const strongestMatches = matches.filter(
-      ({ quality }) => getQualityScore(quality) === highestQuality
-    );
-    const uniqueMatches = strongestMatches.filter(
-      (match, index, candidates) => candidates.findIndex(
-        (candidate) => candidate.responseId === match.responseId && candidate.promptIndex === match.promptIndex && candidate.segmentIndex === match.segmentIndex
-      ) === index
-    );
-    if (uniqueMatches.length !== 1) {
-      return {
-        status: "ambiguous",
-        matches: uniqueMatches
-      };
-    }
-    return {
-      status: "matched",
-      match: uniqueMatches[0]
-    };
-  }
-  function getQualityScore(quality) {
-    return quality === "observed" ? 2 : 1;
-  }
-
-  // vendor/luna-navigation/src/navigation/jump/visiblePositionResolver.ts
-  async function resolveVisiblePromptPosition(blocks, fingerprintIndex, segmentIndex = [], segmentBlocks = blocks) {
-    if (blocks.length === 0 || fingerprintIndex.length === 0 && segmentIndex.length === 0) {
-      return { status: "none" };
-    }
-    const promptIndexesByResponseId = indexPromptIndexesByResponseId(
-      fingerprintIndex,
-      segmentIndex
-    );
-    const matchedPromptIndexes = /* @__PURE__ */ new Set();
-    const matchedBlockIds = /* @__PURE__ */ new Set();
-    const matchedBlocks = [];
-    const candidatePromptIndexes = /* @__PURE__ */ new Set();
-    const ambiguousBlockIds = /* @__PURE__ */ new Set();
-    const segmentBlocksById = new Map(
-      segmentBlocks.map((block2) => [block2.id, block2])
-    );
-    for (const block2 of blocks) {
-      const segmentBlock = segmentBlocksById.get(block2.id);
-      const segmentSelection = selectBestSegmentMatch(
-        segmentBlock ? await matchSegmentIndex([segmentBlock], segmentIndex) : []
-      );
-      if (segmentSelection.status === "matched") {
-        const segment = segmentSelection.match;
-        matchedPromptIndexes.add(segment.promptIndex);
-        matchedBlockIds.add(block2.id);
-        matchedBlocks.push({
-          blockId: block2.id,
-          promptIndex: segment.promptIndex,
-          source: "segment",
-          segmentIndex: segment.segmentIndex,
-          segmentCount: segment.segmentCount,
-          positionRatio: segment.positionRatio,
-          segmentQuality: segment.quality
-        });
-        continue;
-      }
-      const selection = selectBestPromptMatch(
-        await matchFingerprintIndex([block2], fingerprintIndex)
-      );
-      if (selection.status === "matched") {
-        matchedPromptIndexes.add(selection.match.promptIndex);
-        matchedBlockIds.add(block2.id);
-        matchedBlocks.push({
-          blockId: block2.id,
-          promptIndex: selection.match.promptIndex,
-          source: "fingerprint"
-        });
-        continue;
-      }
-      const directPromptIndexes = promptIndexesByResponseId.get(block2.id);
-      if (directPromptIndexes?.size === 1) {
-        const promptIndex = [...directPromptIndexes][0];
-        matchedPromptIndexes.add(promptIndex);
-        matchedBlockIds.add(block2.id);
-        matchedBlocks.push({
-          blockId: block2.id,
-          promptIndex,
-          source: "response-id"
-        });
-        continue;
-      }
-      if (directPromptIndexes && directPromptIndexes.size > 1) {
-        directPromptIndexes.forEach((index) => candidatePromptIndexes.add(index));
-        ambiguousBlockIds.add(block2.id);
-        continue;
-      }
-      if (selection.status === "ambiguous") {
-        selection.matches.forEach(
-          ({ promptIndex }) => candidatePromptIndexes.add(promptIndex)
-        );
-        ambiguousBlockIds.add(block2.id);
-      }
-      if (segmentSelection.status === "ambiguous") {
-        segmentSelection.matches.forEach(
-          ({ promptIndex }) => candidatePromptIndexes.add(promptIndex)
-        );
-        ambiguousBlockIds.add(block2.id);
-      }
-    }
-    if (ambiguousBlockIds.size > 0) {
-      matchedPromptIndexes.forEach((index) => candidatePromptIndexes.add(index));
-      return {
-        status: "ambiguous",
-        candidatePromptIndexes: [...candidatePromptIndexes].sort(
-          (first, second) => first - second
-        ),
-        ambiguousBlockIds: [...ambiguousBlockIds]
-      };
-    }
-    const sortedPromptIndexes = [...matchedPromptIndexes].sort(
-      (first, second) => first - second
-    );
-    if (sortedPromptIndexes.length === 0) return { status: "none" };
-    return {
-      status: "located",
-      firstPromptIndex: sortedPromptIndexes[0],
-      lastPromptIndex: sortedPromptIndexes.at(-1),
-      matchedPromptIndexes: sortedPromptIndexes,
-      matchedBlockIds: [...matchedBlockIds],
-      matchedBlocks
-    };
-  }
-  function indexPromptIndexesByResponseId(fingerprintIndex, segmentIndex) {
-    const promptIndexesByResponseId = /* @__PURE__ */ new Map();
-    fingerprintIndex.forEach(({ responseId, promptIndex }) => {
-      const promptIndexes = promptIndexesByResponseId.get(responseId) || /* @__PURE__ */ new Set();
-      promptIndexes.add(promptIndex);
-      promptIndexesByResponseId.set(responseId, promptIndexes);
-    });
-    segmentIndex.forEach(({ responseId, promptIndex }) => {
-      const promptIndexes = promptIndexesByResponseId.get(responseId) || /* @__PURE__ */ new Set();
-      promptIndexes.add(promptIndex);
-      promptIndexesByResponseId.set(responseId, promptIndexes);
-    });
-    return promptIndexesByResponseId;
-  }
-  function resolvePromptIndexesFromIds(ids, prompts) {
-    const promptIndexById = /* @__PURE__ */ new Map();
-    prompts.forEach((prompt, index) => {
-      if (!promptIndexById.has(prompt.id)) {
-        promptIndexById.set(prompt.id, index);
-      }
-    });
-    const matchedPromptIndexes = /* @__PURE__ */ new Set();
-    const matchedBlockIds = /* @__PURE__ */ new Set();
-    const matchedBlocks = [];
-    for (const id of ids) {
-      if (!id) continue;
-      const promptIndex = promptIndexById.get(id);
-      if (promptIndex === void 0) continue;
-      if (matchedBlockIds.has(id)) continue;
-      matchedBlockIds.add(id);
-      matchedPromptIndexes.add(promptIndex);
-      matchedBlocks.push({
-        blockId: id,
-        promptIndex,
-        source: "user-message-id"
-      });
-    }
-    if (matchedPromptIndexes.size === 0) return null;
-    const sortedPromptIndexes = [...matchedPromptIndexes].sort(
-      (first, second) => first - second
-    );
-    return {
-      status: "located",
-      firstPromptIndex: sortedPromptIndexes[0],
-      lastPromptIndex: sortedPromptIndexes.at(-1),
-      matchedPromptIndexes: sortedPromptIndexes,
-      matchedBlockIds: [...matchedBlockIds],
-      matchedBlocks
-    };
-  }
-
-  // vendor/luna-navigation/src/platforms/chatgpt/renderedTextAdapter.ts
-  var ASSISTANT_SELECTOR = '[data-message-author-role="assistant"]';
-  var MARKDOWN_SELECTOR = ".markdown";
-  function getRenderedAssistantEntries(root = document) {
-    return Array.from(
-      root.querySelectorAll(ASSISTANT_SELECTOR)
-    ).flatMap((assistantElement, index) => {
-      const text = getAssistantMarkdownText(assistantElement);
-      if (!text) return [];
-      return [
-        {
-          element: assistantElement,
-          block: {
-            id: getAssistantBlockId(assistantElement, index),
-            text
-          }
-        }
-      ];
-    });
-  }
-  function getVisibleAssistantViewportSamples(scrollContainer, root = document) {
-    const viewport2 = scrollContainer.getBoundingClientRect();
-    return getRenderedAssistantEntries(root).flatMap(
-      ({ block: block2, element }) => {
-        const contentElements = getAssistantMarkdownContainers(element);
-        const intersectsViewport = contentElements.some((contentElement) => {
-          const rect = contentElement.getBoundingClientRect();
-          return rect.bottom > viewport2.top && rect.top < viewport2.bottom;
-        });
-        if (!intersectsViewport) return [];
-        const text = extractRenderedTextWithinVerticalBounds(
-          contentElements,
-          viewport2.top,
-          viewport2.bottom
-        );
-        return text ? [{ id: block2.id, text }] : [];
-      }
-    );
-  }
-  function getAssistantBlockId(assistantElement, index) {
-    return assistantElement.dataset.messageId || assistantElement.closest("[data-message-id]")?.dataset.messageId || `chatgpt-assistant-${index}`;
-  }
-  function getAssistantMarkdownText(assistantElement) {
-    return getAssistantMarkdownContainers(assistantElement).map((container) => container.innerText || container.textContent || "").map((text) => text.trim()).filter(Boolean).join("\n");
-  }
-  function getAssistantMarkdownContainers(assistantElement) {
-    return Array.from(
-      assistantElement.querySelectorAll(MARKDOWN_SELECTOR)
-    ).filter((container) => {
-      const owningMessage = container.closest(
-        "[data-message-author-role]"
-      );
-      const nestedMarkdown = container.parentElement?.closest(MARKDOWN_SELECTOR);
-      return owningMessage === assistantElement && !nestedMarkdown;
-    });
-  }
-
-  // vendor/luna-navigation/src/platforms/chatgpt/virtualSearchAdapter.ts
-  var USER_MESSAGE_SELECTOR = '[data-message-author-role="user"]';
-  var ASSISTANT_MESSAGE_SELECTOR = '[data-message-author-role="assistant"]';
-  function getChatGptScrollContainer(root = document) {
-    const sampleMessage = root.querySelector(USER_MESSAGE_SELECTOR) || root.querySelector(ASSISTANT_MESSAGE_SELECTOR);
-    let parent = sampleMessage?.parentElement || null;
-    while (parent && parent !== document.body) {
-      if (isVerticallyScrollable(parent)) return parent;
-      parent = parent.parentElement;
-    }
-    const selectorFallback = root.querySelector("main div.overflow-y-auto") || root.querySelector('[class*="react-scroll-to-bottom"]') || root.querySelector('main [class*="react-scroll-to-bottom"]');
-    if (selectorFallback) return selectorFallback;
-    const main = root.querySelector("main");
-    if (!main) return null;
-    return Array.from(main.querySelectorAll("div")).find(
-      isVerticallyScrollable
-    ) || null;
-  }
-  function findRenderedChatGptPrompt(promptId, root = document) {
-    return Array.from(root.querySelectorAll(USER_MESSAGE_SELECTOR)).find(
-      (element) => getChatGptMessageId(element) === promptId
-    ) || null;
-  }
-  function getChatGptScrollMetrics(container) {
-    return {
-      scrollTop: container.scrollTop,
-      maximumScrollTop: Math.max(
-        0,
-        container.scrollHeight - container.clientHeight
-      ),
-      viewportWidth: container.clientWidth || window.innerWidth,
-      viewportHeight: container.clientHeight || window.innerHeight
-    };
-  }
-  function getVisibleUserMessages(root, scrollContainer) {
-    const containerRect = scrollContainer.getBoundingClientRect();
-    return Array.from(root.querySelectorAll(USER_MESSAGE_SELECTOR)).filter((element) => isElementWithinScrollViewport(element, containerRect));
-  }
-  function resolveVisiblePromptPositionByUserMessageId(prompts, scrollContainer, root) {
-    const visibleUserMessages = getVisibleUserMessages(root, scrollContainer);
-    return resolvePromptIndexesFromIds(
-      visibleUserMessages.map((element) => getChatGptMessageId(element)),
-      prompts
-    );
-  }
-  async function observeChatGptVirtualPosition({
-    conversationKey,
-    prompts,
-    fingerprintIndex,
-    segmentIndex,
-    root = document,
-    scrollContainer = getChatGptScrollContainer(root)
-  }) {
-    if (!scrollContainer) {
-      return {
-        position: { status: "none" },
-        anchors: []
-      };
-    }
-    const directPosition = resolveVisiblePromptPositionByUserMessageId(
-      prompts,
-      scrollContainer,
-      root
-    );
-    if (directPosition) {
-      const visibleUserMessages = getVisibleUserMessages(root, scrollContainer);
-      const elementsByBlockId2 = /* @__PURE__ */ new Map();
-      for (const element of visibleUserMessages) {
-        const id = getChatGptMessageId(element);
-        if (id) elementsByBlockId2.set(id, element);
-      }
-      const anchors2 = directPosition.matchedBlocks.flatMap(
-        ({ blockId, promptIndex }) => {
-          const element = elementsByBlockId2.get(blockId);
-          const prompt = prompts[promptIndex];
-          if (!element || !prompt) return [];
-          return [
-            createChatGptElementNavigationAnchor({
-              conversationKey,
-              promptId: prompt.id,
-              promptIndex,
-              element,
-              scrollContainer
-            })
-          ];
-        }
-      );
-      return { position: directPosition, anchors: anchors2 };
-    }
-    const entries = getRenderedAssistantEntries(root);
-    const containerRect = scrollContainer.getBoundingClientRect();
-    const visibleEntries = entries.filter(
-      ({ element }) => isElementWithinScrollViewport(element, containerRect)
-    );
-    const validFingerprintIndex = fingerprintIndex.filter(
-      ({ promptIndex }) => promptIndex >= 0 && promptIndex < prompts.length
-    );
-    const validDerivedSegmentIndex = segmentIndex.filter(
-      ({ promptIndex, quality }) => quality === "derived" && promptIndex >= 0 && promptIndex < prompts.length
-    );
-    const viewportSamples = getVisibleAssistantViewportSamples(
-      scrollContainer,
-      root
-    );
-    const position = await resolveVisiblePromptPosition(
-      visibleEntries.map(({ block: block2 }) => block2),
-      validFingerprintIndex,
-      validDerivedSegmentIndex,
-      viewportSamples
-    );
-    if (position.status !== "located") {
-      return {
-        position,
-        anchors: []
-      };
-    }
-    const elementsByBlockId = new Map(
-      visibleEntries.map(({ block: block2, element }) => [block2.id, element])
-    );
-    const anchors = position.matchedBlocks.flatMap(
-      ({ blockId, promptIndex }) => {
-        const element = elementsByBlockId.get(blockId);
-        const prompt = prompts[promptIndex];
-        if (!element || !prompt) return [];
-        return [
-          createChatGptElementNavigationAnchor({
-            conversationKey,
-            promptId: prompt.id,
-            promptIndex,
-            element,
-            scrollContainer
-          })
-        ];
-      }
-    );
-    return {
-      position,
-      anchors
-    };
-  }
-  function createChatGptElementNavigationAnchor({
-    conversationKey,
-    promptId,
-    promptIndex,
-    element,
-    scrollContainer
-  }) {
-    const containerRect = scrollContainer.getBoundingClientRect();
-    const elementRect = element.getBoundingClientRect();
-    const anchorScrollTop = scrollContainer.scrollTop + elementRect.top - containerRect.top;
-    return createNavigationAnchor({
-      conversationKey,
-      promptId,
-      promptIndex,
-      scrollTop: anchorScrollTop,
-      scrollHeight: scrollContainer.scrollHeight,
-      viewportWidth: scrollContainer.clientWidth || window.innerWidth,
-      viewportHeight: scrollContainer.clientHeight || window.innerHeight
-    });
-  }
-  function getChatGptMessageId(element) {
-    return element.dataset.messageId || element.closest("[data-message-id]")?.dataset.messageId || null;
-  }
-  function isVerticallyScrollable(element) {
-    const overflowY = window.getComputedStyle(element).overflowY;
-    return overflowY === "auto" || overflowY === "scroll";
-  }
-  function isElementWithinScrollViewport(element, containerRect) {
-    const elementRect = element.getBoundingClientRect();
-    return elementRect.bottom > containerRect.top && elementRect.top < containerRect.bottom;
-  }
-
-  // vendor/luna-navigation/src/navigation/navigationData.ts
-  function createNavigationTurns(messages) {
-    const turns = [];
-    let currentTurn = null;
-    messages.forEach((message) => {
-      const normalizedMessage = createNavigationTextMessage(message);
-      if (!normalizedMessage) return;
-      if (message.kind === "prompt") {
-        currentTurn = {
-          promptIndex: turns.length,
-          prompt: normalizedMessage,
-          responses: []
-        };
-        turns.push(currentTurn);
-        return;
-      }
-      currentTurn?.responses.push(normalizedMessage);
-    });
-    return turns;
-  }
-  function createNavigationTextMessage(message) {
-    const text = message.text.trim();
-    if (!text) return null;
-    return {
-      id: message.id,
-      text
-    };
-  }
-
-  // src/navigation/conversationAdapter.ts
-  function toLunaPrompts(turns) {
-    return turns.map((turn) => ({ id: turn.userMessageId ?? turn.id }));
-  }
-  function toLunaNavigationTurns(turns) {
-    return createNavigationTurns(
-      turns.flatMap((turn) => {
-        const promptId = turn.userMessageId ?? turn.id;
-        const promptText = turn.userMarkdown || turn.userPreview || promptId;
-        const responseId = turn.assistantMessageId;
-        const responseText = turn.assistantMarkdown || turn.assistantPreview;
-        const prompt = { id: promptId, kind: "prompt", text: promptText };
-        if (!responseId || !responseText.trim()) return [prompt];
-        return [prompt, { id: responseId, kind: "response", text: responseText }];
-      })
-    );
-  }
+  // src/navigation/identity.ts
   function findTurn(turns, turnId) {
-    return turns.find(
+    return turns.filter(
       (turn) => turn.id === turnId || turn.userMessageId === turnId || turn.assistantMessageId === turnId
     );
   }
+  function resolveNavigationTurn(turns, turnId) {
+    const matches = findTurn(turns, turnId);
+    if (matches.length > 1) return { ok: false, status: "identity-conflict" };
+    if (matches.length === 0) return { ok: false, status: "stale-target" };
+    return { ok: true, turn: matches[0] };
+  }
+  function turnUserMessageId(turn) {
+    return turn.userMessageId ?? turn.id;
+  }
 
-  // src/navigation/navigationPort.ts
-  var PROMPT_TOP_OFFSET_PX = NAVIGATION_CONFIG.promptTopOffsetPx;
-  var ANCHOR_KEY = "chatgpt-yada:nav-anchors:v1";
-  var CANCEL_KEYS = /* @__PURE__ */ new Set(["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", "Space", " "]);
-  var NavigationPort = class {
-    transaction = null;
-    fingerprintCache = null;
-    anchors = createNavigationAnchorStore({
-      storage: {
-        async read() {
-          if (typeof chrome === "undefined" || !chrome.storage?.local) return void 0;
-          const data = await chrome.storage.local.get(ANCHOR_KEY);
-          return data[ANCHOR_KEY];
-        },
-        async write(value) {
-          if (typeof chrome === "undefined" || !chrome.storage?.local) return;
-          await chrome.storage.local.set({ [ANCHOR_KEY]: value });
-        }
+  // src/navigation/wait.ts
+  function abortError5() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  function isAbortError4(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
+  function sleep(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal?.aborted) {
+        reject(abortError5());
+        return;
       }
+      const timer = window.setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, Math.max(0, ms));
+      const onAbort = () => {
+        window.clearTimeout(timer);
+        reject(abortError5());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
     });
-    interrupt = null;
-    async navigateTo(turnId, turns, conversationId, options = {}) {
-      this.cancel();
-      const turn = findTurn(turns, turnId);
-      if (!turn) return { ok: false, status: "failed" };
-      const controller = new AbortController();
-      this.transaction = controller;
-      const abort = () => controller.abort();
-      if (options.signal) {
-        if (options.signal.aborted) controller.abort();
-        else options.signal.addEventListener("abort", abort, { once: true });
+  }
+
+  // src/navigation/nativeButtonDriver.ts
+  async function jumpOfficialButton(conversationId, expectedTurnCount, targetIndex, userMessageId, signal, timeoutAt) {
+    if (!isOfficialNavigationComplete(expectedTurnCount, conversationId)) return "unavailable";
+    const buttons = collectOfficialButtons();
+    const target = buttons[targetIndex];
+    if (!target || target.index !== targetIndex) return "unavailable";
+    if (signal.aborted) return "cancelled";
+    try {
+      target.element.click();
+    } catch {
+      return "failed";
+    }
+    try {
+      while (Date.now() < timeoutAt) {
+        if (signal.aborted) return "cancelled";
+        const node = findMountedUserMessage(userMessageId);
+        if (node && readMessageId(node) === userMessageId && isInViewport(node)) return "ok";
+        await sleep(NATIVE_NAV_CONFIG.pollMs, signal);
       }
-      this.attachInterrupt(abort);
-      try {
-        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
-        if (await this.jumpDirect(turn, controller.signal)) {
-          return { ok: true, status: "found", path: "direct" };
+      return "timeout";
+    } catch (error) {
+      if (signal.aborted || isAbortError4(error)) return "cancelled";
+      return "failed";
+    }
+  }
+
+  // src/navigation/stableSlotDriver.ts
+  function isAligned(element) {
+    const rect = element.getBoundingClientRect();
+    if (rect.width === 0 && rect.height === 0 && rect.top === 0) return true;
+    return Math.abs(rect.top) <= NATIVE_NAV_CONFIG.alignmentTolerancePx;
+  }
+  async function jumpStableSlot(turn, signal, timeoutAt) {
+    const userMessageId = turn.userMessageId ?? turn.id;
+    const slots = collectStableSlots();
+    const slot = resolveStableSlot(turn, slots);
+    if (!slot?.isConnected) {
+      return { status: "unavailable", alignmentAttempts: 0, coarseLocates: 0 };
+    }
+    let coarseLocates = 0;
+    let alignmentAttempts = 0;
+    try {
+      coarseLocates = 1;
+      scrollElementIntoView(slot);
+      let mounted = null;
+      while (Date.now() < timeoutAt) {
+        if (signal.aborted) return { status: "cancelled", alignmentAttempts, coarseLocates };
+        mounted = findMountedUserMessage(userMessageId);
+        if (mounted && readMessageId(mounted) === userMessageId) break;
+        await sleep(NATIVE_NAV_CONFIG.pollMs, signal);
+      }
+      if (!mounted || readMessageId(mounted) !== userMessageId) {
+        return { status: Date.now() >= timeoutAt ? "timeout" : "failed", alignmentAttempts, coarseLocates };
+      }
+      while (alignmentAttempts < NATIVE_NAV_CONFIG.maxAlignmentAttempts && Date.now() < timeoutAt) {
+        if (signal.aborted) return { status: "cancelled", alignmentAttempts, coarseLocates };
+        if (isInViewport(mounted) && isAligned(mounted) && readMessageId(mounted) === userMessageId) {
+          return { status: "ok", alignmentAttempts, coarseLocates };
         }
-        if (controller.signal.aborted) return { ok: false, status: "cancelled" };
-        return await this.jumpVirtual(turn, turns, conversationId, controller.signal);
-      } catch (error) {
-        if (controller.signal.aborted || isAbortError4(error)) return { ok: false, status: "cancelled" };
-        return { ok: false, status: "failed" };
-      } finally {
-        options.signal?.removeEventListener("abort", abort);
-        this.detachInterrupt();
-        if (this.transaction === controller) this.transaction = null;
+        alignmentAttempts += 1;
+        scrollElementIntoView(mounted);
+        await sleep(NATIVE_NAV_CONFIG.alignmentQuietMs, signal);
+        mounted = findMountedUserMessage(userMessageId) ?? mounted;
       }
+      if (mounted && readMessageId(mounted) === userMessageId && isInViewport(mounted)) {
+        return { status: "ok", alignmentAttempts, coarseLocates };
+      }
+      return { status: Date.now() >= timeoutAt ? "timeout" : "failed", alignmentAttempts, coarseLocates };
+    } catch (error) {
+      if (signal.aborted || isAbortError4(error)) return { status: "cancelled", alignmentAttempts, coarseLocates };
+      return { status: "failed", alignmentAttempts, coarseLocates };
+    }
+  }
+
+  // src/navigation/nativeNavigationPort.ts
+  function targetKey(conversationId, turn) {
+    return `${conversationId}|${turnUserMessageId(turn)}|${turn.index}`;
+  }
+  function linkAbortSignal(source, target) {
+    if (!source) return () => void 0;
+    const abort = () => target.abort();
+    if (source.aborted) target.abort();
+    source.addEventListener("abort", abort, { once: true });
+    return () => source.removeEventListener("abort", abort);
+  }
+  var NativeNavigationPort = class {
+    active = null;
+    interrupt = null;
+    lastDiagnostics = null;
+    navigateTo(turnId, turns, conversationId, options = {}) {
+      const resolved = resolveNavigationTurn(turns, turnId);
+      if (!resolved.ok) return Promise.resolve(resolved);
+      const key = targetKey(conversationId, resolved.turn);
+      if (this.active?.key === key) return this.active.promise;
+      this.cancel();
+      const controller = new AbortController();
+      const unlink = linkAbortSignal(options.signal, controller);
+      const promise = this.run(resolved.turn, turns, conversationId, controller, options.timeoutMs).finally(() => {
+        unlink();
+        if (this.active?.controller === controller) this.active = null;
+      });
+      this.active = { key, controller, promise };
+      return promise;
     }
     cancel() {
-      this.transaction?.abort();
-      this.transaction = null;
+      this.active?.controller.abort();
+      this.active = null;
       this.detachInterrupt();
     }
     dispose() {
       this.cancel();
-      this.fingerprintCache = null;
+      this.lastDiagnostics = null;
+      publishNavigationDiagnostics(null);
     }
-    async jumpDirect(turn, signal) {
-      const ids = [turn.userMessageId, turn.assistantMessageId, turn.id].filter((id) => !!id);
-      for (const id of ids) {
-        if (signal.aborted) return false;
-        const element = findRenderedById(id);
-        const container = getChatGptScrollContainer();
-        if (!element || !container) continue;
-        if (readMessageId(element) !== id) continue;
-        scrollElementIntoContainer(element, container);
-        await wait2(32);
-        if (signal.aborted) return false;
-        const still = findRenderedById(id);
-        if (still && readMessageId(still) === id) return true;
-      }
-      return false;
-    }
-    async jumpVirtual(turn, turns, conversationId, signal) {
-      const prompts = toLunaPrompts(turns);
-      const lunaTurns = toLunaNavigationTurns(turns);
-      const signature = `${conversationId}:${turns.map((item) => `${item.userMessageId}:${item.assistantMessageId}`).join("|")}`;
-      if (!this.fingerprintCache || this.fingerprintCache.signature !== signature) {
-        this.fingerprintCache = {
-          signature,
-          fingerprintIndex: await buildFingerprintIndex(lunaTurns),
-          segmentIndex: await buildDerivedSegmentIndex(lunaTurns)
-        };
-      }
-      const { fingerprintIndex, segmentIndex } = this.fingerprintCache;
-      const targetPromptId = turn.userMessageId ?? turn.id;
-      const container = () => getChatGptScrollContainer();
-      const result = await searchVirtualPrompt({
-        targetPromptId,
-        targetPromptIndex: turn.index,
-        promptCount: turns.length,
-        getConfirmedAnchors: () => this.anchors.getConfirmedAnchors(conversationId),
-        invalidateConfirmedAnchor: (promptId) => this.anchors.removeConfirmed(conversationId, promptId).then(() => void 0),
-        getObservedAnchors: () => this.anchors.getObservedAnchors(conversationId),
-        recordObservation: (anchor) => {
-          this.anchors.recordObservation(anchor);
-        },
-        getScrollMetrics: () => {
-          const node = container();
-          return node ? getChatGptScrollMetrics(node) : { scrollTop: 0, maximumScrollTop: 0, viewportWidth: innerWidth, viewportHeight: innerHeight };
-        },
-        observePosition: () => observeChatGptVirtualPosition({
-          conversationKey: conversationId,
-          prompts,
-          fingerprintIndex,
-          segmentIndex
-        }),
-        isTargetRendered: () => {
-          const element = findRenderedById(targetPromptId);
-          const node = container();
-          return Boolean(element && node && readMessageId(element) === targetPromptId);
-        },
-        scrollTo: (scrollTop) => {
-          const node = container();
-          if (node) node.scrollTop = scrollTop;
-        },
-        now: () => Date.now(),
-        signal
-      });
-      if (result.status === "found") {
-        const element = findRenderedById(targetPromptId);
-        const node = container();
-        if (element && node) {
-          scrollElementIntoContainer(element, node);
-          const metrics = getChatGptScrollMetrics(node);
-          await this.anchors.recordConfirmed({
-            conversationKey: conversationId,
-            promptId: targetPromptId,
-            promptIndex: turn.index,
-            scrollTop: metrics.scrollTop,
-            scrollHeight: node.scrollHeight,
-            viewportWidth: metrics.viewportWidth,
-            viewportHeight: metrics.viewportHeight
-          });
+    async run(turn, turns, conversationId, controller, timeoutMs) {
+      const started = Date.now();
+      const limit = Math.max(1, Math.min(NATIVE_NAV_CONFIG.timeoutMs, timeoutMs ?? NATIVE_NAV_CONFIG.timeoutMs));
+      const timeoutAt = started + limit;
+      let timedOut = false;
+      const timeoutTimer = window.setTimeout(() => {
+        timedOut = true;
+        controller.abort();
+      }, Math.max(1, timeoutAt - Date.now()));
+      this.attachInterrupt(() => controller.abort());
+      const userMessageId = turnUserMessageId(turn);
+      const capability = readNativeCapability(turns, conversationId);
+      let path = null;
+      let alignmentAttempts = 0;
+      let result = { ok: false, status: "failed" };
+      try {
+        if (controller.signal.aborted && !timedOut) return { ok: false, status: "cancelled" };
+        const direct = findMountedUserMessage(userMessageId);
+        if (direct && readMessageId(direct) === userMessageId) {
+          path = "direct";
+          scrollElementIntoView(direct);
+          await sleep(NATIVE_NAV_CONFIG.directSettleMs, controller.signal);
+          const still = findMountedUserMessage(userMessageId);
+          if (still && readMessageId(still) === userMessageId) {
+            result = { ok: true, path: "direct" };
+            return result;
+          }
+          result = { ok: false, status: "failed" };
+          return result;
         }
-        return { ok: true, status: "found", path: "virtual", attempts: result.attempts };
+        if (isOfficialNavigationComplete(turns.length, conversationId)) {
+          path = "official-button";
+          const jumped = await jumpOfficialButton(
+            conversationId,
+            turns.length,
+            turn.index,
+            userMessageId,
+            controller.signal,
+            timeoutAt
+          );
+          if (jumped === "ok") result = { ok: true, path: "official-button" };
+          else if (jumped === "cancelled") result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
+          else if (jumped === "timeout") result = { ok: false, status: "timeout" };
+          else if (jumped === "unavailable") result = { ok: false, status: "unsupported" };
+          else result = { ok: false, status: "failed" };
+          return result;
+        }
+        if (isStableSlotsComplete(turns)) {
+          path = "stable-slot";
+          const jumped = await jumpStableSlot(turn, controller.signal, timeoutAt);
+          alignmentAttempts = jumped.alignmentAttempts;
+          if (jumped.status === "ok") result = { ok: true, path: "stable-slot" };
+          else if (jumped.status === "cancelled") result = { ok: false, status: timedOut ? "timeout" : "cancelled" };
+          else if (jumped.status === "timeout") result = { ok: false, status: "timeout" };
+          else if (jumped.status === "unavailable") result = { ok: false, status: "unsupported" };
+          else result = { ok: false, status: "failed" };
+          return result;
+        }
+        result = { ok: false, status: "unsupported" };
+        return result;
+      } catch (error) {
+        if (timedOut) result = { ok: false, status: "timeout" };
+        else if (controller.signal.aborted || isAbortError4(error)) result = { ok: false, status: "cancelled" };
+        else result = { ok: false, status: "failed" };
+        return result;
+      } finally {
+        window.clearTimeout(timeoutTimer);
+        this.detachInterrupt();
+        this.lastDiagnostics = {
+          conversationId,
+          targetIndex: turn.index,
+          targetMessageId: userMessageId,
+          path: result.ok ? result.path : path,
+          officialButtonCount: capability.officialButtonCount,
+          expectedTurnCount: turns.length,
+          slotCount: capability.slotCount,
+          reloadAttempted: readNativePrepState(conversationId) === "attempted" || readNativePrepState(conversationId) === "ready",
+          yadaScrollWrites: 0,
+          alignmentAttempts,
+          result: result.ok ? result.path : result.status,
+          duration: Date.now() - started
+        };
+        publishNavigationDiagnostics(this.lastDiagnostics);
       }
-      if (result.status === "cancelled") return { ok: false, status: "cancelled", path: "virtual", attempts: result.attempts };
-      if (result.status === "timed-out") return { ok: false, status: "timed-out", path: "virtual", attempts: result.attempts };
-      if (result.status === "exhausted") return { ok: false, status: "exhausted", path: "virtual", attempts: result.attempts };
-      return { ok: false, status: "unresolved", path: "virtual", attempts: result.attempts };
     }
     attachInterrupt(abort) {
       this.detachInterrupt();
-      const onWheel = () => abort();
-      const onTouch = () => abort();
-      const onPointer = (event) => {
-        if (event.pointerType === "mouse" && event.buttons === 0) return;
-        const target = event.target;
-        if (target instanceof Element && target.closest("[data-yada-root]")) return;
-        abort();
-      };
-      const onKey = (event) => {
-        if (CANCEL_KEYS.has(event.key)) abort();
-      };
-      window.addEventListener("wheel", onWheel, { passive: true, capture: true });
-      window.addEventListener("touchmove", onTouch, { passive: true, capture: true });
-      window.addEventListener("pointerdown", onPointer, { capture: true });
-      window.addEventListener("keydown", onKey, { capture: true });
-      this.interrupt = () => {
-        window.removeEventListener("wheel", onWheel, true);
-        window.removeEventListener("touchmove", onTouch, true);
-        window.removeEventListener("pointerdown", onPointer, true);
-        window.removeEventListener("keydown", onKey, true);
-      };
+      this.interrupt = attachUserNavigationCancel(abort);
     }
     detachInterrupt() {
       this.interrupt?.();
       this.interrupt = null;
     }
   };
-  function findRenderedById(id) {
-    return findRenderedChatGptPrompt(id) ?? document.querySelector(`[data-message-id="${cssEscape(id)}"]`);
-  }
-  function readMessageId(element) {
-    return element.dataset.messageId ?? element.closest("[data-message-id]")?.dataset.messageId ?? null;
-  }
-  function scrollElementIntoContainer(element, container) {
-    const top = element.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - PROMPT_TOP_OFFSET_PX;
-    container.scrollTop = Math.max(0, top);
-  }
-  function wait2(ms) {
-    return new Promise((resolve) => window.setTimeout(resolve, ms));
-  }
-  function isAbortError4(error) {
-    return error instanceof DOMException && error.name === "AbortError";
-  }
-  function cssEscape(value) {
-    return typeof CSS !== "undefined" && CSS.escape ? CSS.escape(value) : value.replace(/"/g, '\\"');
-  }
 
   // src/navigation/navigatorController.ts
   var NavigatorController = class {
     constructor(sync) {
       this.sync = sync;
     }
-    port = new NavigationPort();
+    port = new NativeNavigationPort();
     snapshot = null;
     unsubscribe = null;
     mount() {
@@ -3298,10 +1830,47 @@ ${text}
     currentTurns() {
       return this.snapshot?.activeTurns ?? [];
     }
+    lastDiagnostics() {
+      return this.port.lastDiagnostics;
+    }
     dispose() {
       this.unsubscribe?.();
       this.unsubscribe = null;
       this.port.dispose();
+    }
+  };
+
+  // src/navigation/officialVisibility.ts
+  var OFFICIAL_NAV_STYLE_ID = "chatgpt-yada-official-nav-visibility-style";
+  var ROOT_AT_END = CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR.split(",")[0];
+  var ROOT_BEFORE_SPACE = CHATGPT_OFFICIAL_NAV_ROOT_SELECTOR.split(",")[1];
+  var FIXED_CHILD = `> ${CHATGPT_OFFICIAL_NAV_FIXED_CHILD_SELECTOR.map((token) => `[class~="${token}"]`).join("")}:not([data-yada-root])`;
+  var OfficialNavigationVisibilityController = class {
+    enabled = false;
+    setEnabled(enabled) {
+      this.enabled = enabled;
+      if (enabled) this.ensureStyle();
+      else this.removeStyle();
+    }
+    dispose() {
+      this.enabled = false;
+      this.removeStyle();
+    }
+    ensureStyle() {
+      if (!this.enabled || document.getElementById(OFFICIAL_NAV_STYLE_ID)) return;
+      const style = document.createElement("style");
+      style.id = OFFICIAL_NAV_STYLE_ID;
+      style.textContent = `
+${ROOT_AT_END} ${FIXED_CHILD},
+${ROOT_BEFORE_SPACE} ${FIXED_CHILD} {
+  opacity: 0 !important;
+  pointer-events: none !important;
+}
+`;
+      document.head.append(style);
+    }
+    removeStyle() {
+      document.getElementById(OFFICIAL_NAV_STYLE_ID)?.remove();
     }
   };
 
@@ -3643,7 +2212,8 @@ ${text}
     hovered = -1;
     assistant = false;
     timer = 0;
-    statusTimer = 0;
+    pending = -1;
+    failed = -1;
     themeDispose = null;
     constructor(onJump) {
       document.querySelectorAll(`[id="${RAIL_HOST_ID}"]`).forEach((node) => node.remove());
@@ -3662,6 +2232,9 @@ ${text}
       .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
       .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
       .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
+      .mark[data-pending="true"] .mark-bar { width:22px; background:#10a37f88; }
+      .mark[data-pending="true"] .number { opacity:1; }
+      .mark[data-failed="true"] .mark-bar { background:#c0392b; }
       .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
       .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
       .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
@@ -3716,6 +2289,8 @@ ${text}
       }
       this.clearHover();
       this.active = -1;
+      this.pending = -1;
+      this.failed = -1;
       this.buttons = turns.map((turn) => {
         const button = document.createElement("button");
         button.type = "button";
@@ -3733,19 +2308,25 @@ ${text}
       this.marks.replaceChildren(...this.buttons);
       this.host.hidden = !turns.length;
     }
-    setStatus(message) {
-      window.clearTimeout(this.statusTimer);
-      this.host.title = message;
-      let status = this.host.shadowRoot.querySelector('[role="status"]');
-      if (!status) {
-        status = document.createElement("div");
-        status.setAttribute("role", "status");
-        status.style.cssText = "position:absolute;right:64px;top:0;white-space:nowrap;background:var(--bg);padding:4px 8px;border-radius:6px;pointer-events:none";
-        this.host.shadowRoot.append(status);
+    setPending(index) {
+      const previous = this.buttons[this.pending];
+      if (previous) {
+        delete previous.dataset.pending;
+        previous.removeAttribute("aria-busy");
       }
-      status.textContent = message;
-      status.hidden = !message;
-      if (message && message !== "定位中") this.statusTimer = window.setTimeout(() => this.setStatus(""), 1800);
+      this.pending = index ?? -1;
+      const next = index == null ? void 0 : this.buttons[index];
+      if (next) {
+        next.dataset.pending = "true";
+        next.setAttribute("aria-busy", "true");
+      }
+    }
+    setFailed(index) {
+      const previous = this.buttons[this.failed];
+      if (previous) delete previous.dataset.failed;
+      this.failed = index ?? -1;
+      const next = index == null ? void 0 : this.buttons[index];
+      if (next) next.dataset.failed = "true";
     }
     setActive(index) {
       if (this.active === index) return;
@@ -3773,7 +2354,6 @@ ${text}
       this.preview.hidden = true;
     }
     dispose() {
-      window.clearTimeout(this.statusTimer);
       this.clearHover();
       this.themeDispose?.();
       this.host.remove();
@@ -3827,6 +2407,8 @@ ${text}
     raf = 0;
     jumping = false;
     jumpGeneration = 0;
+    jumpTarget = null;
+    failTimer = 0;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       window.addEventListener("resize", this.onLayout, { passive: true });
@@ -3839,14 +2421,20 @@ ${text}
     }
     clear() {
       this.snapshot = null;
+      this.jumping = false;
+      this.jumpTarget = null;
+      window.clearTimeout(this.failTimer);
       this.view.setTurns([]);
       this.view.clearHover();
+      this.view.setPending(null);
+      this.view.setFailed(null);
     }
     dispose() {
       this.disposed = true;
       this.unsubscribe?.();
       this.unsubscribe = null;
       window.cancelAnimationFrame(this.raf);
+      window.clearTimeout(this.failTimer);
       window.removeEventListener("resize", this.onLayout);
       window.removeEventListener("scroll", this.onScroll, true);
       this.root?.removeEventListener("scroll", this.onScroll);
@@ -3859,30 +2447,46 @@ ${text}
       this.view.setTurns(turns);
       if (turns.length) {
         this.layout();
-        this.syncActive();
+        if (!this.jumping) this.syncActive();
       }
     }
     async jump(turnId) {
+      if (this.jumping && this.jumpTarget === turnId) return;
       const generation = ++this.jumpGeneration;
-      this.navigator.cancel();
+      this.jumpTarget = turnId;
+      window.clearTimeout(this.failTimer);
+      this.view.setFailed(null);
       this.jumping = true;
-      this.view.setStatus("定位中");
+      const index = this.turnIndex(turnId);
+      this.view.setPending(index);
       try {
         const result = await this.navigator.navigateTo(turnId);
         if (generation !== this.jumpGeneration) return;
-        if (result.status === "cancelled") {
-          this.view.setStatus("");
+        this.view.setPending(null);
+        if (!result.ok && result.status === "cancelled") {
+          this.syncActive();
           return;
         }
         if (!result.ok) {
-          this.view.setStatus("定位失败");
+          this.view.setFailed(index);
+          this.failTimer = window.setTimeout(() => {
+            if (generation !== this.jumpGeneration) return;
+            this.view.setFailed(null);
+            this.syncActive();
+          }, NATIVE_NAV_CONFIG.failStyleMs);
           return;
         }
-        this.view.setStatus("");
-        this.syncActive();
+        if (index >= 0) this.view.setActive(index);
       } finally {
-        if (generation === this.jumpGeneration) this.jumping = false;
+        if (generation === this.jumpGeneration) {
+          this.jumping = false;
+          this.jumpTarget = null;
+        }
       }
+    }
+    turnIndex(turnId) {
+      const turns = this.snapshot?.activeTurns ?? [];
+      return turns.findIndex((turn) => turn.id === turnId || turn.userMessageId === turnId);
     }
     onLayout = () => {
       this.layout();
@@ -3899,6 +2503,7 @@ ${text}
       placeRail(this.view.host, this.root, this.snapshot?.activeTurns.length ?? 0);
     }
     syncActive() {
+      if (this.jumping) return;
       const turns = this.snapshot?.activeTurns ?? [];
       if (!turns.length) return;
       this.root = findScrollRoot();
@@ -4549,6 +3154,9 @@ ${timestamp ? `${timestamp}
     rail = null;
     toolbar = null;
     quota = null;
+    prep = null;
+    officialNav = null;
+    prepDispose = null;
     routeDispose = null;
     messageDispose = null;
     hostGuard = null;
@@ -4564,6 +3172,13 @@ ${timestamp ? `${timestamp}
       this.quota.mount();
       this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.sync);
       this.toolbar.mount();
+      this.prep = new NativePreparationController();
+      this.officialNav = new OfficialNavigationVisibilityController();
+      this.officialNav.setEnabled(true);
+      this.prepDispose = this.sync.subscribe((snapshot) => {
+        if (!snapshot) return;
+        this.prep?.evaluate(snapshot.conversationId, snapshot.activeTurns);
+      });
       this.syncPageState();
       this.routeDispose = observeRouteChange(() => {
         this.toolbar?.closePanels();
@@ -4595,6 +3210,11 @@ ${timestamp ? `${timestamp}
       this.routeDispose = null;
       this.messageDispose?.();
       this.messageDispose = null;
+      this.prepDispose?.();
+      this.prepDispose = null;
+      this.officialNav?.dispose();
+      this.officialNav = null;
+      this.prep = null;
       this.quota?.dispose();
       this.quota = null;
       this.rail?.dispose();

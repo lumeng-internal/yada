@@ -14,9 +14,6 @@
     "noEmit": true,
     "skipLibCheck": true,
     "baseUrl": ".",
-    "paths": {
-      "@/*": ["vendor/luna-navigation/src/*"]
-    },
     "types": ["chrome", "node"]
   },
   "include": ["src"],

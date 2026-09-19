@@ -1,11 +1,11 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
 import type { YadaTurn } from "../conversation/types";
-import { NavigationPort } from "./navigationPort";
+import { NativeNavigationPort } from "./nativeNavigationPort";
 import type { NavigationResult } from "./types";
 
 export class NavigatorController {
-  private readonly port = new NavigationPort();
+  private readonly port = new NativeNavigationPort();
   private snapshot: ConversationSnapshot | null = null;
   private unsubscribe: (() => void) | null = null;
 
@@ -29,6 +29,10 @@ export class NavigatorController {
 
   currentTurns(): YadaTurn[] {
     return this.snapshot?.activeTurns ?? [];
+  }
+
+  lastDiagnostics() {
+    return this.port.lastDiagnostics;
   }
 
   dispose(): void {

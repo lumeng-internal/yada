@@ -1,5 +1,7 @@
 import { ConversationSync } from "./core/conversationSync";
+import { NativePreparationController } from "./navigation/nativePreparation";
 import { NavigatorController } from "./navigation/navigatorController";
+import { OfficialNavigationVisibilityController } from "./navigation/officialVisibility";
 import { isChatGptConversationPage, isChatGptPage, getConversationIdFromUrl } from "./platform/chatgptAdapter";
 import { QuotaTracker } from "./quota/tracker";
 import { YadaRailController } from "./rail/controller";
@@ -12,6 +14,9 @@ class ChatGptYadaApp {
   private rail: YadaRailController | null = null;
   private toolbar: YadaToolbar | null = null;
   private quota: QuotaTracker | null = null;
+  private prep: NativePreparationController | null = null;
+  private officialNav: OfficialNavigationVisibilityController | null = null;
+  private prepDispose: (() => void) | null = null;
   private routeDispose: (() => void) | null = null;
   private messageDispose: (() => void) | null = null;
   private hostGuard: MutationObserver | null = null;
@@ -28,6 +33,13 @@ class ChatGptYadaApp {
     this.quota.mount();
     this.toolbar = new YadaToolbar((assistant) => this.rail?.setPreviewMode(assistant), this.sync);
     this.toolbar.mount();
+    this.prep = new NativePreparationController();
+    this.officialNav = new OfficialNavigationVisibilityController();
+    this.officialNav.setEnabled(true);
+    this.prepDispose = this.sync.subscribe((snapshot) => {
+      if (!snapshot) return;
+      this.prep?.evaluate(snapshot.conversationId, snapshot.activeTurns);
+    });
     this.syncPageState();
     this.routeDispose = observeRouteChange(() => {
       this.toolbar?.closePanels();
@@ -66,6 +78,11 @@ class ChatGptYadaApp {
     this.routeDispose = null;
     this.messageDispose?.();
     this.messageDispose = null;
+    this.prepDispose?.();
+    this.prepDispose = null;
+    this.officialNav?.dispose();
+    this.officialNav = null;
+    this.prep = null;
     this.quota?.dispose();
     this.quota = null;
     this.rail?.dispose();

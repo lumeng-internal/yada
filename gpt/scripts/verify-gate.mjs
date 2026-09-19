@@ -22,6 +22,9 @@ if (!scripts.includes("content.js") || scripts.includes("native-bootstrap-page.j
 if (existsSync(resolve(root, "src/nativeBootstrap")) || existsSync(resolve(root, "public/native-bootstrap-page.js"))) {
   throw new Error("nativeBootstrap files still exist");
 }
+if (existsSync(resolve(root, "vendor/luna-navigation"))) {
+  throw new Error("vendor/luna-navigation must be removed from production");
+}
 console.log("PASS manifest 4.0.0 has content, background, popup, and no native-bootstrap-page.js");
 
 function walk(dir) {
@@ -42,7 +45,8 @@ for (const [pattern, label] of [
   [/导航准备中/, "导航准备中"],
   [/导航未完整/, "导航未完整"],
   [/waiting-native|waiting-dom/, "native wait states"],
-  [/\?message=/, "message query refresh"]
+  [/searchVirtualPrompt|jumpVirtual/, "Luna virtual search"],
+  [/luna-navigation/, "luna-navigation"]
 ]) {
   if (pattern.test(src)) throw new Error(`production source still contains ${label}`);
 }

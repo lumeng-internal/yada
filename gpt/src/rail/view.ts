@@ -14,7 +14,8 @@ export class RailView {
   private hovered = -1;
   private assistant = false;
   private timer = 0;
-  private statusTimer = 0;
+  private pending = -1;
+  private failed = -1;
   private themeDispose: (() => void) | null = null;
 
   constructor(onJump: (id: string) => void) {
@@ -34,6 +35,9 @@ export class RailView {
       .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
       .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
       .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
+      .mark[data-pending="true"] .mark-bar { width:22px; background:#10a37f88; }
+      .mark[data-pending="true"] .number { opacity:1; }
+      .mark[data-failed="true"] .mark-bar { background:#c0392b; }
       .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
       .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
       .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
@@ -90,6 +94,8 @@ export class RailView {
     }
     this.clearHover();
     this.active = -1;
+    this.pending = -1;
+    this.failed = -1;
     this.buttons = turns.map((turn) => {
       const button = document.createElement("button");
       button.type = "button";
@@ -108,19 +114,26 @@ export class RailView {
     this.host.hidden = !turns.length;
   }
 
-  setStatus(message: string): void {
-    window.clearTimeout(this.statusTimer);
-    this.host.title = message;
-    let status = this.host.shadowRoot!.querySelector<HTMLElement>('[role="status"]');
-    if (!status) {
-      status = document.createElement("div");
-      status.setAttribute("role", "status");
-      status.style.cssText = "position:absolute;right:64px;top:0;white-space:nowrap;background:var(--bg);padding:4px 8px;border-radius:6px;pointer-events:none";
-      this.host.shadowRoot!.append(status);
+  setPending(index: number | null): void {
+    const previous = this.buttons[this.pending];
+    if (previous) {
+      delete previous.dataset.pending;
+      previous.removeAttribute("aria-busy");
     }
-    status.textContent = message;
-    status.hidden = !message;
-    if (message && message !== "定位中") this.statusTimer = window.setTimeout(() => this.setStatus(""), 1800);
+    this.pending = index ?? -1;
+    const next = index == null ? undefined : this.buttons[index];
+    if (next) {
+      next.dataset.pending = "true";
+      next.setAttribute("aria-busy", "true");
+    }
+  }
+
+  setFailed(index: number | null): void {
+    const previous = this.buttons[this.failed];
+    if (previous) delete previous.dataset.failed;
+    this.failed = index ?? -1;
+    const next = index == null ? undefined : this.buttons[index];
+    if (next) next.dataset.failed = "true";
   }
 
   setActive(index: number): void {
@@ -152,7 +165,6 @@ export class RailView {
   }
 
   dispose(): void {
-    window.clearTimeout(this.statusTimer);
     this.clearHover();
     this.themeDispose?.();
     this.host.remove();

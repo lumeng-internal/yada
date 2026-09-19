@@ -5,13 +5,19 @@ import { holdWhile, waitUntil } from "./runner.mjs";
 const USER_SELECTOR = '[data-message-author-role="user"][data-message-id]';
 
 async function conversationState(cdp, targetId) {
-  return evaluateFn(cdp, targetId, `() => ({
-    url: location.href,
-    users: document.querySelectorAll('${USER_SELECTOR}').length,
-    host: Boolean(document.getElementById("chatgpt-yada-rail-host")),
-    marks: document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelectorAll("button.mark").length ?? 0,
-    status: document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[role="status"]')?.textContent || ""
-  })`);
+  return evaluateFn(cdp, targetId, `() => {
+    const host = document.getElementById("chatgpt-yada-rail-host");
+    const root = host?.shadowRoot;
+    return {
+      url: location.href,
+      users: document.querySelectorAll('${USER_SELECTOR}').length,
+      host: Boolean(host),
+      marks: root?.querySelectorAll("button.mark").length ?? 0,
+      pending: Boolean(root?.querySelector('[data-pending="true"]')),
+      failed: Boolean(root?.querySelector('[data-failed="true"]')),
+      status: ""
+    };
+  }`);
 }
 
 export async function validateNavigationTarget(cdp, conversationId, createdTargetIds) {
@@ -61,16 +67,19 @@ async function clickMark(cdp, targetId, index) {
 async function jumpCheck(cdp, targetId, userId, index) {
   return evaluateFn(cdp, targetId, `(input) => {
     const node = document.querySelector('[data-message-id="' + input.userId + '"]');
-    const status = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[role="status"]')?.textContent || "";
-    const active = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[data-active="true"]');
+    const root = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot;
+    const pending = Boolean(root?.querySelector('[data-pending="true"]'));
+    const failed = Boolean(root?.querySelector('[data-failed="true"]'));
+    const active = root?.querySelector('[data-active="true"]');
     const activeIndex = active ? Number(active.dataset.index) : -1;
-    if (!node) return { ok: false, reason: "not-rendered", status, activeIndex };
+    if (!node) return { ok: false, reason: "not-rendered", pending, failed, activeIndex };
     const rect = node.getBoundingClientRect();
     const inView = rect.bottom > 80 && rect.top < innerHeight - 40;
     return {
-      ok: inView && status !== "定位失败" && status !== "定位中" && activeIndex === input.index,
+      ok: inView && !pending && !failed && activeIndex === input.index,
       inView,
-      status,
+      pending,
+      failed,
       activeIndex,
       id: node.dataset.messageId
     };
@@ -118,8 +127,8 @@ export async function liveDuplicate(cdp, sample, createdTargetIds) {
         const node = document.querySelector('[data-message-id="' + id + '"]');
         if (!node) return null;
         const rect = node.getBoundingClientRect();
-        const status = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot?.querySelector('[role="status"]')?.textContent || "";
-        if (status === "定位中" || status === "定位失败") return null;
+        const root = document.getElementById("chatgpt-yada-rail-host")?.shadowRoot;
+        if (root?.querySelector('[data-pending="true"], [data-failed="true"]')) return null;
         return rect.bottom > 80 && rect.top < innerHeight - 40 ? id : null;
       }`, id);
       return found === id ? found : null;
@@ -143,20 +152,20 @@ export async function liveCancel(cdp, sample, createdTargetIds) {
   await clickMark(cdp, targetId, 0);
   await waitUntil(async () => {
     const state = await conversationState(cdp, targetId);
-    return state.status === "定位中" ? state : null;
+    return state.pending ? state : null;
   }, 800, "navigation start").catch(() => null);
   await evaluateFn(cdp, targetId, `() => window.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: 120 }))`);
   await waitUntil(async () => {
     const state = await conversationState(cdp, targetId);
-    return state.status !== "定位中" ? state : null;
+    return !state.pending ? state : null;
   }, 8_000, "navigation did not cancel");
-  const status = (await conversationState(cdp, targetId)).status;
-  if (status === "定位失败") throw new Error("cancel showed 定位失败");
+  const state = await conversationState(cdp, targetId);
+  if (state.failed) throw new Error("cancel showed failure style");
   const first = await evaluateFn(cdp, targetId, scrollTopExpr());
   await holdWhile(async () => {
     const second = await evaluateFn(cdp, targetId, scrollTopExpr());
     return Math.abs((second ?? 0) - (first ?? 0)) <= 24;
   }, 400, `scroll continued after cancel: ${first}`);
   const second = await evaluateFn(cdp, targetId, scrollTopExpr());
-  return { ok: true, cancelled: true, status, scrollTop: second };
+  return { ok: true, cancelled: true, status: "", failed: state.failed, scrollTop: second };
 }

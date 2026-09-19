@@ -1,20 +1,33 @@
-export type NavigationStatus =
-  | "found"
+export type NavigationPath = "direct" | "official-button" | "stable-slot";
+
+export type NavigationFailure =
   | "cancelled"
-  | "exhausted"
-  | "timed-out"
-  | "unresolved"
+  | "unsupported"
+  | "timeout"
+  | "stale-target"
+  | "identity-conflict"
   | "failed";
 
-export type NavigationPath = "direct" | "virtual";
-
-export type NavigationResult = {
-  ok: boolean;
-  status: NavigationStatus;
-  path?: NavigationPath;
-  attempts?: number;
-};
+export type NavigationResult =
+  | { ok: true; path: NavigationPath }
+  | { ok: false; status: NavigationFailure };
 
 export type NavigateToOptions = {
   signal?: AbortSignal;
+  timeoutMs?: number;
+};
+
+export type NavigationDiagnostics = {
+  conversationId: string;
+  targetIndex: number;
+  targetMessageId: string;
+  path: NavigationPath | null;
+  officialButtonCount: number;
+  expectedTurnCount: number;
+  slotCount: number;
+  reloadAttempted: boolean;
+  yadaScrollWrites: number;
+  alignmentAttempts: number;
+  result: NavigationPath | NavigationFailure;
+  duration: number;
 };

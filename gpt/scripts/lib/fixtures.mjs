@@ -25,8 +25,7 @@ export async function runLocalFixtures(cdp, createdTargetIds) {
     entryPoints: [resolve(root, "scripts/verify-features.ts")],
     bundle: true,
     write: false,
-    format: "iife",
-    alias: { "@": resolve(root, "vendor/luna-navigation/src") }
+    format: "iife"
   });
   const server = createServer((req, res) => {
     res.setHeader("Content-Type", req.url === "/test.js" ? "text/javascript" : "text/html");

@@ -38,15 +38,18 @@ await esbuild.build({
   target: ["chrome120"],
   outdir,
   metafile: true,
-  alias: {
-    "@": resolve(root, "vendor/luna-navigation/src")
-  },
   plugins: [inlineCss],
   logLevel: "info"
 }).then((result) => {
   const artifacts = resolve(root, "artifacts/build");
   mkdirSync(artifacts, { recursive: true });
   writeFileSync(resolve(artifacts, "metafile.json"), `${JSON.stringify(result.metafile, null, 2)}\n`);
+  const lunaInputs = Object.keys(result.metafile?.inputs ?? {}).filter((input) =>
+    input.includes("luna-navigation") || input.includes("vendor/luna")
+  );
+  if (lunaInputs.length !== 0) {
+    throw new Error(`production bundle still includes ${lunaInputs.length} Luna inputs`);
+  }
 });
 
 cpSync(resolve(root, "manifest.json"), resolve(outdir, "manifest.json"));
@@ -68,5 +71,8 @@ if (existsSync(resolve(outdir, "content.css"))) {
 const content = readFileSync(resolve(outdir, "content.js"), "utf8");
 if (content.includes("native-bootstrap-page") || content.includes("NativeBootstrapController")) {
   throw new Error("built content.js contains native bootstrap");
+}
+if (/searchVirtualPrompt|jumpVirtual|luna-navigation|Virtual Search/.test(content)) {
+  throw new Error("built content.js still contains Luna virtual search");
 }
 console.log("build ok: dist_chrome/{content.js,background.js,popup.js,popup.html,popup.css,manifest.json}");
