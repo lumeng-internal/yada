@@ -4,22 +4,40 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.0.2**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.0.3**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
+Runtime is subtractive: BOOT work may use CPU/network; STEADY must sleep; heavy Prompt/Quota UI is ON-DEMAND.
+
 ## Architecture
 
-- `ConversationSync`: the one current-conversation snapshot for Copy All and current-conversation quota turns.
-- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper and bounded prepare lease; no `chrome.*` API.
-- `nativeNavigator/hydrator.ts`: isolated PrepareSession that exposes the host pagination sentinel; no scrolling or reload.
+- `ConversationSync`: the one current-conversation snapshot for Copy All and current-conversation quota turns. Mutation batches coalesce for 250ms; hidden tabs still detect answer completion.
+- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper, route events, bounded prepare lease, and parked fast-pass; no `chrome.*` API.
+- `nativeNavigator/hydrator.ts`: isolated PrepareSession that exposes the host pagination sentinel; terminal states park heavy observers until the next route change.
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
-- `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; one timer/flight, private staged slices, pause on hidden.
+- `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; Web Locks so only one tab runs a full 7-day scan; a started scan is not aborted on hidden.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
+
+## Runtime rules for new work
+
+任何新模块必须优先：
+
+- event-driven
+- complete-and-sleep
+
+禁止重新加入：
+
+- per-frame polling
+- whole-body permanent observer
+- duplicate cross-tab history scan
+- 复杂多标签调度框架、性能设置页、云端或 telemetry
+
+Route 变化只走已有 MAIN `postMessage`。不要新增 `chrome.webNavigation` / tabs 轮询。
 
 ## Required safety boundaries
 
-- Preserve the original fetch Promise/Response; inspect only a clone.
+- Preserve the original fetch Promise/Response; inspect only a clone. After Navigator parks, history fetch must return to native passthrough.
 - Never bridge or persist message bodies, auth data, Cookie, Token, or full payloads.
 - Never scroll, restore-scroll, reload, rewrite a deep link, or manipulate ChatGPT's official Navigator UI.
 - Stop on uncertainty, user input, drift over 8px, unstable layout, streaming, hidden page, route change, or budget exhaustion.
@@ -31,12 +49,13 @@ The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There
 The engineering closeout gate is:
 
 ```bash
+npm test
 npm run build
 git diff --check
 npm run verify:gate
 ```
 
-Focused or full unit tests may be used for changed pure logic, but `npm run check` and browser automation are not release authority. Do not run candidate/Playwright/Mac mini ChatGPT acceptance, create test conversations, or consume Pro quota. Real product acceptance remains a MacBook manual task.
+Do not run candidate/Playwright/Mac mini ChatGPT acceptance, create test conversations, or consume Pro quota. Real 10–15 tab product acceptance remains a MacBook manual task.
 
 ## Upstream boundaries
 
@@ -51,7 +70,7 @@ Focused or full unit tests may be used for changed pure logic, but `npm run chec
 
 任何进入测试包的产品代码变化必须 bump version。产品行为、代码逻辑、UI 功能或 bugfix 均属于此规则；禁止代码更新而 manifest/package 版本不变。
 
-- PATCH：bugfix、小功能、小交互优化；例如 4.0.1 → 4.0.2。本轮长对话 official Navigator PrepareSession 修复属于 PATCH。
+- PATCH：bugfix、小功能、小交互优化、运行生命周期收口；例如 4.0.2 → 4.0.3。
 - MINOR：新增完整功能模块；例如 4.0.x → 4.1.0。
 - MAJOR：架构兼容性变化或产品方向重大变化。
 - package、lockfile、source manifest、dist manifest、ZIP 文件名必须一致；`npm run package` 强制检查，拒绝覆盖已有版本包。

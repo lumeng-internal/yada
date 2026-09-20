@@ -1,6 +1,6 @@
 import type { QuotaSnapshot } from "./types";
 import { remainingToRatio, renderQuotaIcons, type RingValues } from "./iconRenderer";
-import { historySyncLabel } from "./presentation";
+import { historySyncLabel, quotaDetailsQuiet } from "./presentation";
 
 export function snapshotToRings(snapshot: QuotaSnapshot): RingValues {
   const center = snapshot.syncStatus === "loading" || snapshot.syncStatus === "backfill"
@@ -25,9 +25,9 @@ export function snapshotTitle(snapshot: QuotaSnapshot): string {
     "",
     metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
     metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
-    metricLine("两个 Pro", snapshot.combinedDaily),
+    metricLine("GPT-6 Pro+5.6 Sol Pro", snapshot.combinedDaily),
     "",
-    `历史同步：${historySyncLabel(snapshot)}`,
+    quotaDetailsQuiet(snapshot) ? snapshot.updatedLabel : `历史同步：${historySyncLabel(snapshot)}`,
     `未分类轮次：${snapshot.unclassifiedTurns}`,
     snapshot.updatedLabel,
     workspace

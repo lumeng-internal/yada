@@ -19,7 +19,9 @@ import {
   historyRequest,
   isNativeHistoryState,
   isPrepareActive,
+  parseParkHandshake,
   parsePrepareHandshake,
+  parseRouteEvent,
   record,
   requestCloneInit,
   shouldExpandHistoryRequest
@@ -192,6 +194,12 @@ describe("prepare lease", () => {
     expect(isPrepareActive(emptyPrepareLease(), 8_000, "current", 3)).toBe(false);
     expect(isNativeHistoryState({ ...emptyHistory("current"), boosted: true })).toBe(true);
     expect(isNativeHistoryState({ ...emptyHistory("current"), boosted: "yes" })).toBe(false);
+    expect(parseRouteEvent({
+      channel: NATIVE_NAV_CHANNEL, kind: "route", conversationId: "current", generation: 1
+    })).toEqual({ conversationId: "current", generation: 1 });
+    expect(parseParkHandshake({
+      kind: "park", conversationId: "current", generation: 1
+    })).toEqual({ conversationId: "current", generation: 1 });
   });
 });
 

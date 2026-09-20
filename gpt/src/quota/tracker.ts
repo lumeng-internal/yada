@@ -14,6 +14,36 @@ export const MAX_HISTORY_PASSES = 20;
 export const MAX_TRANSIENT_RETRIES = 2;
 export const HISTORY_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 const HISTORY_LIST_TIMEOUT_MS = 45_000;
+export const HISTORY_RECONCILE_LOCK = "chatgpt-yada:quota-history-reconcile";
+export const HISTORY_LOCK_RETRY_MS = 60_000;
+
+export type HistoryReconcileLock = { name: string } | null;
+
+export type HistoryLockManager = {
+  request(
+    name: string,
+    options: { mode?: "exclusive" | "shared"; ifAvailable?: boolean },
+    callback: (lock: HistoryReconcileLock) => Promise<void> | void
+  ): Promise<void>;
+};
+
+export async function withHistoryReconcileLock(
+  task: () => Promise<void>,
+  locks?: HistoryLockManager | null
+): Promise<"acquired" | "busy" | "unsupported"> {
+  if (!locks) return "unsupported";
+  let acquired = false;
+  await locks.request(
+    HISTORY_RECONCILE_LOCK,
+    { mode: "exclusive", ifAvailable: true },
+    async (lock) => {
+      if (!lock) return;
+      acquired = true;
+      await task();
+    }
+  );
+  return acquired ? "acquired" : "busy";
+}
 
 export async function requestHistoryList(path: string, signal?: AbortSignal): Promise<unknown> {
   try {
@@ -65,8 +95,19 @@ export class QuotaTracker {
   private nextHistoryAt = 0;
   private forceHistory = false;
   private historyIdentity: string | null = null;
+  private bypassCaches = false;
+  private readonly locks: HistoryLockManager | null;
 
-  constructor(private readonly sync: ConversationSync) {}
+  constructor(
+    private readonly sync: ConversationSync,
+    options: { locks?: HistoryLockManager | null } = {}
+  ) {
+    this.locks = options.locks !== undefined
+      ? options.locks
+      : (typeof navigator !== "undefined" && "locks" in navigator
+        ? navigator.locks as HistoryLockManager
+        : null);
+  }
 
   mount(): void {
     this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
@@ -75,6 +116,7 @@ export class QuotaTracker {
   }
 
   async refreshCurrent(): Promise<void> {
+    this.bypassCaches = true;
     try {
       await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
       await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
@@ -83,6 +125,7 @@ export class QuotaTracker {
       this.nextHistoryAt = 0;
       this.forceHistory = true;
       this.scheduleHistory(0);
+      this.bypassCaches = false;
     }
   }
 
@@ -111,7 +154,7 @@ export class QuotaTracker {
     if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
     const controller = new AbortController();
     this.historyAbort = controller;
-    this.historyFlight = this.scanHistory(controller.signal)
+    this.historyFlight = this.runLockedHistoryScan(controller.signal)
       .catch(() => { this.forceHistory = false; this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS; })
       .finally(() => {
         this.historyAbort = null;
@@ -120,8 +163,20 @@ export class QuotaTracker {
       });
   }
 
+  private async runLockedHistoryScan(signal: AbortSignal): Promise<void> {
+    const result = await withHistoryReconcileLock(() => this.scanHistory(signal), this.locks);
+    if (result === "unsupported") {
+      await this.scanHistory(signal);
+      return;
+    }
+    if (result === "busy") {
+      this.forceHistory = false;
+      this.nextHistoryAt = Date.now() + HISTORY_LOCK_RETRY_MS;
+    }
+  }
+
   private async scanHistory(signal: AbortSignal): Promise<void> {
-    const account = await readChatAccount(signal);
+    const account = await readChatAccount(signal, { force: this.forceHistory || this.bypassCaches });
     if (signal.aborted || this.disposed) return;
     // Temporary auth/network failure is not an account change.
     if (!account.userId) throw new Error("login");
@@ -207,7 +262,7 @@ export class QuotaTracker {
 
   private async writeLedger(snapshot: ConversationSnapshot | null): Promise<void> {
     if (this.disposed || !snapshot) return;
-    const account = await readChatAccount();
+    const account = await readChatAccount(undefined, { force: this.bypassCaches });
     if (this.disposed || !account.userId) return;
     const accountChanged = this.historyIdentity !== null && this.historyIdentity !== account.identity;
     if (accountChanged) {
@@ -222,7 +277,7 @@ export class QuotaTracker {
       events, workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
     });
     if (accountChanged) this.scheduleHistory(0);
-    const limits = await readModelLimits();
+    const limits = await readModelLimits(Date.now(), undefined, { force: this.bypassCaches });
     if (!this.disposed) await this.publish(account, { limits,
       workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
     });
@@ -230,11 +285,10 @@ export class QuotaTracker {
 
   private readonly onVisibility = (): void => {
     if (document.visibilityState === "hidden") {
-      this.historyAbort?.abort();
       window.clearTimeout(this.historyTimer);
       return;
     }
-    this.scheduleHistory(0);
+    if (!this.historyFlight) this.scheduleHistory(0);
   };
 }
 

@@ -39,7 +39,7 @@ ChatGPT Yada GPT 扩展（`gpt/`）使用 GNU Affero General Public License v3.0
 
 [GPT Navigator Helper](https://github.com/sssstf0rest/GPT-Navigator-Helper) 0.6.4、Commit `2ac38de536dacb0ed1ad25c31396fd62a1c49022` 的仓库未声明项目许可证。
 
-本项目只将其作为经过验证的行为和架构参考。4.0.2 的 PrepareSession / bounded lease / older-page boost 按 Yada 自己的模块独立实现；**behavioral reference only / no source copied**。未将该项目源码、分发物或许可证声明并入 Yada。
+本项目只将其作为经过验证的行为和架构参考。4.0.3 的 PrepareSession / bounded lease / older-page boost 按 Yada 自己的模块独立实现；**behavioral reference only / no source copied**。未将该项目源码、分发物或许可证声明并入 Yada。
 
 ## GPT Conversation Toolkit
 

@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.0.3 - 2026-09-20
+
+- 减法式性能收口：BOOT 完成官方 Navigator 准备后进入 STEADY 休眠；提示词与额度详情改为第一次点击才创建。
+- 删除永久 RAF URL 轮询，改用 MAIN-world `kind: "route"` 事件；Navigator terminal 后 park 重观察，MAIN fetch 进入 parked 直通。
+- ConversationSync mutation 250ms debounce；Toolbar 只观察 Header 附近；删除 App hostGuard 整页重启。
+- 额度：账号 30 分钟 / model limits 10 分钟内存缓存；Web Locks 保证 7 天历史同一时间最多一个标签校准；hidden 不再 abort 已开始的扫描。
+- 三环详情健康状态只显示三组预计剩余和上次完整同步；异常状态仍保留说明。
+- 测试包 `ChatGPT-Yada-v4.0.3-official-only-UNVERIFIED.zip`；旧 4.0.0 / 4.0.1 / 4.0.2 包保留。Mac mini 产品测试不运行，MacBook 15 标签验收待执行。
+
 ## v4.0.2 - 2026-09-20
 
 - 修复长对话 official Navigator 无法出现：PrepareSession 期间 initial 与 older pagination 合法请求都扩大到 `num_turns >= 100`，并使用 10 秒 lease + 4 秒 heartbeat，避免 MAIN 请求扩大泄漏。

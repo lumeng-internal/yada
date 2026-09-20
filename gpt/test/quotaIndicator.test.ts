@@ -35,7 +35,8 @@ function proSnapshot(count = 40, extras: { historyComplete?: boolean; syncStatus
     historyComplete: extras.historyComplete ?? true,
     syncStatus: extras.syncStatus,
     unclassifiedTurns: extras.historyComplete === false ? 2 : 0,
-    now: NOW
+    now: NOW,
+    lastHistorySuccessAt: extras.historyComplete === false ? undefined : NOW
   });
 }
 
@@ -57,7 +58,6 @@ function mountIndicator(send: QuotaStateSender, theme: "light" | "dark" = "light
   button: HTMLButtonElement;
   canvas: HTMLCanvasElement;
   indicator: QuotaIndicator;
-  popover: HTMLElement;
 } {
   const host = document.createElement("div");
   host.setAttribute("data-yada-theme", theme);
@@ -69,8 +69,11 @@ function mountIndicator(send: QuotaStateSender, theme: "light" | "dark" = "light
   shadow.append(button);
   document.body.append(host);
   const indicator = new QuotaIndicator(button, { send });
-  const popover = document.getElementById(QUOTA_POPOVER_HOST_ID)?.shadowRoot?.querySelector<HTMLElement>("[data-quota-popover]")!;
-  return { host, button, canvas, indicator, popover };
+  return { host, button, canvas, indicator };
+}
+
+function popoverOf(): HTMLElement | null {
+  return document.getElementById(QUOTA_POPOVER_HOST_ID)?.shadowRoot?.querySelector<HTMLElement>("[data-quota-popover]") ?? null;
 }
 
 async function flush(): Promise<void> {
@@ -152,15 +155,22 @@ describe("inline toolbar quota rings", () => {
     expect(mounted.canvas.dataset.quotaInner).toBe(String(rings.inner));
     expect(mounted.canvas.dataset.quotaCenter).toBe(rings.center ?? "");
     expect(mounted.button.title).toBe(snapshotTitle(snapshot));
+    expect(document.getElementById(QUOTA_POPOVER_HOST_ID)).toBeNull();
     mounted.button.click();
-    expect(mounted.popover.hidden).toBe(false);
-    expect(mounted.popover.textContent).toContain("Pro 模型额度");
-    expect(mounted.popover.textContent).toContain("GPT-6 Pro");
-    expect(mounted.popover.textContent).toContain("GPT-5.6 Sol Pro");
-    expect(mounted.popover.textContent).toContain("两个 Pro");
-    expect(mounted.popover.textContent).toContain(`预计剩余 ${snapshot.gpt6ProWeekly?.estimatedRemaining} / ${snapshot.gpt6ProWeekly?.limit}`);
-    expect(mounted.popover.textContent).toContain(`预计剩余 ${snapshot.solProDaily?.estimatedRemaining} / ${snapshot.solProDaily?.limit}`);
-    expect(mounted.popover.textContent).toContain(`预计剩余 ${snapshot.combinedDaily?.estimatedRemaining} / ${snapshot.combinedDaily?.limit}`);
+    const popover = popoverOf()!;
+    expect(popover.hidden).toBe(false);
+    expect(popover.textContent).toContain("Pro 模型额度");
+    expect(popover.textContent).toContain("GPT-6 Pro");
+    expect(popover.textContent).toContain("GPT-5.6 Sol Pro");
+    expect(popover.textContent).toContain("GPT-6 Pro+5.6 Sol Pro");
+    expect(popover.textContent).not.toContain("两个 Pro");
+    expect(popover.textContent).toContain(`预计剩余 ${snapshot.gpt6ProWeekly?.estimatedRemaining} / ${snapshot.gpt6ProWeekly?.limit}`);
+    expect(popover.textContent).toContain(`预计剩余 ${snapshot.solProDaily?.estimatedRemaining} / ${snapshot.solProDaily?.limit}`);
+    expect(popover.textContent).toContain(`预计剩余 ${snapshot.combinedDaily?.estimatedRemaining} / ${snapshot.combinedDaily?.limit}`);
+    expect(popover.textContent).not.toContain("本地估算，不是 ChatGPT 官方余额");
+    expect(popover.textContent).not.toContain("只统计个人 Chat，不统计 Work 和 Codex");
+    expect(popover.textContent).not.toContain("历史同步完整");
+    expect(popover.textContent).toContain("上次完整同步：");
   });
 
   it("does not estimate remaining and marks partial history with a dash", async () => {
@@ -173,8 +183,21 @@ describe("inline toolbar quota rings", () => {
     expect(rings.center).toBe("—");
     expect(mounted.canvas.dataset.quotaCenter).toBe("—");
     mounted.button.click();
-    expect(mounted.popover.textContent).toContain("历史暂未补齐");
-    expect(mounted.popover.textContent).not.toMatch(/预计剩余 \d+/);
+    expect(popoverOf()!.textContent).toContain("历史暂未补齐");
+    expect(popoverOf()!.textContent).not.toMatch(/预计剩余 \d+/);
+  });
+
+  it("keeps first-sync, error, and partial notes in the details popover", async () => {
+    const errorSnapshot = proSnapshot(8, { historyComplete: true });
+    errorSnapshot.syncStatus = "error";
+    errorSnapshot.historyError = "历史读取超时";
+    errorSnapshot.lastHistoryError = "历史读取超时";
+    const mounted = mountIndicator(async () => ({ snapshot: errorSnapshot }));
+    indicator = mounted.indicator;
+    await flush();
+    mounted.button.click();
+    expect(popoverOf()!.textContent).toContain("最近历史刷新失败");
+    expect(popoverOf()!.textContent).toContain("上次完整同步：");
   });
 
   it("uses an ellipsis while progressive history backfill is active", async () => {
@@ -184,8 +207,8 @@ describe("inline toolbar quota rings", () => {
     await flush();
     expect(mounted.canvas.dataset.quotaCenter).toBe("…");
     mounted.button.click();
-    expect(mounted.popover.textContent).toContain("正在首次同步最近 7 天 ChatGPT 历史");
-    expect(mounted.popover.textContent).toContain(`已记录 ${snapshot.recordedCount}`);
+    expect(popoverOf()!.textContent).toContain("正在首次同步最近 7 天 ChatGPT 历史");
+    expect(popoverOf()!.textContent).toContain(`已记录 ${snapshot.recordedCount}`);
   });
 
   it("does not invent Pro remaining for unknown plans", async () => {
@@ -195,9 +218,9 @@ describe("inline toolbar quota rings", () => {
     indicator = mounted.indicator;
     await flush();
     mounted.button.click();
-    expect(mounted.popover.textContent).toContain("未确认 ChatGPT 套餐，不猜测额度桶。");
-    expect(mounted.popover.textContent).not.toMatch(/预计剩余 \d+/);
-    expect(mounted.popover.textContent).not.toContain("GPT-6 Pro");
+    expect(popoverOf()!.textContent).toContain("未确认 ChatGPT 套餐，不猜测额度桶。");
+    expect(popoverOf()!.textContent).not.toMatch(/预计剩余 \d+/);
+    expect(popoverOf()!.textContent).not.toContain("GPT-6 Pro");
   });
 
   it("refetches quota/get-state after storage changes, without polling", async () => {
@@ -228,27 +251,30 @@ describe("inline toolbar quota rings", () => {
     indicator = mounted.indicator;
     await flush();
     mounted.button.click();
-    expect(mounted.popover.hidden).toBe(false);
+    expect(popoverOf()!.hidden).toBe(false);
     expect(mounted.button.getAttribute("aria-expanded")).toBe("true");
     mounted.button.click();
-    expect(mounted.popover.hidden).toBe(true);
+    expect(popoverOf()!.hidden).toBe(true);
     mounted.button.click();
-    expect(mounted.popover.hidden).toBe(false);
+    expect(popoverOf()!.hidden).toBe(false);
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
-    expect(mounted.popover.hidden).toBe(true);
+    expect(popoverOf()!.hidden).toBe(true);
     mounted.button.click();
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
-    expect(mounted.popover.hidden).toBe(true);
+    expect(popoverOf()!.hidden).toBe(true);
   });
 
-  it("mounts the quota detail in a detached fixed portal", async () => {
+  it("mounts the quota detail in a detached fixed portal on first click", async () => {
     const mounted = mountIndicator(async () => ({ snapshot: proSnapshot() }));
     indicator = mounted.indicator;
     await flush();
+    expect(document.getElementById(QUOTA_POPOVER_HOST_ID)).toBeNull();
+    mounted.button.click();
     const portal = document.getElementById(QUOTA_POPOVER_HOST_ID);
+    const popover = popoverOf()!;
     const css = portal?.shadowRoot?.querySelector("style")?.textContent ?? "";
     expect(portal?.parentElement).toBe(document.body);
-    expect(mounted.popover.getRootNode()).toBe(portal?.shadowRoot);
+    expect(popover.getRootNode()).toBe(portal?.shadowRoot);
     expect(css).toMatch(/position:\s*fixed/);
     expect(css).toMatch(/max-height:\s*calc\(100vh - 16px\)/);
     expect(css).toMatch(/overflow:\s*auto/);
@@ -262,7 +288,7 @@ describe("inline toolbar quota rings", () => {
     expect(mounted.button.title).toBe("Pro 额度暂不可用");
     expect(mounted.canvas.dataset.quotaCenter).toBe("!");
     mounted.button.click();
-    expect(mounted.popover.textContent).toContain("无法读取额度账本");
+    expect(popoverOf()!.textContent).toContain("无法读取额度账本");
   });
 
   it("removes listeners, timers, and the popover on dispose", async () => {
@@ -272,11 +298,11 @@ describe("inline toolbar quota rings", () => {
     indicator = mounted.indicator;
     await flush();
     mounted.button.click();
-    expect(mounted.popover.isConnected).toBe(true);
+    expect(popoverOf()!.isConnected).toBe(true);
     await chrome.storage.local.set({ [LEDGER_KEY]: { version: 2, events: [] } });
     mounted.indicator.dispose();
     indicator = null;
-    expect(mounted.popover.isConnected).toBe(false);
+    expect(popoverOf()).toBeNull();
     await vi.advanceTimersByTimeAsync(QUOTA_INDICATOR_DEBOUNCE_MS + 20);
     await flush();
     expect(send).toHaveBeenCalledTimes(1);
@@ -297,7 +323,7 @@ describe("inline toolbar quota rings", () => {
     expect(copy.textContent).toBe("复制全部");
     expect(prompts.textContent).toBe("提示词");
     toolbar.closePanels();
-    const popover = document.getElementById(QUOTA_POPOVER_HOST_ID)?.shadowRoot?.querySelector<HTMLElement>("[data-quota-popover]");
-    expect(popover?.hasAttribute("hidden")).toBe(true);
+    expect(document.getElementById(QUOTA_POPOVER_HOST_ID)).toBeNull();
+    expect(document.getElementById("chatgpt-yada-prompt-host")).toBeNull();
   });
 });

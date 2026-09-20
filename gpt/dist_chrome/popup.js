@@ -86,19 +86,22 @@
     if (!metric || metric.remainingRatio == null) return "—";
     return `${Math.round(metric.remainingRatio * 100)}%`;
   }
+  function quotaDetailsQuiet(snapshot) {
+    return snapshot.historyComplete && snapshot.syncStatus === "ready" && !snapshot.historyError && !snapshot.lastHistoryError;
+  }
   function historySyncLabel(snapshot) {
-    if (snapshot.historyComplete) return "历史同步完整";
+    if (quotaDetailsQuiet(snapshot)) return "";
     switch (snapshot.syncStatus) {
       case "loading":
         return "正在读取额度";
       case "backfill":
         return `正在首次同步最近 7 天 ChatGPT 历史… · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
-      case "ready":
-        return "历史同步完整";
       case "error":
-        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+        return snapshot.historyError ? `最近历史刷新失败 · ${snapshot.historyError}` : "最近历史刷新失败";
+      case "ready":
+        return snapshot.lastHistoryError ? "最近历史刷新失败" : "";
       default:
-        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+        return snapshot.historyError ? snapshot.historyError : `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
     }
   }
   function planStatusNote(snapshot) {
@@ -200,11 +203,14 @@
     const header = el("div", "header");
     header.append(el("h1", "", "Pro 模型额度"), el("time", "", snapshot.updatedLabel));
     root.append(header);
-    root.append(el(
-      "p",
-      snapshot.syncStatus === "error" ? "warn" : "note",
-      historySyncLabel(snapshot)
-    ));
+    const status = historySyncLabel(snapshot);
+    if (status) {
+      root.append(el(
+        "p",
+        snapshot.syncStatus === "error" ? "warn" : "note",
+        status
+      ));
+    }
     const rings = el("div", "rings");
     const canvas = document.createElement("canvas");
     canvas.width = 148;
@@ -223,16 +229,14 @@
     if (planNote) {
       root.append(el("p", "warn", planNote));
     } else if (snapshot.plan === "prolite") {
-      root.append(metricBlock("两个 Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
+      root.append(metricBlock("GPT-6 Pro+5.6 Sol Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
     } else {
       root.append(metricBlock("GPT-6 Pro · 过去 7 天估算", snapshot.gpt6ProWeekly, snapshot));
       root.append(metricBlock("GPT-5.6 Sol Pro · 过去 24 小时估算", snapshot.solProDaily, snapshot));
-      root.append(metricBlock("两个 Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
+      root.append(metricBlock("GPT-6 Pro+5.6 Sol Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
     }
     if (snapshot.syncStatus === "ready") root.append(el("p", "note", "预计剩余"));
     else root.append(el("p", "note", "历史补齐前不估算剩余"));
-    root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
-    root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
     root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
     root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
     if (snapshot.fallbackModel) {

@@ -90,11 +90,14 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
   header.append(el("h1", "", "Pro 模型额度"), el("time", "", snapshot.updatedLabel));
   root.append(header);
 
-  root.append(el(
-    "p",
-    snapshot.syncStatus === "error" ? "warn" : "note",
-    historySyncLabel(snapshot)
-  ));
+  const status = historySyncLabel(snapshot);
+  if (status) {
+    root.append(el(
+      "p",
+      snapshot.syncStatus === "error" ? "warn" : "note",
+      status
+    ));
+  }
 
   const rings = el("div", "rings");
   const canvas = document.createElement("canvas");
@@ -115,17 +118,15 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
   if (planNote) {
     root.append(el("p", "warn", planNote));
   } else if (snapshot.plan === "prolite") {
-    root.append(metricBlock("两个 Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
+    root.append(metricBlock("GPT-6 Pro+5.6 Sol Pro · 过去 7 天估算", snapshot.combinedDaily, snapshot));
   } else {
     root.append(metricBlock("GPT-6 Pro · 过去 7 天估算", snapshot.gpt6ProWeekly, snapshot));
     root.append(metricBlock("GPT-5.6 Sol Pro · 过去 24 小时估算", snapshot.solProDaily, snapshot));
-    root.append(metricBlock("两个 Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
+    root.append(metricBlock("GPT-6 Pro+5.6 Sol Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
   }
 
   if (snapshot.syncStatus === "ready") root.append(el("p", "note", "预计剩余"));
   else root.append(el("p", "note", "历史补齐前不估算剩余"));
-  root.append(el("p", "note", "根据保存的 Chat 历史和本地记录估算，特殊重试可能存在误差。"));
-  root.append(el("p", "note", "只统计个人 Chat，不统计 Work 和 Codex"));
   root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
   root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));
   if (snapshot.fallbackModel) {

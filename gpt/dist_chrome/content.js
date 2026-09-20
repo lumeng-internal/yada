@@ -1012,6 +1012,7 @@ ${text}
   }
 
   // src/core/conversationSync.ts
+  var SIGNAL_INSPECTION_DEBOUNCE_MS = 250;
   var ConversationSync = class {
     activeConversationId = null;
     generation = 0;
@@ -1022,6 +1023,7 @@ ${text}
     lastError = null;
     listeners = /* @__PURE__ */ new Set();
     observer = null;
+    signalTimer = 0;
     lastStreamingState = false;
     seenAssistantMessageIds = /* @__PURE__ */ new Set();
     disposed = false;
@@ -1045,6 +1047,7 @@ ${text}
     setActiveConversation(conversationId) {
       if (this.activeConversationId === conversationId) return;
       this.generation += 1;
+      this.clearSignalTimer();
       this.abortController?.abort();
       this.abortController = null;
       this.activeConversationId = conversationId;
@@ -1071,7 +1074,14 @@ ${text}
     }
     mountPageObserver(root = document.documentElement) {
       if (this.observer || typeof MutationObserver === "undefined") return;
-      this.observer = new MutationObserver(() => this.inspectPageSignals());
+      this.observer = new MutationObserver((records) => {
+        for (const record2 of records) {
+          if (record2.attributeName === "data-is-streaming" && record2.target instanceof Element && record2.target.getAttribute("data-is-streaming") === "true") {
+            this.lastStreamingState = true;
+          }
+        }
+        this.scheduleSignalInspection();
+      });
       this.observer.observe(root, {
         subtree: true,
         childList: true,
@@ -1082,6 +1092,7 @@ ${text}
     dispose() {
       this.disposed = true;
       this.generation += 1;
+      this.clearSignalTimer();
       this.abortController?.abort();
       this.abortController = null;
       this.dirty = false;
@@ -1138,6 +1149,21 @@ ${text}
         }
       }
       await Promise.all([...this.listeners].map((listener) => listener(snapshot)));
+    }
+    scheduleSignalInspection() {
+      if (this.disposed) return;
+      const generation = this.generation;
+      this.clearSignalTimer();
+      this.signalTimer = window.setTimeout(() => {
+        this.signalTimer = 0;
+        if (this.disposed || this.generation !== generation) return;
+        this.inspectPageSignals();
+      }, SIGNAL_INSPECTION_DEBOUNCE_MS);
+    }
+    clearSignalTimer() {
+      if (!this.signalTimer) return;
+      window.clearTimeout(this.signalTimer);
+      this.signalTimer = 0;
     }
     inspectPageSignals() {
       if (this.disposed || !this.activeConversationId) return;
@@ -1419,20 +1445,15 @@ ${text}
     mutations = null;
     unsubscribe = null;
     disposed = false;
+    parked = false;
+    heavyArmed = false;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => {
         this.expectedPrompts = snapshot?.conversationId === this.state.conversationId ? snapshot.activeTurns.length : 0;
         this.schedule();
       });
       addEventListener("message", this.onMessage);
-      addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
-      addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
-      addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
-      addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
-      addEventListener("resize", this.onEnvironment, { passive: true });
-      document.addEventListener("visibilitychange", this.onEnvironment);
-      this.mutations = new MutationObserver(() => this.schedule());
-      this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+      this.armHeavyWork();
       this.requestState();
       this.schedule(600);
     }
@@ -1443,8 +1464,15 @@ ${text}
       this.expectedPrompts = 0;
       this.resetContext("", 0);
       this.setPhase("waiting");
+      this.armHeavyWork();
       this.requestState();
       this.schedule(300);
+    }
+    isHeavyWorkArmed() {
+      return this.heavyArmed && this.mutations != null && !this.parked;
+    }
+    isParked() {
+      return this.parked;
     }
     dispose() {
       if (this.disposed) return;
@@ -1452,17 +1480,10 @@ ${text}
       this.cancel("dispose");
       clearTimeout(this.timer);
       this.timer = 0;
-      this.mutations?.disconnect();
-      this.mutations = null;
+      this.parkHeavyWork(false);
       this.unsubscribe?.();
       this.unsubscribe = null;
       removeEventListener("message", this.onMessage);
-      removeEventListener("wheel", this.onUserInput, true);
-      removeEventListener("touchstart", this.onUserInput, true);
-      removeEventListener("pointerdown", this.onUserInput, true);
-      removeEventListener("keydown", this.onUserInput, true);
-      removeEventListener("resize", this.onEnvironment);
-      document.removeEventListener("visibilitychange", this.onEnvironment);
       delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
     }
     onMessage = (event) => {
@@ -1496,7 +1517,7 @@ ${text}
       this.schedule(document.visibilityState === "visible" ? RECOVERY_IDLE_MS : 800);
     };
     schedule(delayMs = 180) {
-      if (this.disposed) return;
+      if (this.disposed || this.parked) return;
       clearTimeout(this.timer);
       this.timer = window.setTimeout(() => {
         this.timer = 0;
@@ -1511,8 +1532,7 @@ ${text}
         return;
       }
       if (isMessageDeepLink()) {
-        this.terminal = true;
-        this.setPhase("deep-link");
+        this.markTerminal("deep-link");
         return;
       }
       if (this.state.boundary === "complete") {
@@ -1525,8 +1545,7 @@ ${text}
       }
       const recoverableStalled = this.state.issue === "stalled" && this.state.boundary === "more";
       if (!recoverableStalled && (this.state.issue || this.state.boundary === "unknown")) {
-        this.terminal = true;
-        this.setPhase("unverified", this.state.issue ?? "unverified-history");
+        this.markTerminal("unverified", this.state.issue ?? "unverified-history");
         return;
       }
       if (!safeDesktopLayout()) {
@@ -1541,8 +1560,7 @@ ${text}
         return;
       }
       if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
-        this.terminal = true;
-        this.setPhase("limit", "limit");
+        this.markTerminal("limit", "limit");
         return;
       }
       await this.launchAttempt();
@@ -1559,8 +1577,7 @@ ${text}
         this.schedule(NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince));
         return;
       }
-      this.terminal = true;
-      this.setPhase(readiness);
+      this.markTerminal(readiness);
     }
     async launchAttempt() {
       const controller = new AbortController();
@@ -1593,23 +1610,20 @@ ${text}
           this.setPhase("recovering");
           this.schedule(RECOVERY_IDLE_MS);
         } else {
-          this.terminal = true;
-          this.setPhase("recovery-limit", "recovery-limit");
+          this.markTerminal("recovery-limit", "recovery-limit");
         }
         return;
       }
       if (outcome === "stalled") {
         if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
-          this.terminal = true;
-          this.setPhase("limit", "limit");
+          this.markTerminal("limit", "limit");
           return;
         }
         this.setPhase("stalled", "stalled");
         this.schedule(180);
         return;
       }
-      this.terminal = true;
-      this.setPhase(outcome, outcome);
+      this.markTerminal(outcome, outcome);
     }
     async hydrate(signal, context) {
       const position = saveReadingPosition();
@@ -1723,6 +1737,56 @@ ${text}
       while (!this.state.boosted && performance.now() < until) {
         await abortableDelay(40, signal);
       }
+    }
+    markTerminal(phase, issue = null) {
+      this.terminal = true;
+      this.setPhase(phase, issue);
+      this.parkHeavyWork(true);
+    }
+    armHeavyWork() {
+      if (this.disposed) return;
+      this.parked = false;
+      if (!this.heavyArmed) {
+        addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
+        addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
+        addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+        addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+        addEventListener("resize", this.onEnvironment, { passive: true });
+        document.addEventListener("visibilitychange", this.onEnvironment);
+        this.heavyArmed = true;
+      }
+      if (!this.mutations) {
+        this.mutations = new MutationObserver(() => this.schedule());
+        this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+      }
+    }
+    parkHeavyWork(notifyMain) {
+      clearTimeout(this.timer);
+      this.timer = 0;
+      this.stopPrepare();
+      this.mutations?.disconnect();
+      this.mutations = null;
+      if (this.heavyArmed) {
+        removeEventListener("wheel", this.onUserInput, true);
+        removeEventListener("touchstart", this.onUserInput, true);
+        removeEventListener("pointerdown", this.onUserInput, true);
+        removeEventListener("keydown", this.onUserInput, true);
+        removeEventListener("resize", this.onEnvironment);
+        document.removeEventListener("visibilitychange", this.onEnvironment);
+        this.heavyArmed = false;
+      }
+      if (this.parked) return;
+      this.parked = true;
+      if (notifyMain) this.sendPark();
+    }
+    sendPark() {
+      if (!this.state.conversationId) return;
+      window.postMessage({
+        channel: NATIVE_NAV_CHANNEL,
+        kind: "park",
+        conversationId: this.state.conversationId,
+        generation: this.state.generation
+      }, location.origin);
     }
     resetContext(context, firstPage) {
       this.context = context;
@@ -1864,7 +1928,20 @@ ${text}
   }
 
   // src/quota/pageClient.ts
-  async function readChatAccount(signal) {
+  var ACCOUNT_CACHE_TTL_MS = 30 * 60 * 1e3;
+  var MODEL_LIMITS_CACHE_TTL_MS = 10 * 60 * 1e3;
+  var accountCache = null;
+  var limitsCache = null;
+  async function readChatAccount(signal, options = {}) {
+    const now = options.now ?? Date.now();
+    const cheapId = getChatGptAccountId();
+    if (!options.force && accountCache && now - accountCache.fetchedAt < ACCOUNT_CACHE_TTL_MS) {
+      if (cheapId && accountCache.value.accountId && cheapId !== accountCache.value.accountId) {
+        accountCache = null;
+      } else {
+        return accountCache.value;
+      }
+    }
     let userId = null;
     let plan = null;
     try {
@@ -1886,11 +1963,16 @@ ${text}
     } catch {
       plan = null;
     }
-    const accountId = getChatGptAccountId();
+    const accountId = cheapId ?? getChatGptAccountId();
     const identityKey = await identity(`${userId ?? "unknown"}:${accountId ?? "personal"}`);
-    return { userId, accountId, plan, identity: identityKey };
+    const value = { userId, accountId, plan, identity: identityKey };
+    accountCache = { value, fetchedAt: now };
+    return value;
   }
-  async function readModelLimits(now = Date.now(), signal) {
+  async function readModelLimits(now = Date.now(), signal, options = {}) {
+    if (!options.force && limitsCache && now - limitsCache.fetchedAt < MODEL_LIMITS_CACHE_TTL_MS) {
+      return limitsCache.value;
+    }
     try {
       const offsetMin = -Math.round((/* @__PURE__ */ new Date()).getTimezoneOffset());
       const response = await chatgptApi("/backend-api/conversation/init", {
@@ -1907,7 +1989,9 @@ ${text}
         })
       });
       if (!response.ok) return [];
-      return modelLimits(await response.json(), now);
+      const value = modelLimits(await response.json(), now);
+      limitsCache = { value, fetchedAt: now };
+      return value;
     } catch {
       return [];
     }
@@ -1920,6 +2004,22 @@ ${text}
   var MAX_TRANSIENT_RETRIES = 2;
   var HISTORY_RECONCILE_INTERVAL_MS = 10 * 60 * 1e3;
   var HISTORY_LIST_TIMEOUT_MS = 45e3;
+  var HISTORY_RECONCILE_LOCK = "chatgpt-yada:quota-history-reconcile";
+  var HISTORY_LOCK_RETRY_MS = 6e4;
+  async function withHistoryReconcileLock(task, locks) {
+    if (!locks) return "unsupported";
+    let acquired = false;
+    await locks.request(
+      HISTORY_RECONCILE_LOCK,
+      { mode: "exclusive", ifAvailable: true },
+      async (lock) => {
+        if (!lock) return;
+        acquired = true;
+        await task();
+      }
+    );
+    return acquired ? "acquired" : "busy";
+  }
   async function requestHistoryList(path, signal) {
     try {
       const response = await chatgptApi(path, { signal }, { timeoutMs: HISTORY_LIST_TIMEOUT_MS });
@@ -1953,8 +2053,9 @@ ${text}
     return !snapshot.historyComplete || !snapshot.lastHistorySuccessAt || now - snapshot.lastHistorySuccessAt >= HISTORY_RECONCILE_INTERVAL_MS;
   }
   var QuotaTracker = class {
-    constructor(sync) {
+    constructor(sync, options = {}) {
       this.sync = sync;
+      this.locks = options.locks !== void 0 ? options.locks : typeof navigator !== "undefined" && "locks" in navigator ? navigator.locks : null;
     }
     unsubscribe = null;
     ingestQueue = Promise.resolve();
@@ -1966,12 +2067,15 @@ ${text}
     nextHistoryAt = 0;
     forceHistory = false;
     historyIdentity = null;
+    bypassCaches = false;
+    locks;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       document.addEventListener("visibilitychange", this.onVisibility);
       this.scheduleHistory(FIRST_HISTORY_DELAY_MS);
     }
     async refreshCurrent() {
+      this.bypassCaches = true;
       try {
         await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
         await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
@@ -1979,6 +2083,7 @@ ${text}
         this.nextHistoryAt = 0;
         this.forceHistory = true;
         this.scheduleHistory(0);
+        this.bypassCaches = false;
       }
     }
     dispose() {
@@ -2003,7 +2108,7 @@ ${text}
       if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
       const controller = new AbortController();
       this.historyAbort = controller;
-      this.historyFlight = this.scanHistory(controller.signal).catch(() => {
+      this.historyFlight = this.runLockedHistoryScan(controller.signal).catch(() => {
         this.forceHistory = false;
         this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS;
       }).finally(() => {
@@ -2012,8 +2117,19 @@ ${text}
         this.scheduleHistory(this.forceHistory ? 0 : Math.max(600, this.nextHistoryAt - Date.now()));
       });
     }
+    async runLockedHistoryScan(signal) {
+      const result = await withHistoryReconcileLock(() => this.scanHistory(signal), this.locks);
+      if (result === "unsupported") {
+        await this.scanHistory(signal);
+        return;
+      }
+      if (result === "busy") {
+        this.forceHistory = false;
+        this.nextHistoryAt = Date.now() + HISTORY_LOCK_RETRY_MS;
+      }
+    }
     async scanHistory(signal) {
-      const account = await readChatAccount(signal);
+      const account = await readChatAccount(signal, { force: this.forceHistory || this.bypassCaches });
       if (signal.aborted || this.disposed) return;
       if (!account.userId) throw new Error("login");
       const response = await sendRuntimeMessage({
@@ -2111,7 +2227,7 @@ ${text}
     }
     async writeLedger(snapshot) {
       if (this.disposed || !snapshot) return;
-      const account = await readChatAccount();
+      const account = await readChatAccount(void 0, { force: this.bypassCaches });
       if (this.disposed || !account.userId) return;
       const accountChanged = this.historyIdentity !== null && this.historyIdentity !== account.identity;
       if (accountChanged) {
@@ -2126,7 +2242,7 @@ ${text}
         workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
       });
       if (accountChanged) this.scheduleHistory(0);
-      const limits = await readModelLimits();
+      const limits = await readModelLimits(Date.now(), void 0, { force: this.bypassCaches });
       if (!this.disposed) await this.publish(account, {
         limits,
         workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
@@ -2134,11 +2250,10 @@ ${text}
     }
     onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        this.historyAbort?.abort();
         window.clearTimeout(this.historyTimer);
         return;
       }
-      this.scheduleHistory(0);
+      if (!this.historyFlight) this.scheduleHistory(0);
     };
   };
   function pause(ms, signal) {
@@ -4511,17 +4626,12 @@ ${text}
       this.root.append(style, this.modal);
       document.body.append(this.host);
       this.modal.dataset.toolkitTheme = detectYadaTheme();
-      this.disposeTheme = observeYadaTheme((theme) => {
-        this.modal.dataset.toolkitTheme = theme;
-      });
       button.addEventListener("click", this.toggle);
       this.modal.addEventListener("click", this.handleClick);
       this.query("form").addEventListener("submit", (event) => {
         event.preventDefault();
         void this.saveEditor();
       });
-      document.addEventListener("pointerdown", this.outside, true);
-      document.addEventListener("keydown", this.keydown, true);
       this.modal.addEventListener("wheel", this.stopPageScroll, { passive: false });
       this.modal.addEventListener("touchmove", this.stopPageScroll, { passive: false });
     }
@@ -4535,7 +4645,11 @@ ${text}
     sortable = null;
     disposed = false;
     editing = null;
-    disposeTheme;
+    globalsAttached = false;
+    disposeTheme = null;
+    documentListenersAttached() {
+      return this.globalsAttached;
+    }
     stopPageScroll = (event) => {
       const node = event.target instanceof Element ? event.target : null;
       const scrollable = node?.closest(".yada-prompt-list, textarea");
@@ -4550,6 +4664,7 @@ ${text}
     }
     close = () => {
       this.destroySortable();
+      this.detachGlobals();
       this.generation++;
       for (const [button, timer] of this.copyTimers) {
         clearTimeout(timer);
@@ -4562,11 +4677,8 @@ ${text}
     dispose() {
       this.disposed = true;
       this.close();
-      this.disposeTheme();
       this.host.remove();
       this.button.removeEventListener("click", this.toggle);
-      document.removeEventListener("pointerdown", this.outside, true);
-      document.removeEventListener("keydown", this.keydown, true);
     }
     toggle = async () => {
       if (!this.host.hidden) {
@@ -4576,6 +4688,7 @@ ${text}
       if (this.busy) return;
       const generation = ++this.generation;
       if (!this.host.isConnected) document.body.append(this.host);
+      this.attachGlobals();
       this.host.hidden = false;
       this.button.setAttribute("aria-expanded", "true");
       this.query('[role="alert"]').hidden = true;
@@ -4590,6 +4703,24 @@ ${text}
         if (generation === this.generation) this.error("无法读取提示词，请重新打开重试。");
       }
     };
+    attachGlobals() {
+      if (this.globalsAttached) return;
+      this.globalsAttached = true;
+      this.modal.dataset.toolkitTheme = detectYadaTheme();
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.modal.dataset.toolkitTheme = theme;
+      });
+      document.addEventListener("pointerdown", this.outside, true);
+      document.addEventListener("keydown", this.keydown, true);
+    }
+    detachGlobals() {
+      if (!this.globalsAttached) return;
+      this.globalsAttached = false;
+      this.disposeTheme?.();
+      this.disposeTheme = null;
+      document.removeEventListener("pointerdown", this.outside, true);
+      document.removeEventListener("keydown", this.keydown, true);
+    }
     outside = (event) => {
       if (!this.host.hidden && !event.composedPath().includes(this.host) && !event.composedPath().includes(this.button)) this.close();
     };
@@ -4913,19 +5044,22 @@ ${timestamp ? `${timestamp}
     if (!metric || metric.remainingRatio == null) return "—";
     return `${Math.round(metric.remainingRatio * 100)}%`;
   }
+  function quotaDetailsQuiet(snapshot) {
+    return snapshot.historyComplete && snapshot.syncStatus === "ready" && !snapshot.historyError && !snapshot.lastHistoryError;
+  }
   function historySyncLabel(snapshot) {
-    if (snapshot.historyComplete) return "历史同步完整";
+    if (quotaDetailsQuiet(snapshot)) return "";
     switch (snapshot.syncStatus) {
       case "loading":
         return "正在读取额度";
       case "backfill":
         return `正在首次同步最近 7 天 ChatGPT 历史… · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
-      case "ready":
-        return "历史同步完整";
       case "error":
-        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+        return snapshot.historyError ? `最近历史刷新失败 · ${snapshot.historyError}` : "最近历史刷新失败";
+      case "ready":
+        return snapshot.lastHistoryError ? "最近历史刷新失败" : "";
       default:
-        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+        return snapshot.historyError ? snapshot.historyError : `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
     }
   }
   function planStatusNote(snapshot) {
@@ -4938,12 +5072,12 @@ ${timestamp ? `${timestamp}
   function snapshotBucketViews(snapshot) {
     if (!snapshot.plan) return [];
     if (snapshot.plan === "prolite") {
-      return [{ title: "两个 Pro", metric: snapshot.combinedDaily }];
+      return [{ title: "GPT-6 Pro+5.6 Sol Pro", period: "7days", metric: snapshot.combinedDaily }];
     }
     return [
-      { title: "GPT-6 Pro", metric: snapshot.gpt6ProWeekly },
-      { title: "GPT-5.6 Sol Pro", metric: snapshot.solProDaily },
-      { title: "两个 Pro", metric: snapshot.combinedDaily }
+      { title: "GPT-6 Pro", period: "7days", metric: snapshot.gpt6ProWeekly },
+      { title: "GPT-5.6 Sol Pro", period: "24h", metric: snapshot.solProDaily },
+      { title: "GPT-6 Pro+5.6 Sol Pro", period: "24h", metric: snapshot.combinedDaily }
     ];
   }
 
@@ -4964,9 +5098,9 @@ ${timestamp ? `${timestamp}
       "",
       metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
       metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
-      metricLine("两个 Pro", snapshot.combinedDaily),
+      metricLine("GPT-6 Pro+5.6 Sol Pro", snapshot.combinedDaily),
       "",
-      `历史同步：${historySyncLabel(snapshot)}`,
+      quotaDetailsQuiet(snapshot) ? snapshot.updatedLabel : `历史同步：${historySyncLabel(snapshot)}`,
       `未分类轮次：${snapshot.unclassifiedTurns}`,
       snapshot.updatedLabel,
       workspace
@@ -5029,7 +5163,20 @@ ${timestamp ? `${timestamp}
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
   }
   [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
-  [data-quota-popover] h3 { margin: 10px 0 2px; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] [data-quota-bucket] { margin-top: 10px; }
+  [data-quota-popover] [data-quota-row] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  [data-quota-popover] [data-quota-name] { margin: 0; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] [data-quota-meta] {
+    margin: 0;
+    color: var(--yada-muted);
+    white-space: nowrap;
+  }
+  [data-quota-popover] [data-quota-remaining] { margin: 2px 0 0; }
   [data-quota-popover] p { margin: 0; }
   [data-quota-popover] [data-quota-note],
   [data-quota-popover] [data-quota-warn],
@@ -5048,42 +5195,24 @@ ${timestamp ? `${timestamp}
       this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
       this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
       this.canvas.setAttribute("aria-hidden", "true");
-      document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
-      this.portalHost = document.createElement("div");
-      this.portalHost.id = QUOTA_POPOVER_HOST_ID;
-      this.portalHost.dataset.yadaRoot = "true";
       this.themeValue = detectYadaTheme();
-      this.portalHost.dataset.yadaTheme = this.themeValue;
-      const portal = this.portalHost.attachShadow({ mode: "open" });
-      const style = document.createElement("style");
-      style.textContent = POPOVER_CSS;
-      this.popover = document.createElement("div");
-      this.popover.hidden = true;
-      this.popover.dataset.quotaPopover = "true";
-      this.popover.setAttribute("role", "dialog");
-      this.popover.setAttribute("aria-label", "Pro 模型额度");
-      portal.append(style, this.popover);
-      (document.body ?? document.documentElement).append(this.portalHost);
       this.disposeTheme = observeYadaTheme((theme) => {
         this.themeValue = theme;
-        this.portalHost.dataset.yadaTheme = theme;
+        if (this.portalHost) this.portalHost.dataset.yadaTheme = theme;
         this.paint(this.rings);
       });
       this.button.setAttribute("aria-haspopup", "dialog");
       this.button.addEventListener("click", this.onClick);
-      document.addEventListener("pointerdown", this.onPointerDown, true);
-      document.addEventListener("keydown", this.onKeyDown, true);
-      window.addEventListener("resize", this.onViewportChange, { passive: true });
-      window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
       chrome.storage?.onChanged?.addListener(this.onStorageChanged);
+      document.addEventListener("visibilitychange", this.onVisibility);
       this.apply(null, "loading");
       void this.loadState();
     }
     send;
     debounceMs;
     canvas;
-    portalHost;
-    popover;
+    portalHost = null;
+    popover = null;
     disposeTheme;
     disposed = false;
     generation = 0;
@@ -5092,9 +5221,12 @@ ${timestamp ? `${timestamp}
     snapshot = null;
     rings = UNKNOWN_QUOTA_RINGS;
     themeValue;
+    quotaDirty = false;
+    popoverListeners = false;
     close = () => {
-      this.popover.hidden = true;
+      if (this.popover) this.popover.hidden = true;
       this.button.setAttribute("aria-expanded", "false");
+      this.detachPopoverListeners();
     };
     dispose() {
       if (this.disposed) return;
@@ -5105,43 +5237,54 @@ ${timestamp ? `${timestamp}
       this.refreshTimer = 0;
       this.disposeTheme();
       this.button.removeEventListener("click", this.onClick);
-      document.removeEventListener("pointerdown", this.onPointerDown, true);
-      document.removeEventListener("keydown", this.onKeyDown, true);
-      window.removeEventListener("resize", this.onViewportChange);
-      window.removeEventListener("scroll", this.onViewportChange, true);
       chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
-      this.portalHost.remove();
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.portalHost?.remove();
+      this.portalHost = null;
+      this.popover = null;
     }
     onClick = (event) => {
       event.preventDefault();
       event.stopPropagation();
-      if (this.popover.hidden) this.open();
+      if (this.popover?.hidden !== false) this.open();
       else this.close();
     };
     onPointerDown = (event) => {
-      if (this.popover.hidden) return;
+      if (!this.popover || this.popover.hidden) return;
       const path = event.composedPath();
-      if (path.includes(this.button) || path.includes(this.popover) || path.includes(this.portalHost)) return;
+      if (path.includes(this.button) || path.includes(this.popover) || this.portalHost && path.includes(this.portalHost)) return;
       this.close();
     };
     onKeyDown = (event) => {
-      if (this.popover.hidden || event.key !== "Escape") return;
+      if (!this.popover || this.popover.hidden || event.key !== "Escape") return;
       event.stopPropagation();
       this.close();
       this.button.focus();
     };
     onViewportChange = () => {
-      if (!this.popover.hidden) this.positionPopover();
+      if (this.popover && !this.popover.hidden) this.positionPopover();
     };
     onStorageChanged = (changes, area) => {
       if (this.disposed || area !== "local") return;
       if (!changes[LEDGER_KEY] && !changes[STATE_KEY]) return;
+      if (document.visibilityState === "hidden") {
+        this.quotaDirty = true;
+        return;
+      }
+      this.queueLoad();
+    };
+    onVisibility = () => {
+      if (this.disposed || document.visibilityState !== "visible" || !this.quotaDirty) return;
+      this.quotaDirty = false;
+      void this.loadState();
+    };
+    queueLoad() {
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = window.setTimeout(() => {
         this.refreshTimer = 0;
         void this.loadState();
       }, this.debounceMs);
-    };
+    }
     async loadState() {
       const generation = ++this.generation;
       try {
@@ -5163,7 +5306,7 @@ ${timestamp ? `${timestamp}
       this.setTitle(
         status === "error" ? "Pro 额度暂不可用" : snapshot ? snapshotTitle(snapshot) : "Pro 额度：读取中"
       );
-      if (!this.popover.hidden) {
+      if (this.popover && !this.popover.hidden) {
         this.renderPopover();
         this.positionPopover();
       }
@@ -5185,12 +5328,49 @@ ${timestamp ? `${timestamp}
       this.button.setAttribute("aria-label", title);
     }
     open() {
+      this.ensurePopover();
       this.renderPopover();
       this.popover.hidden = false;
       this.button.setAttribute("aria-expanded", "true");
+      this.attachPopoverListeners();
       this.positionPopover();
     }
+    ensurePopover() {
+      if (this.popover) return;
+      document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
+      this.portalHost = document.createElement("div");
+      this.portalHost.id = QUOTA_POPOVER_HOST_ID;
+      this.portalHost.dataset.yadaRoot = "true";
+      this.portalHost.dataset.yadaTheme = this.themeValue;
+      const portal = this.portalHost.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = POPOVER_CSS;
+      this.popover = document.createElement("div");
+      this.popover.hidden = true;
+      this.popover.dataset.quotaPopover = "true";
+      this.popover.setAttribute("role", "dialog");
+      this.popover.setAttribute("aria-label", "Pro 模型额度");
+      portal.append(style, this.popover);
+      (document.body ?? document.documentElement).append(this.portalHost);
+    }
+    attachPopoverListeners() {
+      if (this.popoverListeners) return;
+      this.popoverListeners = true;
+      document.addEventListener("pointerdown", this.onPointerDown, true);
+      document.addEventListener("keydown", this.onKeyDown, true);
+      window.addEventListener("resize", this.onViewportChange, { passive: true });
+      window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
+    }
+    detachPopoverListeners() {
+      if (!this.popoverListeners) return;
+      this.popoverListeners = false;
+      document.removeEventListener("pointerdown", this.onPointerDown, true);
+      document.removeEventListener("keydown", this.onKeyDown, true);
+      window.removeEventListener("resize", this.onViewportChange);
+      window.removeEventListener("scroll", this.onViewportChange, true);
+    }
     renderPopover() {
+      if (!this.popover) return;
       this.popover.replaceChildren();
       const heading = document.createElement("h2");
       heading.textContent = "Pro 模型额度";
@@ -5203,30 +5383,44 @@ ${timestamp ? `${timestamp}
         this.popover.append(note("正在读取额度", "quota-note"));
         return;
       }
-      this.popover.append(note(historySyncLabel(this.snapshot), this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
-      if (this.snapshot.syncStatus === "error") return;
+      const statusNote = historySyncLabel(this.snapshot);
+      if (statusNote) {
+        this.popover.append(note(statusNote, this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
+      }
+      if (this.snapshot.syncStatus === "error") {
+        this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
+        return;
+      }
       const planNote = planStatusNote(this.snapshot);
       if (planNote) this.popover.append(note(planNote, "quota-warn"));
-      else if (this.snapshot.syncStatus === "ready") {
-        for (const bucket of snapshotBucketViews(this.snapshot)) {
-          const section = document.createElement("section");
-          const title = document.createElement("h3");
-          title.textContent = bucket.title;
-          const remaining = document.createElement("p");
-          remaining.textContent = metricRemainingLabel(bucket.metric);
-          const percent = document.createElement("p");
-          percent.textContent = metricPercentLabel(bucket.metric);
-          section.append(title, remaining, percent);
-          this.popover.append(section);
+      else if (this.snapshot.syncStatus === "ready" || quotaDetailsQuiet(this.snapshot) || this.snapshot.plan) {
+        if (this.snapshot.plan) {
+          for (const bucket of snapshotBucketViews(this.snapshot)) {
+            const section = document.createElement("section");
+            section.dataset.quotaBucket = "true";
+            const row = document.createElement("div");
+            row.dataset.quotaRow = "true";
+            const title = document.createElement("p");
+            title.dataset.quotaName = "true";
+            title.textContent = bucket.title;
+            const meta = document.createElement("p");
+            meta.dataset.quotaMeta = "true";
+            meta.textContent = `${bucket.period}   ${metricPercentLabel(bucket.metric)}`;
+            row.append(title, meta);
+            const remaining = document.createElement("p");
+            remaining.dataset.quotaRemaining = "true";
+            remaining.textContent = metricRemainingLabel(bucket.metric);
+            section.append(row, remaining);
+            this.popover.append(section);
+          }
         }
       }
-      this.popover.append(note("本地估算，不是 ChatGPT 官方余额", "quota-note"));
-      this.popover.append(note("只统计个人 Chat，不统计 Work 和 Codex", "quota-note"));
       this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
       const workspace = workspaceStatusNote(this.snapshot);
       if (workspace) this.popover.append(note(workspace, "quota-warn"));
     }
     positionPopover() {
+      if (!this.popover) return;
       const buttonRect = this.button.getBoundingClientRect();
       const width = Math.min(POPOVER_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_GUTTER * 2));
       const left = clamp(
@@ -5270,6 +5464,8 @@ ${timestamp ? `${timestamp}
     placementTimer = 0;
     prompts = null;
     quota = null;
+    observedTarget = null;
+    observedParent = null;
     closePanels() {
       this.prompts?.close();
       this.quota?.close();
@@ -5290,12 +5486,10 @@ ${timestamp ? `${timestamp}
         void this.copyAll();
       });
       this.quota = new QuotaIndicator(this.query("[data-quota]"));
-      this.prompts = new PromptPanel(this.query("[data-prompts]"));
+      this.query("[data-prompts]")?.addEventListener("click", this.onPromptsClick);
       this.disposeTheme = observeYadaTheme((theme) => {
         this.host?.setAttribute("data-yada-theme", theme);
       });
-      this.placementObserver = new MutationObserver(() => this.schedulePlacement());
-      this.placementObserver.observe(document.body, { childList: true, subtree: true });
       window.addEventListener("resize", this.handleViewportChange, { passive: true });
       this.ensurePlacement();
     }
@@ -5310,12 +5504,14 @@ ${timestamp ? `${timestamp}
           target.insertBefore(this.host, target.firstElementChild);
         }
         this.host.dataset.placement = "inline";
+        this.observeHeader(target);
         return;
       }
       if (this.host.parentElement !== document.documentElement) {
         document.documentElement.append(this.host);
       }
       this.host.dataset.placement = "fixed";
+      this.observeHeader(null);
     }
     dispose() {
       this.quota?.dispose();
@@ -5324,6 +5520,9 @@ ${timestamp ? `${timestamp}
       window.clearTimeout(this.copyResetTimer);
       window.clearTimeout(this.placementTimer);
       this.placementObserver?.disconnect();
+      this.placementObserver = null;
+      this.observedTarget = null;
+      this.observedParent = null;
       this.disposeTheme?.();
       window.removeEventListener("resize", this.handleViewportChange);
       this.host?.remove();
@@ -5483,6 +5682,26 @@ ${timestamp ? `${timestamp}
         }, resetAfterMs);
       }
     }
+    onPromptsClick = () => {
+      const button = this.query("[data-prompts]");
+      if (!button) return;
+      if (!this.prompts) {
+        this.prompts = new PromptPanel(button);
+        void this.prompts.toggle();
+      }
+    };
+    observeHeader(target) {
+      const parent = target?.parentElement ?? null;
+      if (target === this.observedTarget && parent === this.observedParent) return;
+      this.placementObserver?.disconnect();
+      this.placementObserver = null;
+      this.observedTarget = target;
+      this.observedParent = parent;
+      if (!target) return;
+      this.placementObserver = new MutationObserver(() => this.schedulePlacement());
+      this.placementObserver.observe(target, { childList: true });
+      if (parent) this.placementObserver.observe(parent, { childList: true });
+    }
     schedulePlacement() {
       window.clearTimeout(this.placementTimer);
       this.placementTimer = window.setTimeout(() => this.ensurePlacement(), 180);
@@ -5518,41 +5737,13 @@ ${timestamp ? `${timestamp}
     return rect.width > 0 && rect.height > 0 && rect.top < 120 && rect.right > window.innerWidth * 0.45;
   }
 
-  // src/utils/route.ts
-  function observeRouteChange(onChange) {
-    let previousUrl = location.href, raf = 0;
-    const check = () => {
-      const currentUrl = location.href;
-      if (currentUrl !== previousUrl) {
-        const old = previousUrl;
-        previousUrl = currentUrl;
-        onChange(currentUrl, old);
-      }
-    };
-    const frame = () => {
-      check();
-      raf = requestAnimationFrame(frame);
-    };
-    raf = requestAnimationFrame(frame);
-    window.addEventListener("popstate", check);
-    window.addEventListener("hashchange", check);
-    return () => {
-      cancelAnimationFrame(raf);
-      window.removeEventListener("popstate", check);
-      window.removeEventListener("hashchange", check);
-    };
-  }
-
   // src/content.ts
   var ChatGptYadaApp = class {
     sync = null;
     hydrator = null;
     toolbar = null;
     quota = null;
-    routeDispose = null;
     messageDispose = null;
-    hostGuard = null;
-    remounts = 0;
     mount() {
       this.sync = new ConversationSync();
       this.sync.mountPageObserver();
@@ -5563,11 +5754,7 @@ ${timestamp ? `${timestamp}
       this.toolbar = new YadaToolbar(this.sync);
       this.toolbar.mount();
       this.syncPageState();
-      this.routeDispose = observeRouteChange(() => {
-        this.toolbar?.closePanels();
-        this.hydrator?.resetRoute();
-        this.syncPageState();
-      });
+      addEventListener("message", this.onRouteMessage);
       const onMessage = (message, _sender, sendResponse) => {
         if (message?.type !== "quota/refresh-current") return false;
         void this.quota?.refreshCurrent().then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: String(error) }));
@@ -5575,21 +5762,9 @@ ${timestamp ? `${timestamp}
       };
       chrome.runtime.onMessage.addListener(onMessage);
       this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
-      this.hostGuard = new MutationObserver(() => {
-        if (document.getElementById("chatgpt-yada-toolbar-host")) return;
-        if (this.remounts >= 5) return;
-        this.remounts += 1;
-        this.dispose();
-        this.mount();
-      });
-      this.hostGuard.observe(document, { childList: true });
-      this.hostGuard.observe(document.documentElement, { childList: true });
     }
     dispose = () => {
-      this.hostGuard?.disconnect();
-      this.hostGuard = null;
-      this.routeDispose?.();
-      this.routeDispose = null;
+      removeEventListener("message", this.onRouteMessage);
       this.messageDispose?.();
       this.messageDispose = null;
       this.hydrator?.dispose();
@@ -5600,6 +5775,14 @@ ${timestamp ? `${timestamp}
       this.toolbar = null;
       this.sync?.dispose();
       this.sync = null;
+    };
+    onRouteMessage = (event) => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = record(event.data);
+      if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "route") return;
+      this.toolbar?.closePanels();
+      this.hydrator?.resetRoute();
+      this.syncPageState();
     };
     syncPageState() {
       this.toolbar?.ensurePlacement();

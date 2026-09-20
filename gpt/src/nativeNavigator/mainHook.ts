@@ -1,6 +1,7 @@
 import { HistoryChain, readHistoryMetadata } from "./metadata";
 import {
   NATIVE_NAV_CHANNEL,
+  acceptParkHandshake,
   acceptPrepareHandshake,
   applyPrepareHandshake,
   conversationIdFromUrl,
@@ -9,6 +10,7 @@ import {
   expandHistoryRequest,
   historyRequest,
   isPrepareActive,
+  parseParkHandshake,
   parsePrepareHandshake,
   record,
   shouldExpandHistoryRequest,
@@ -17,11 +19,15 @@ import {
   type PrepareLease
 } from "./protocol";
 
-const marker = window as Window & { __chatgptYadaNativeHistoryHook?: boolean };
-if (!marker.__chatgptYadaNativeHistoryHook) {
-  marker.__chatgptYadaNativeHistoryHook = true;
-  install();
+export function installNativeHistoryHook(target: Window): void {
+  const flag = target as Window & { __chatgptYadaNativeHistoryHook?: boolean };
+  if (flag.__chatgptYadaNativeHistoryHook) return;
+  flag.__chatgptYadaNativeHistoryHook = true;
+  install(target);
 }
+
+const runningVitest = Boolean((globalThis as { process?: { env?: { VITEST?: string } } }).process?.env?.VITEST);
+if (!runningVitest) installNativeHistoryHook(window);
 
 type CaptureTicket = {
   generation: number;
@@ -30,17 +36,27 @@ type CaptureTicket = {
   request: HistoryRequest;
 };
 
-function install(): void {
-  const nativeFetch = window.fetch;
+function install(target: Window): void {
+  const nativeFetch = target.fetch;
   const readers = new Set<ReadableStreamDefaultReader<Uint8Array>>();
-  let historyState = emptyHistory(conversationIdFromUrl(location.href));
+  let historyState = emptyHistory(conversationIdFromUrl(target.location.href));
   let chain = new HistoryChain();
   let lease: PrepareLease = emptyPrepareLease();
   let lastSequence = 0;
+  let captureActive = true;
 
   const broadcast = (): void => {
     historyState.revision += 1;
-    window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...historyState } }, location.origin);
+    target.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...historyState } }, target.location.origin);
+  };
+
+  const emitRoute = (): void => {
+    target.postMessage({
+      channel: NATIVE_NAV_CHANNEL,
+      kind: "route",
+      conversationId: historyState.conversationId,
+      generation: historyState.generation
+    }, target.location.origin);
   };
 
   const closePrepare = (): void => {
@@ -56,32 +72,44 @@ function install(): void {
   };
 
   const synchronizeRoute = (): void => {
-    const current = conversationIdFromUrl(location.href);
+    const current = conversationIdFromUrl(target.location.href);
     if (current === historyState.conversationId) return;
     cancelReaders(readers);
     closePrepare();
+    captureActive = true;
     historyState = emptyHistory(current, historyState.generation + 1);
     chain = new HistoryChain();
     broadcast();
+    emitRoute();
   };
 
-  patchHistoryMethod("pushState", synchronizeRoute);
-  patchHistoryMethod("replaceState", synchronizeRoute);
-  addEventListener("popstate", synchronizeRoute);
-  addEventListener("pageshow", synchronizeRoute);
-  addEventListener("pagehide", () => {
+  patchHistoryMethod(target.history, "pushState", synchronizeRoute);
+  patchHistoryMethod(target.history, "replaceState", synchronizeRoute);
+  target.addEventListener("popstate", synchronizeRoute);
+  target.addEventListener("pageshow", synchronizeRoute);
+  target.addEventListener("pagehide", () => {
     cancelReaders(readers);
     if (!lease.enabled && !historyState.boosted) return;
     closePrepare();
     broadcast();
   });
-  addEventListener("message", (event) => {
-    if (event.source !== window || event.origin !== location.origin) return;
+  target.addEventListener("message", (event) => {
+    if (event.source !== target || event.origin !== target.location.origin) return;
     const message = record(event.data);
     if (message?.channel !== NATIVE_NAV_CHANNEL) return;
     synchronizeRoute();
     if (message.kind === "hello") {
       broadcast();
+      return;
+    }
+    const park = parseParkHandshake(message);
+    if (park) {
+      if (!acceptParkHandshake(park, {
+        conversationId: historyState.conversationId,
+        generation: historyState.generation
+      })) return;
+      captureActive = false;
+      closePrepare();
       return;
     }
     const handshake = parsePrepareHandshake(message);
@@ -103,11 +131,12 @@ function install(): void {
     broadcast();
   });
 
-  window.fetch = function (input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  target.fetch = function (this: Window, input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
     synchronizeRoute();
+    if (!captureActive) return nativeFetch.call(this, input, init);
     const now = Date.now();
     expirePrepare(now);
-    const request = historyRequest(input, init, location.href);
+    const request = historyRequest(input, init, target.location.href);
     if (!request) return nativeFetch.call(this, input, init);
 
     if (request.kind === "initial") {
@@ -130,12 +159,12 @@ function install(): void {
     historyState.pending += 1;
     broadcast();
 
-    const expand = shouldExpandHistoryRequest(input, init, location.href, {
-      visible: document.visibilityState === "visible",
+    const expand = shouldExpandHistoryRequest(input, init, target.location.href, {
+      visible: target.document.visibilityState === "visible",
       prepareActive: isPrepareActive(lease, now, historyState.conversationId, historyState.generation)
     });
     const expanded = expand
-      ? expandHistoryRequest(input, init, location.href)
+      ? expandHistoryRequest(input, init, target.location.href)
       : ([input, init] as const);
     let original: Promise<Response>;
     try {
@@ -164,7 +193,7 @@ function install(): void {
     }
 
     try {
-      const payload = await boundedJsonClone(response, readers);
+      const payload = await boundedJsonClone(response, readers, target);
       if (!ticketCurrent(ticket)) return;
       if (ticket.sequence !== lastSequence) {
         historyState.boundary = "unknown";
@@ -197,7 +226,7 @@ function install(): void {
   }
 }
 
-function patchHistoryMethod(method: "pushState" | "replaceState", onRoute: () => void): void {
+function patchHistoryMethod(history: History, method: "pushState" | "replaceState", onRoute: () => void): void {
   const original = history[method];
   history[method] = function (this: History, ...args: Parameters<History["pushState"]>): void {
     original.apply(this, args);
@@ -220,7 +249,8 @@ function cancelReaders(readers: Set<ReadableStreamDefaultReader<Uint8Array>>): v
 
 async function boundedJsonClone(
   response: Response,
-  activeReaders: Set<ReadableStreamDefaultReader<Uint8Array>>
+  activeReaders: Set<ReadableStreamDefaultReader<Uint8Array>>,
+  target: Window = window
 ): Promise<unknown> {
   const MAX_BYTES = 16 * 1024 * 1024;
   if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("not-json");
@@ -234,7 +264,7 @@ async function boundedJsonClone(
   const pieces: Uint8Array[] = [];
   let total = 0;
   let timeoutReached = false;
-  const timeout = window.setTimeout(() => {
+  const timeout = target.setTimeout(() => {
     timeoutReached = true;
     void reader.cancel().catch(() => undefined);
   }, 8_000);
@@ -255,7 +285,7 @@ async function boundedJsonClone(
     }
     return JSON.parse(new TextDecoder().decode(joined));
   } finally {
-    window.clearTimeout(timeout);
+    target.clearTimeout(timeout);
     activeReaders.delete(reader);
     void reader.cancel().catch(() => undefined);
   }

@@ -85,6 +85,8 @@ export class OfficialNavigatorHydrator {
   private mutations: MutationObserver | null = null;
   private unsubscribe: (() => void) | null = null;
   private disposed = false;
+  private parked = false;
+  private heavyArmed = false;
 
   constructor(private readonly sync: ConversationSync) {}
 
@@ -96,14 +98,7 @@ export class OfficialNavigatorHydrator {
       this.schedule();
     });
     addEventListener("message", this.onMessage);
-    addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
-    addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
-    addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
-    addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
-    addEventListener("resize", this.onEnvironment, { passive: true });
-    document.addEventListener("visibilitychange", this.onEnvironment);
-    this.mutations = new MutationObserver(() => this.schedule());
-    this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+    this.armHeavyWork();
     this.requestState();
     this.schedule(600);
   }
@@ -115,8 +110,17 @@ export class OfficialNavigatorHydrator {
     this.expectedPrompts = 0;
     this.resetContext("", 0);
     this.setPhase("waiting");
+    this.armHeavyWork();
     this.requestState();
     this.schedule(300);
+  }
+
+  isHeavyWorkArmed(): boolean {
+    return this.heavyArmed && this.mutations != null && !this.parked;
+  }
+
+  isParked(): boolean {
+    return this.parked;
   }
 
   dispose(): void {
@@ -125,17 +129,10 @@ export class OfficialNavigatorHydrator {
     this.cancel("dispose");
     clearTimeout(this.timer);
     this.timer = 0;
-    this.mutations?.disconnect();
-    this.mutations = null;
+    this.parkHeavyWork(false);
     this.unsubscribe?.();
     this.unsubscribe = null;
     removeEventListener("message", this.onMessage);
-    removeEventListener("wheel", this.onUserInput, true);
-    removeEventListener("touchstart", this.onUserInput, true);
-    removeEventListener("pointerdown", this.onUserInput, true);
-    removeEventListener("keydown", this.onUserInput, true);
-    removeEventListener("resize", this.onEnvironment);
-    document.removeEventListener("visibilitychange", this.onEnvironment);
     delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
   }
 
@@ -174,7 +171,7 @@ export class OfficialNavigatorHydrator {
   };
 
   private schedule(delayMs = 180): void {
-    if (this.disposed) return;
+    if (this.disposed || this.parked) return;
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => {
       this.timer = 0;
@@ -190,8 +187,7 @@ export class OfficialNavigatorHydrator {
       return;
     }
     if (isMessageDeepLink()) {
-      this.terminal = true;
-      this.setPhase("deep-link");
+      this.markTerminal("deep-link");
       return;
     }
     if (this.state.boundary === "complete") {
@@ -204,8 +200,7 @@ export class OfficialNavigatorHydrator {
     }
     const recoverableStalled = this.state.issue === "stalled" && this.state.boundary === "more";
     if (!recoverableStalled && (this.state.issue || this.state.boundary === "unknown")) {
-      this.terminal = true;
-      this.setPhase("unverified", this.state.issue ?? "unverified-history");
+      this.markTerminal("unverified", this.state.issue ?? "unverified-history");
       return;
     }
     if (!safeDesktopLayout()) {
@@ -220,8 +215,7 @@ export class OfficialNavigatorHydrator {
       return;
     }
     if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
-      this.terminal = true;
-      this.setPhase("limit", "limit");
+      this.markTerminal("limit", "limit");
       return;
     }
     await this.launchAttempt();
@@ -239,8 +233,7 @@ export class OfficialNavigatorHydrator {
       this.schedule(NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince));
       return;
     }
-    this.terminal = true;
-    this.setPhase(readiness);
+    this.markTerminal(readiness);
   }
 
   private async launchAttempt(): Promise<void> {
@@ -277,23 +270,20 @@ export class OfficialNavigatorHydrator {
         this.setPhase("recovering");
         this.schedule(RECOVERY_IDLE_MS);
       } else {
-        this.terminal = true;
-        this.setPhase("recovery-limit", "recovery-limit");
+        this.markTerminal("recovery-limit", "recovery-limit");
       }
       return;
     }
     if (outcome === "stalled") {
       if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
-        this.terminal = true;
-        this.setPhase("limit", "limit");
+        this.markTerminal("limit", "limit");
         return;
       }
       this.setPhase("stalled", "stalled");
       this.schedule(180);
       return;
     }
-    this.terminal = true;
-    this.setPhase(outcome, outcome);
+    this.markTerminal(outcome, outcome);
   }
 
   private async hydrate(signal: AbortSignal, context: string): Promise<string> {
@@ -422,6 +412,60 @@ export class OfficialNavigatorHydrator {
     while (!this.state.boosted && performance.now() < until) {
       await abortableDelay(40, signal);
     }
+  }
+
+  private markTerminal(phase: string, issue: string | null = null): void {
+    this.terminal = true;
+    this.setPhase(phase, issue);
+    this.parkHeavyWork(true);
+  }
+
+  private armHeavyWork(): void {
+    if (this.disposed) return;
+    this.parked = false;
+    if (!this.heavyArmed) {
+      addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
+      addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
+      addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("resize", this.onEnvironment, { passive: true });
+      document.addEventListener("visibilitychange", this.onEnvironment);
+      this.heavyArmed = true;
+    }
+    if (!this.mutations) {
+      this.mutations = new MutationObserver(() => this.schedule());
+      this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+    }
+  }
+
+  private parkHeavyWork(notifyMain: boolean): void {
+    clearTimeout(this.timer);
+    this.timer = 0;
+    this.stopPrepare();
+    this.mutations?.disconnect();
+    this.mutations = null;
+    if (this.heavyArmed) {
+      removeEventListener("wheel", this.onUserInput, true);
+      removeEventListener("touchstart", this.onUserInput, true);
+      removeEventListener("pointerdown", this.onUserInput, true);
+      removeEventListener("keydown", this.onUserInput, true);
+      removeEventListener("resize", this.onEnvironment);
+      document.removeEventListener("visibilitychange", this.onEnvironment);
+      this.heavyArmed = false;
+    }
+    if (this.parked) return;
+    this.parked = true;
+    if (notifyMain) this.sendPark();
+  }
+
+  private sendPark(): void {
+    if (!this.state.conversationId) return;
+    window.postMessage({
+      channel: NATIVE_NAV_CHANNEL,
+      kind: "park",
+      conversationId: this.state.conversationId,
+      generation: this.state.generation
+    }, location.origin);
   }
 
   private resetContext(context: string, firstPage: number): void {

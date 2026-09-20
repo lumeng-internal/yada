@@ -32,8 +32,8 @@
   function conversationIdFromUrl(input) {
     try {
       const parts = new URL(input).pathname.split("/").filter(Boolean);
-      const marker2 = parts.indexOf("c");
-      return marker2 >= 0 && marker2 + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker2 + 1]) ? parts[marker2 + 1] : null;
+      const marker = parts.indexOf("c");
+      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
     } catch {
       return null;
     }
@@ -107,6 +107,16 @@
       conversationId,
       generation: message.generation
     };
+  }
+  function parseParkHandshake(value) {
+    const message = record(value);
+    if (!message || message.kind !== "park") return null;
+    const conversationId = identifier(message.conversationId);
+    if (!conversationId || !Number.isSafeInteger(message.generation) || message.generation < 0) return null;
+    return { conversationId, generation: message.generation };
+  }
+  function acceptParkHandshake(handshake, context) {
+    return handshake.conversationId === context.conversationId && handshake.generation === context.generation;
   }
   function acceptPrepareHandshake(handshake, context) {
     return handshake.conversationId === context.conversationId && handshake.generation === context.generation;
@@ -272,21 +282,33 @@
   };
 
   // src/nativeNavigator/mainHook.ts
-  var marker = window;
-  if (!marker.__chatgptYadaNativeHistoryHook) {
-    marker.__chatgptYadaNativeHistoryHook = true;
-    install();
+  function installNativeHistoryHook(target) {
+    const flag = target;
+    if (flag.__chatgptYadaNativeHistoryHook) return;
+    flag.__chatgptYadaNativeHistoryHook = true;
+    install(target);
   }
-  function install() {
-    const nativeFetch = window.fetch;
+  var runningVitest = Boolean(globalThis.process?.env?.VITEST);
+  if (!runningVitest) installNativeHistoryHook(window);
+  function install(target) {
+    const nativeFetch = target.fetch;
     const readers = /* @__PURE__ */ new Set();
-    let historyState = emptyHistory(conversationIdFromUrl(location.href));
+    let historyState = emptyHistory(conversationIdFromUrl(target.location.href));
     let chain = new HistoryChain();
     let lease = emptyPrepareLease();
     let lastSequence = 0;
+    let captureActive = true;
     const broadcast = () => {
       historyState.revision += 1;
-      window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...historyState } }, location.origin);
+      target.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...historyState } }, target.location.origin);
+    };
+    const emitRoute = () => {
+      target.postMessage({
+        channel: NATIVE_NAV_CHANNEL,
+        kind: "route",
+        conversationId: historyState.conversationId,
+        generation: historyState.generation
+      }, target.location.origin);
     };
     const closePrepare = () => {
       lease = emptyPrepareLease();
@@ -299,31 +321,43 @@
       broadcast();
     };
     const synchronizeRoute = () => {
-      const current = conversationIdFromUrl(location.href);
+      const current = conversationIdFromUrl(target.location.href);
       if (current === historyState.conversationId) return;
       cancelReaders(readers);
       closePrepare();
+      captureActive = true;
       historyState = emptyHistory(current, historyState.generation + 1);
       chain = new HistoryChain();
       broadcast();
+      emitRoute();
     };
-    patchHistoryMethod("pushState", synchronizeRoute);
-    patchHistoryMethod("replaceState", synchronizeRoute);
-    addEventListener("popstate", synchronizeRoute);
-    addEventListener("pageshow", synchronizeRoute);
-    addEventListener("pagehide", () => {
+    patchHistoryMethod(target.history, "pushState", synchronizeRoute);
+    patchHistoryMethod(target.history, "replaceState", synchronizeRoute);
+    target.addEventListener("popstate", synchronizeRoute);
+    target.addEventListener("pageshow", synchronizeRoute);
+    target.addEventListener("pagehide", () => {
       cancelReaders(readers);
       if (!lease.enabled && !historyState.boosted) return;
       closePrepare();
       broadcast();
     });
-    addEventListener("message", (event) => {
-      if (event.source !== window || event.origin !== location.origin) return;
+    target.addEventListener("message", (event) => {
+      if (event.source !== target || event.origin !== target.location.origin) return;
       const message = record(event.data);
       if (message?.channel !== NATIVE_NAV_CHANNEL) return;
       synchronizeRoute();
       if (message.kind === "hello") {
         broadcast();
+        return;
+      }
+      const park = parseParkHandshake(message);
+      if (park) {
+        if (!acceptParkHandshake(park, {
+          conversationId: historyState.conversationId,
+          generation: historyState.generation
+        })) return;
+        captureActive = false;
+        closePrepare();
         return;
       }
       const handshake = parsePrepareHandshake(message);
@@ -343,11 +377,12 @@
       else historyState.boosted = true;
       broadcast();
     });
-    window.fetch = function(input, init) {
+    target.fetch = function(input, init) {
       synchronizeRoute();
+      if (!captureActive) return nativeFetch.call(this, input, init);
       const now = Date.now();
       expirePrepare(now);
-      const request = historyRequest(input, init, location.href);
+      const request = historyRequest(input, init, target.location.href);
       if (!request) return nativeFetch.call(this, input, init);
       if (request.kind === "initial") {
         historyState.initialVersion += 1;
@@ -368,11 +403,11 @@
       };
       historyState.pending += 1;
       broadcast();
-      const expand = shouldExpandHistoryRequest(input, init, location.href, {
-        visible: document.visibilityState === "visible",
+      const expand = shouldExpandHistoryRequest(input, init, target.location.href, {
+        visible: target.document.visibilityState === "visible",
         prepareActive: isPrepareActive(lease, now, historyState.conversationId, historyState.generation)
       });
-      const expanded = expand ? expandHistoryRequest(input, init, location.href) : [input, init];
+      const expanded = expand ? expandHistoryRequest(input, init, target.location.href) : [input, init];
       let original;
       try {
         original = nativeFetch.call(this, expanded[0], expanded[1]);
@@ -397,7 +432,7 @@
         return;
       }
       try {
-        const payload = await boundedJsonClone(response, readers);
+        const payload = await boundedJsonClone(response, readers, target);
         if (!ticketCurrent(ticket)) return;
         if (ticket.sequence !== lastSequence) {
           historyState.boundary = "unknown";
@@ -425,7 +460,7 @@
       broadcast();
     }
   }
-  function patchHistoryMethod(method, onRoute) {
+  function patchHistoryMethod(history, method, onRoute) {
     const original = history[method];
     history[method] = function(...args) {
       original.apply(this, args);
@@ -443,7 +478,7 @@
   function cancelReaders(readers) {
     for (const reader of readers) void reader.cancel().catch(() => void 0);
   }
-  async function boundedJsonClone(response, activeReaders) {
+  async function boundedJsonClone(response, activeReaders, target = window) {
     const MAX_BYTES = 16 * 1024 * 1024;
     if (!response.headers.get("content-type")?.includes("application/json")) throw new Error("not-json");
     if (activeReaders.size >= 2) throw new Error("reader-limit");
@@ -455,7 +490,7 @@
     const pieces = [];
     let total = 0;
     let timeoutReached = false;
-    const timeout = window.setTimeout(() => {
+    const timeout = target.setTimeout(() => {
       timeoutReached = true;
       void reader.cancel().catch(() => void 0);
     }, 8e3);
@@ -476,7 +511,7 @@
       }
       return JSON.parse(new TextDecoder().decode(joined));
     } finally {
-      window.clearTimeout(timeout);
+      target.clearTimeout(timeout);
       activeReaders.delete(reader);
       void reader.cancel().catch(() => void 0);
     }

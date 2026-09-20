@@ -30,7 +30,12 @@ export class PromptPanel {
   private sortable: Sortable | null = null;
   private disposed = false;
   private editing: Prompt | null = null;
-  private readonly disposeTheme: () => void;
+  private globalsAttached = false;
+  private disposeTheme: (() => void) | null = null;
+
+  documentListenersAttached(): boolean {
+    return this.globalsAttached;
+  }
 
   constructor(private readonly button: HTMLButtonElement) {
     document.getElementById(PROMPT_HOST_ID)?.remove();
@@ -62,12 +67,9 @@ export class PromptPanel {
     this.root.append(style, this.modal);
     document.body.append(this.host);
     this.modal.dataset.toolkitTheme = detectYadaTheme();
-    this.disposeTheme = observeYadaTheme(theme => { this.modal.dataset.toolkitTheme = theme; });
     button.addEventListener("click", this.toggle);
     this.modal.addEventListener("click", this.handleClick);
     this.query<HTMLFormElement>("form").addEventListener("submit", event => { event.preventDefault(); void this.saveEditor(); });
-    document.addEventListener("pointerdown", this.outside, true);
-    document.addEventListener("keydown", this.keydown, true);
     // Prevent wheel/touch from chaining through the fixed modal into the page.
     this.modal.addEventListener('wheel', this.stopPageScroll, { passive: false });
     this.modal.addEventListener('touchmove', this.stopPageScroll, { passive: false });
@@ -82,22 +84,22 @@ export class PromptPanel {
   private query<T extends HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
   close = (): void => {
     this.destroySortable();
+    this.detachGlobals();
     this.generation++;
     for (const [button, timer] of this.copyTimers) { clearTimeout(timer); button.innerHTML = ICONS.copy; }
     this.copyTimers.clear(); this.host.hidden = true;
     this.button.setAttribute("aria-expanded", "false");
   };
   dispose(): void {
-    this.disposed = true; this.close(); this.disposeTheme(); this.host.remove();
+    this.disposed = true; this.close(); this.host.remove();
     this.button.removeEventListener("click", this.toggle);
-    document.removeEventListener("pointerdown", this.outside, true);
-    document.removeEventListener("keydown", this.keydown, true);
   }
-  private toggle = async (): Promise<void> => {
+  toggle = async (): Promise<void> => {
     if (!this.host.hidden) { this.close(); return; }
     if (this.busy) return;
     const generation = ++this.generation;
     if (!this.host.isConnected) document.body.append(this.host);
+    this.attachGlobals();
     this.host.hidden = false; this.button.setAttribute("aria-expanded", "true");
     this.query('[role="alert"]').hidden = true;
     this.query('form').hidden = true;
@@ -108,6 +110,22 @@ export class PromptPanel {
       this.query('[data-prompt-action="add"]').focus();
     } catch { if (generation === this.generation) this.error("无法读取提示词，请重新打开重试。"); }
   };
+  private attachGlobals(): void {
+    if (this.globalsAttached) return;
+    this.globalsAttached = true;
+    this.modal.dataset.toolkitTheme = detectYadaTheme();
+    this.disposeTheme = observeYadaTheme(theme => { this.modal.dataset.toolkitTheme = theme; });
+    document.addEventListener("pointerdown", this.outside, true);
+    document.addEventListener("keydown", this.keydown, true);
+  }
+  private detachGlobals(): void {
+    if (!this.globalsAttached) return;
+    this.globalsAttached = false;
+    this.disposeTheme?.();
+    this.disposeTheme = null;
+    document.removeEventListener("pointerdown", this.outside, true);
+    document.removeEventListener("keydown", this.keydown, true);
+  }
   private outside = (event: PointerEvent): void => {
     if (!this.host.hidden && !event.composedPath().includes(this.host) && !event.composedPath().includes(this.button)) this.close();
   };

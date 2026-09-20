@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Yada",
-  "version": "4.0.2",
+  "version": "4.0.3",
   "description": "Restores ChatGPT's native long-conversation navigator, with copy-all, prompts, and local Pro quota estimates.",
   "action": {
     "default_title": "ChatGPT Yada Pro 额度",

@@ -399,19 +399,22 @@
   }
 
   // src/quota/presentation.ts
+  function quotaDetailsQuiet(snapshot) {
+    return snapshot.historyComplete && snapshot.syncStatus === "ready" && !snapshot.historyError && !snapshot.lastHistoryError;
+  }
   function historySyncLabel(snapshot) {
-    if (snapshot.historyComplete) return "历史同步完整";
+    if (quotaDetailsQuiet(snapshot)) return "";
     switch (snapshot.syncStatus) {
       case "loading":
         return "正在读取额度";
       case "backfill":
         return `正在首次同步最近 7 天 ChatGPT 历史… · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
-      case "ready":
-        return "历史同步完整";
       case "error":
-        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+        return snapshot.historyError ? `最近历史刷新失败 · ${snapshot.historyError}` : "最近历史刷新失败";
+      case "ready":
+        return snapshot.lastHistoryError ? "最近历史刷新失败" : "";
       default:
-        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+        return snapshot.historyError ? snapshot.historyError : `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
     }
   }
 
@@ -432,9 +435,9 @@
       "",
       metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
       metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
-      metricLine("两个 Pro", snapshot.combinedDaily),
+      metricLine("GPT-6 Pro+5.6 Sol Pro", snapshot.combinedDaily),
       "",
-      `历史同步：${historySyncLabel(snapshot)}`,
+      quotaDetailsQuiet(snapshot) ? snapshot.updatedLabel : `历史同步：${historySyncLabel(snapshot)}`,
       `未分类轮次：${snapshot.unclassifiedTurns}`,
       snapshot.updatedLabel,
       workspace

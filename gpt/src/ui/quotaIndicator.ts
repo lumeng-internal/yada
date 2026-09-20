@@ -10,6 +10,7 @@ import {
   metricPercentLabel,
   metricRemainingLabel,
   planStatusNote,
+  quotaDetailsQuiet,
   snapshotBucketViews,
   workspaceStatusNote
 } from "../quota/presentation";
@@ -75,7 +76,20 @@ const POPOVER_CSS = `
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
   }
   [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
-  [data-quota-popover] h3 { margin: 10px 0 2px; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] [data-quota-bucket] { margin-top: 10px; }
+  [data-quota-popover] [data-quota-row] {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  [data-quota-popover] [data-quota-name] { margin: 0; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] [data-quota-meta] {
+    margin: 0;
+    color: var(--yada-muted);
+    white-space: nowrap;
+  }
+  [data-quota-popover] [data-quota-remaining] { margin: 2px 0 0; }
   [data-quota-popover] p { margin: 0; }
   [data-quota-popover] [data-quota-note],
   [data-quota-popover] [data-quota-warn],
@@ -92,8 +106,8 @@ export class QuotaIndicator {
   private readonly send: QuotaStateSender;
   private readonly debounceMs: number;
   private readonly canvas: HTMLCanvasElement;
-  private readonly portalHost: HTMLDivElement;
-  private readonly popover: HTMLDivElement;
+  private portalHost: HTMLDivElement | null = null;
+  private popover: HTMLDivElement | null = null;
   private readonly disposeTheme: () => void;
   private disposed = false;
   private generation = 0;
@@ -102,6 +116,8 @@ export class QuotaIndicator {
   private snapshot: QuotaSnapshot | null = null;
   private rings: RingValues = UNKNOWN_QUOTA_RINGS;
   private themeValue: YadaTheme;
+  private quotaDirty = false;
+  private popoverListeners = false;
 
   constructor(
     private readonly button: HTMLButtonElement,
@@ -111,43 +127,25 @@ export class QuotaIndicator {
     this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
     this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
     this.canvas.setAttribute("aria-hidden", "true");
-
-    document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
-    this.portalHost = document.createElement("div");
-    this.portalHost.id = QUOTA_POPOVER_HOST_ID;
-    this.portalHost.dataset.yadaRoot = "true";
     this.themeValue = detectYadaTheme();
-    this.portalHost.dataset.yadaTheme = this.themeValue;
-    const portal = this.portalHost.attachShadow({ mode: "open" });
-    const style = document.createElement("style");
-    style.textContent = POPOVER_CSS;
-    this.popover = document.createElement("div");
-    this.popover.hidden = true;
-    this.popover.dataset.quotaPopover = "true";
-    this.popover.setAttribute("role", "dialog");
-    this.popover.setAttribute("aria-label", "Pro 模型额度");
-    portal.append(style, this.popover);
-    (document.body ?? document.documentElement).append(this.portalHost);
 
     this.disposeTheme = observeYadaTheme((theme) => {
       this.themeValue = theme;
-      this.portalHost.dataset.yadaTheme = theme;
+      if (this.portalHost) this.portalHost.dataset.yadaTheme = theme;
       this.paint(this.rings);
     });
     this.button.setAttribute("aria-haspopup", "dialog");
     this.button.addEventListener("click", this.onClick);
-    document.addEventListener("pointerdown", this.onPointerDown, true);
-    document.addEventListener("keydown", this.onKeyDown, true);
-    window.addEventListener("resize", this.onViewportChange, { passive: true });
-    window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
     chrome.storage?.onChanged?.addListener(this.onStorageChanged);
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.apply(null, "loading");
     void this.loadState();
   }
 
   close = (): void => {
-    this.popover.hidden = true;
+    if (this.popover) this.popover.hidden = true;
     this.button.setAttribute("aria-expanded", "false");
+    this.detachPopoverListeners();
   };
 
   dispose(): void {
@@ -159,37 +157,36 @@ export class QuotaIndicator {
     this.refreshTimer = 0;
     this.disposeTheme();
     this.button.removeEventListener("click", this.onClick);
-    document.removeEventListener("pointerdown", this.onPointerDown, true);
-    document.removeEventListener("keydown", this.onKeyDown, true);
-    window.removeEventListener("resize", this.onViewportChange);
-    window.removeEventListener("scroll", this.onViewportChange, true);
     chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
-    this.portalHost.remove();
+    document.removeEventListener("visibilitychange", this.onVisibility);
+    this.portalHost?.remove();
+    this.portalHost = null;
+    this.popover = null;
   }
 
   private readonly onClick = (event: MouseEvent): void => {
     event.preventDefault();
     event.stopPropagation();
-    if (this.popover.hidden) this.open();
+    if (this.popover?.hidden !== false) this.open();
     else this.close();
   };
 
   private readonly onPointerDown = (event: PointerEvent): void => {
-    if (this.popover.hidden) return;
+    if (!this.popover || this.popover.hidden) return;
     const path = event.composedPath();
-    if (path.includes(this.button) || path.includes(this.popover) || path.includes(this.portalHost)) return;
+    if (path.includes(this.button) || path.includes(this.popover) || (this.portalHost && path.includes(this.portalHost))) return;
     this.close();
   };
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    if (this.popover.hidden || event.key !== "Escape") return;
+    if (!this.popover || this.popover.hidden || event.key !== "Escape") return;
     event.stopPropagation();
     this.close();
     this.button.focus();
   };
 
   private readonly onViewportChange = (): void => {
-    if (!this.popover.hidden) this.positionPopover();
+    if (this.popover && !this.popover.hidden) this.positionPopover();
   };
 
   private readonly onStorageChanged = (
@@ -198,12 +195,26 @@ export class QuotaIndicator {
   ): void => {
     if (this.disposed || area !== "local") return;
     if (!changes[LEDGER_KEY] && !changes[STATE_KEY]) return;
+    if (document.visibilityState === "hidden") {
+      this.quotaDirty = true;
+      return;
+    }
+    this.queueLoad();
+  };
+
+  private readonly onVisibility = (): void => {
+    if (this.disposed || document.visibilityState !== "visible" || !this.quotaDirty) return;
+    this.quotaDirty = false;
+    void this.loadState();
+  };
+
+  private queueLoad(): void {
     window.clearTimeout(this.refreshTimer);
     this.refreshTimer = window.setTimeout(() => {
       this.refreshTimer = 0;
       void this.loadState();
     }, this.debounceMs);
-  };
+  }
 
   private async loadState(): Promise<void> {
     const generation = ++this.generation;
@@ -235,7 +246,7 @@ export class QuotaIndicator {
           ? snapshotTitle(snapshot)
           : "Pro 额度：读取中"
     );
-    if (!this.popover.hidden) {
+    if (this.popover && !this.popover.hidden) {
       this.renderPopover();
       this.positionPopover();
     }
@@ -260,13 +271,53 @@ export class QuotaIndicator {
   }
 
   private open(): void {
+    this.ensurePopover();
     this.renderPopover();
-    this.popover.hidden = false;
+    this.popover!.hidden = false;
     this.button.setAttribute("aria-expanded", "true");
+    this.attachPopoverListeners();
     this.positionPopover();
   }
 
+  private ensurePopover(): void {
+    if (this.popover) return;
+    document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
+    this.portalHost = document.createElement("div");
+    this.portalHost.id = QUOTA_POPOVER_HOST_ID;
+    this.portalHost.dataset.yadaRoot = "true";
+    this.portalHost.dataset.yadaTheme = this.themeValue;
+    const portal = this.portalHost.attachShadow({ mode: "open" });
+    const style = document.createElement("style");
+    style.textContent = POPOVER_CSS;
+    this.popover = document.createElement("div");
+    this.popover.hidden = true;
+    this.popover.dataset.quotaPopover = "true";
+    this.popover.setAttribute("role", "dialog");
+    this.popover.setAttribute("aria-label", "Pro 模型额度");
+    portal.append(style, this.popover);
+    (document.body ?? document.documentElement).append(this.portalHost);
+  }
+
+  private attachPopoverListeners(): void {
+    if (this.popoverListeners) return;
+    this.popoverListeners = true;
+    document.addEventListener("pointerdown", this.onPointerDown, true);
+    document.addEventListener("keydown", this.onKeyDown, true);
+    window.addEventListener("resize", this.onViewportChange, { passive: true });
+    window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
+  }
+
+  private detachPopoverListeners(): void {
+    if (!this.popoverListeners) return;
+    this.popoverListeners = false;
+    document.removeEventListener("pointerdown", this.onPointerDown, true);
+    document.removeEventListener("keydown", this.onKeyDown, true);
+    window.removeEventListener("resize", this.onViewportChange);
+    window.removeEventListener("scroll", this.onViewportChange, true);
+  }
+
   private renderPopover(): void {
+    if (!this.popover) return;
     this.popover.replaceChildren();
     const heading = document.createElement("h2");
     heading.textContent = "Pro 模型额度";
@@ -280,32 +331,46 @@ export class QuotaIndicator {
       return;
     }
 
-    this.popover.append(note(historySyncLabel(this.snapshot), this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
-    if (this.snapshot.syncStatus === "error") return;
+    const statusNote = historySyncLabel(this.snapshot);
+    if (statusNote) {
+      this.popover.append(note(statusNote, this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
+    }
+    if (this.snapshot.syncStatus === "error") {
+      this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
+      return;
+    }
     const planNote = planStatusNote(this.snapshot);
     if (planNote) this.popover.append(note(planNote, "quota-warn"));
-    else if (this.snapshot.syncStatus === "ready") {
-      for (const bucket of snapshotBucketViews(this.snapshot)) {
-        const section = document.createElement("section");
-        const title = document.createElement("h3");
-        title.textContent = bucket.title;
-        const remaining = document.createElement("p");
-        remaining.textContent = metricRemainingLabel(bucket.metric);
-        const percent = document.createElement("p");
-        percent.textContent = metricPercentLabel(bucket.metric);
-        section.append(title, remaining, percent);
-        this.popover.append(section);
+    else if (this.snapshot.syncStatus === "ready" || quotaDetailsQuiet(this.snapshot) || this.snapshot.plan) {
+      if (this.snapshot.plan) {
+        for (const bucket of snapshotBucketViews(this.snapshot)) {
+          const section = document.createElement("section");
+          section.dataset.quotaBucket = "true";
+          const row = document.createElement("div");
+          row.dataset.quotaRow = "true";
+          const title = document.createElement("p");
+          title.dataset.quotaName = "true";
+          title.textContent = bucket.title;
+          const meta = document.createElement("p");
+          meta.dataset.quotaMeta = "true";
+          meta.textContent = `${bucket.period}   ${metricPercentLabel(bucket.metric)}`;
+          row.append(title, meta);
+          const remaining = document.createElement("p");
+          remaining.dataset.quotaRemaining = "true";
+          remaining.textContent = metricRemainingLabel(bucket.metric);
+          section.append(row, remaining);
+          this.popover.append(section);
+        }
       }
     }
 
-    this.popover.append(note("本地估算，不是 ChatGPT 官方余额", "quota-note"));
-    this.popover.append(note("只统计个人 Chat，不统计 Work 和 Codex", "quota-note"));
     this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
     const workspace = workspaceStatusNote(this.snapshot);
     if (workspace) this.popover.append(note(workspace, "quota-warn"));
   }
 
   private positionPopover(): void {
+    if (!this.popover) return;
     const buttonRect = this.button.getBoundingClientRect();
     const width = Math.min(POPOVER_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_GUTTER * 2));
     const left = clamp(

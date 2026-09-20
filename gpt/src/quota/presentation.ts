@@ -2,6 +2,7 @@ import type { QuotaMetric, QuotaSnapshot } from "./types";
 
 export type QuotaBucketView = {
   title: string;
+  period: "7days" | "24h";
   metric: QuotaMetric | null;
 };
 
@@ -16,19 +17,30 @@ export function metricPercentLabel(metric: QuotaMetric | null): string {
   return `${Math.round(metric.remainingRatio * 100)}%`;
 }
 
+export function quotaDetailsQuiet(snapshot: QuotaSnapshot): boolean {
+  return snapshot.historyComplete
+    && snapshot.syncStatus === "ready"
+    && !snapshot.historyError
+    && !snapshot.lastHistoryError;
+}
+
 export function historySyncLabel(snapshot: QuotaSnapshot): string {
-  if (snapshot.historyComplete) return "历史同步完整";
+  if (quotaDetailsQuiet(snapshot)) return "";
   switch (snapshot.syncStatus) {
     case "loading":
       return "正在读取额度";
     case "backfill":
       return `正在首次同步最近 7 天 ChatGPT 历史… · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
-    case "ready":
-      return "历史同步完整";
     case "error":
-      return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+      return snapshot.historyError
+        ? `最近历史刷新失败 · ${snapshot.historyError}`
+        : "最近历史刷新失败";
+    case "ready":
+      return snapshot.lastHistoryError ? "最近历史刷新失败" : "";
     default:
-      return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+      return snapshot.historyError
+        ? snapshot.historyError
+        : `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
   }
 }
 
@@ -44,11 +56,11 @@ export function workspaceStatusNote(snapshot: QuotaSnapshot): string | null {
 export function snapshotBucketViews(snapshot: QuotaSnapshot): QuotaBucketView[] {
   if (!snapshot.plan) return [];
   if (snapshot.plan === "prolite") {
-    return [{ title: "两个 Pro", metric: snapshot.combinedDaily }];
+    return [{ title: "GPT-6 Pro+5.6 Sol Pro", period: "7days", metric: snapshot.combinedDaily }];
   }
   return [
-    { title: "GPT-6 Pro", metric: snapshot.gpt6ProWeekly },
-    { title: "GPT-5.6 Sol Pro", metric: snapshot.solProDaily },
-    { title: "两个 Pro", metric: snapshot.combinedDaily }
+    { title: "GPT-6 Pro", period: "7days", metric: snapshot.gpt6ProWeekly },
+    { title: "GPT-5.6 Sol Pro", period: "24h", metric: snapshot.solProDaily },
+    { title: "GPT-6 Pro+5.6 Sol Pro", period: "24h", metric: snapshot.combinedDaily }
   ];
 }

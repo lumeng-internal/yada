@@ -1,19 +1,16 @@
 import { ConversationSync } from "./core/conversationSync";
 import { OfficialNavigatorHydrator } from "./nativeNavigator/hydrator";
+import { NATIVE_NAV_CHANNEL, record } from "./nativeNavigator/protocol";
 import { isChatGptConversationPage, isChatGptPage, getConversationIdFromUrl } from "./platform/chatgptAdapter";
 import { QuotaTracker } from "./quota/tracker";
 import { YadaToolbar } from "./ui/toolbar";
-import { observeRouteChange } from "./utils/route";
 
 class ChatGptYadaApp {
   private sync: ConversationSync | null = null;
   private hydrator: OfficialNavigatorHydrator | null = null;
   private toolbar: YadaToolbar | null = null;
   private quota: QuotaTracker | null = null;
-  private routeDispose: (() => void) | null = null;
   private messageDispose: (() => void) | null = null;
-  private hostGuard: MutationObserver | null = null;
-  private remounts = 0;
 
   mount(): void {
     this.sync = new ConversationSync();
@@ -25,11 +22,7 @@ class ChatGptYadaApp {
     this.toolbar = new YadaToolbar(this.sync);
     this.toolbar.mount();
     this.syncPageState();
-    this.routeDispose = observeRouteChange(() => {
-      this.toolbar?.closePanels();
-      this.hydrator?.resetRoute();
-      this.syncPageState();
-    });
+    addEventListener("message", this.onRouteMessage);
     const onMessage = (
       message: { type?: string; conversationId?: string },
       _sender: chrome.runtime.MessageSender,
@@ -43,22 +36,10 @@ class ChatGptYadaApp {
     };
     chrome.runtime.onMessage.addListener(onMessage);
     this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
-    this.hostGuard = new MutationObserver(() => {
-      if (document.getElementById("chatgpt-yada-toolbar-host")) return;
-      if (this.remounts >= 5) return;
-      this.remounts += 1;
-      this.dispose();
-      this.mount();
-    });
-    this.hostGuard.observe(document, { childList: true });
-    this.hostGuard.observe(document.documentElement, { childList: true });
   }
 
   dispose = (): void => {
-    this.hostGuard?.disconnect();
-    this.hostGuard = null;
-    this.routeDispose?.();
-    this.routeDispose = null;
+    removeEventListener("message", this.onRouteMessage);
     this.messageDispose?.();
     this.messageDispose = null;
     this.hydrator?.dispose();
@@ -69,6 +50,15 @@ class ChatGptYadaApp {
     this.toolbar = null;
     this.sync?.dispose();
     this.sync = null;
+  };
+
+  private readonly onRouteMessage = (event: MessageEvent): void => {
+    if (event.source !== window || event.origin !== location.origin) return;
+    const message = record(event.data);
+    if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "route") return;
+    this.toolbar?.closePanels();
+    this.hydrator?.resetRoute();
+    this.syncPageState();
   };
 
   private syncPageState(): void {

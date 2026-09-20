@@ -4,6 +4,9 @@ import { identity } from "./vibebar/conversationParser";
 import { modelLimits } from "./vibebar/modelLimits";
 import type { ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
 
+export const ACCOUNT_CACHE_TTL_MS = 30 * 60 * 1000;
+export const MODEL_LIMITS_CACHE_TTL_MS = 10 * 60 * 1000;
+
 export type ChatAccount = {
   userId: string | null;
   accountId: string | null;
@@ -11,7 +14,39 @@ export type ChatAccount = {
   identity: string;
 };
 
-export async function readChatAccount(signal?: AbortSignal): Promise<ChatAccount> {
+export type PageClientReadOptions = {
+  force?: boolean;
+  now?: number;
+};
+
+type AccountCache = {
+  value: ChatAccount;
+  fetchedAt: number;
+};
+
+type LimitsCache = {
+  value: ChatGPTChatModelLimit[];
+  fetchedAt: number;
+};
+
+let accountCache: AccountCache | null = null;
+let limitsCache: LimitsCache | null = null;
+
+export function resetPageClientCaches(): void {
+  accountCache = null;
+  limitsCache = null;
+}
+
+export async function readChatAccount(signal?: AbortSignal, options: PageClientReadOptions = {}): Promise<ChatAccount> {
+  const now = options.now ?? Date.now();
+  const cheapId = getChatGptAccountId();
+  if (!options.force && accountCache && now - accountCache.fetchedAt < ACCOUNT_CACHE_TTL_MS) {
+    if (cheapId && accountCache.value.accountId && cheapId !== accountCache.value.accountId) {
+      accountCache = null;
+    } else {
+      return accountCache.value;
+    }
+  }
   let userId: string | null = null;
   let plan: ChatPlan = null;
   try {
@@ -33,12 +68,21 @@ export async function readChatAccount(signal?: AbortSignal): Promise<ChatAccount
   } catch {
     plan = null;
   }
-  const accountId = getChatGptAccountId();
+  const accountId = cheapId ?? getChatGptAccountId();
   const identityKey = await identity(`${userId ?? "unknown"}:${accountId ?? "personal"}`);
-  return { userId, accountId, plan, identity: identityKey };
+  const value: ChatAccount = { userId, accountId, plan, identity: identityKey };
+  accountCache = { value, fetchedAt: now };
+  return value;
 }
 
-export async function readModelLimits(now = Date.now(), signal?: AbortSignal): Promise<ChatGPTChatModelLimit[]> {
+export async function readModelLimits(
+  now = Date.now(),
+  signal?: AbortSignal,
+  options: PageClientReadOptions = {}
+): Promise<ChatGPTChatModelLimit[]> {
+  if (!options.force && limitsCache && now - limitsCache.fetchedAt < MODEL_LIMITS_CACHE_TTL_MS) {
+    return limitsCache.value;
+  }
   try {
     const offsetMin = -Math.round(new Date().getTimezoneOffset());
     const response = await chatgptApi("/backend-api/conversation/init", {
@@ -55,7 +99,9 @@ export async function readModelLimits(now = Date.now(), signal?: AbortSignal): P
       })
     });
     if (!response.ok) return [];
-    return modelLimits(await response.json(), now);
+    const value = modelLimits(await response.json(), now);
+    limitsCache = { value, fetchedAt: now };
+    return value;
   } catch {
     return [];
   }

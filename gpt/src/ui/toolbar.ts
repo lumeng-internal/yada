@@ -20,6 +20,8 @@ export class YadaToolbar {
 
   private prompts: PromptPanel | null = null;
   private quota: QuotaIndicator | null = null;
+  private observedTarget: Element | null = null;
+  private observedParent: Element | null = null;
   constructor(private readonly sync: ConversationSync | null = null) {}
 
   closePanels(): void {
@@ -46,14 +48,12 @@ export class YadaToolbar {
     });
 
     this.quota = new QuotaIndicator(this.query<HTMLButtonElement>("[data-quota]")!);
-    this.prompts = new PromptPanel( this.query<HTMLButtonElement>("[data-prompts]")!);
+    this.query<HTMLButtonElement>("[data-prompts]")?.addEventListener("click", this.onPromptsClick);
 
     this.disposeTheme = observeYadaTheme((theme) => {
       this.host?.setAttribute("data-yada-theme", theme);
     });
 
-    this.placementObserver = new MutationObserver(() => this.schedulePlacement());
-    this.placementObserver.observe(document.body, { childList: true, subtree: true });
     window.addEventListener("resize", this.handleViewportChange, { passive: true });
     this.ensurePlacement();
   }
@@ -70,6 +70,7 @@ export class YadaToolbar {
         target.insertBefore(this.host, target.firstElementChild);
       }
       this.host.dataset.placement = "inline";
+      this.observeHeader(target);
       return;
     }
 
@@ -77,6 +78,7 @@ export class YadaToolbar {
       document.documentElement.append(this.host);
     }
     this.host.dataset.placement = "fixed";
+    this.observeHeader(null);
   }
 
   dispose(): void {
@@ -86,6 +88,9 @@ export class YadaToolbar {
     window.clearTimeout(this.copyResetTimer);
     window.clearTimeout(this.placementTimer);
     this.placementObserver?.disconnect();
+    this.placementObserver = null;
+    this.observedTarget = null;
+    this.observedParent = null;
     this.disposeTheme?.();
     window.removeEventListener("resize", this.handleViewportChange);
     this.host?.remove();
@@ -251,6 +256,28 @@ export class YadaToolbar {
         button.disabled = false;
       }, resetAfterMs);
     }
+  }
+
+  private readonly onPromptsClick = (): void => {
+    const button = this.query<HTMLButtonElement>("[data-prompts]");
+    if (!button) return;
+    if (!this.prompts) {
+      this.prompts = new PromptPanel(button);
+      void this.prompts.toggle();
+    }
+  };
+
+  private observeHeader(target: HTMLElement | null): void {
+    const parent = target?.parentElement ?? null;
+    if (target === this.observedTarget && parent === this.observedParent) return;
+    this.placementObserver?.disconnect();
+    this.placementObserver = null;
+    this.observedTarget = target;
+    this.observedParent = parent;
+    if (!target) return;
+    this.placementObserver = new MutationObserver(() => this.schedulePlacement());
+    this.placementObserver.observe(target, { childList: true });
+    if (parent) this.placementObserver.observe(parent, { childList: true });
   }
 
   private schedulePlacement(): void {

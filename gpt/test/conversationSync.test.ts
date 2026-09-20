@@ -156,6 +156,7 @@ describe("ConversationSync", () => {
   });
 
   it("does not start a full conversation read for ordinary DOM mutations", async () => {
+    vi.useFakeTimers();
     let reads = 0;
     const sync = new ConversationSync({
       async readConversation(id) {
@@ -174,12 +175,14 @@ describe("ConversationSync", () => {
       document.body.append(node);
       node.dispatchEvent(new Event("mouseover", { bubbles: true }));
     }
+    await vi.advanceTimersByTimeAsync(300);
     await flushMicrotasks(8);
     expect(reads).toBe(afterFirst);
     sync.dispose();
   });
 
   it("syncs once when streaming ends and ignores already seen assistant ids", async () => {
+    vi.useFakeTimers();
     let reads = 0;
     const sync = new ConversationSync({
       async readConversation(id) {
@@ -196,12 +199,15 @@ describe("ConversationSync", () => {
     await sync.requestSync("init");
     const afterFirst = reads;
     assistant.dataset.isStreaming = "true";
+    await vi.advanceTimersByTimeAsync(300);
     await flushMicrotasks(6);
     expect(reads).toBe(afterFirst);
     assistant.dataset.isStreaming = "false";
+    await vi.advanceTimersByTimeAsync(300);
     await flushMicrotasks(6);
     expect(reads).toBe(afterFirst + 1);
     assistant.dataset.isStreaming = "false";
+    await vi.advanceTimersByTimeAsync(300);
     await flushMicrotasks(6);
     expect(reads).toBe(afterFirst + 1);
     sync.dispose();

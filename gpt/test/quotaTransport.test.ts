@@ -360,7 +360,7 @@ describe("quota tracker last-good lifecycle", () => {
     expect((await ledger.restore()).state).toMatchObject({ historyComplete: false, syncStatus: "error" });
   });
 
-  it("aborts a hidden in-flight reconcile without overwriting baseline/cache", async () => {
+  it("aborts a running reconcile only on dispose, not on hidden", async () => {
     stubFetch(async (_path, init) => pendingResponse(init?.signal));
     const { ledger } = await mountTracker();
     await seed(ledger, NOW - 600_000);
@@ -369,6 +369,8 @@ describe("quota tracker last-good lifecycle", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await vi.advanceTimersByTimeAsync(60_000);
     expect((await ledger.restore()).state).toMatchObject({ historyComplete: true, syncStatus: "ready", lastHistorySuccessAt: NOW - 600_000 });
+    tracker!.dispose();
+    await vi.advanceTimersByTimeAsync(1);
     expect((await chrome.storage.local.get(HISTORY_CACHE_KEY))[HISTORY_CACHE_KEY]).toBeUndefined();
   });
 

@@ -1,6 +1,8 @@
 import { abortError, isAbortError, readConversation as readConversationFromApi } from "../conversation/readConversation";
 import type { ConversationListener, ConversationSnapshot, ReadConversation } from "./types";
 
+export const SIGNAL_INSPECTION_DEBOUNCE_MS = 250;
+
 export class ConversationSync {
   private activeConversationId: string | null = null;
   private generation = 0;
@@ -11,6 +13,7 @@ export class ConversationSync {
   private lastError: Error | null = null;
   private readonly listeners = new Set<ConversationListener>();
   private observer: MutationObserver | null = null;
+  private signalTimer = 0;
   private lastStreamingState = false;
   private readonly seenAssistantMessageIds = new Set<string>();
   private disposed = false;
@@ -38,6 +41,7 @@ export class ConversationSync {
   setActiveConversation(conversationId: string | null): void {
     if (this.activeConversationId === conversationId) return;
     this.generation += 1;
+    this.clearSignalTimer();
     this.abortController?.abort();
     this.abortController = null;
     this.activeConversationId = conversationId;
@@ -68,7 +72,16 @@ export class ConversationSync {
 
   mountPageObserver(root: ParentNode = document.documentElement): void {
     if (this.observer || typeof MutationObserver === "undefined") return;
-    this.observer = new MutationObserver(() => this.inspectPageSignals());
+    this.observer = new MutationObserver((records) => {
+      for (const record of records) {
+        if (record.attributeName === "data-is-streaming"
+          && record.target instanceof Element
+          && record.target.getAttribute("data-is-streaming") === "true") {
+          this.lastStreamingState = true;
+        }
+      }
+      this.scheduleSignalInspection();
+    });
     this.observer.observe(root, {
       subtree: true,
       childList: true,
@@ -80,6 +93,7 @@ export class ConversationSync {
   dispose(): void {
     this.disposed = true;
     this.generation += 1;
+    this.clearSignalTimer();
     this.abortController?.abort();
     this.abortController = null;
     this.dirty = false;
@@ -138,6 +152,23 @@ export class ConversationSync {
       }
     }
     await Promise.all([...this.listeners].map((listener) => listener(snapshot)));
+  }
+
+  private scheduleSignalInspection(): void {
+    if (this.disposed) return;
+    const generation = this.generation;
+    this.clearSignalTimer();
+    this.signalTimer = window.setTimeout(() => {
+      this.signalTimer = 0;
+      if (this.disposed || this.generation !== generation) return;
+      this.inspectPageSignals();
+    }, SIGNAL_INSPECTION_DEBOUNCE_MS);
+  }
+
+  private clearSignalTimer(): void {
+    if (!this.signalTimer) return;
+    window.clearTimeout(this.signalTimer);
+    this.signalTimer = 0;
   }
 
   private inspectPageSignals(): void {

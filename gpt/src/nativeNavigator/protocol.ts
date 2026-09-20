@@ -180,6 +180,16 @@ export function expandHistoryRequest(
   }
 }
 
+export type RouteEvent = {
+  conversationId: string | null;
+  generation: number;
+};
+
+export type ParkHandshake = {
+  conversationId: string;
+  generation: number;
+};
+
 export function parsePrepareHandshake(value: unknown): PrepareHandshake | null {
   const message = record(value);
   if (!message || message.kind !== "prepare" || typeof message.enabled !== "boolean") return null;
@@ -190,6 +200,30 @@ export function parsePrepareHandshake(value: unknown): PrepareHandshake | null {
     conversationId,
     generation: message.generation as number
   };
+}
+
+export function parseRouteEvent(value: unknown): RouteEvent | null {
+  const message = record(value);
+  if (!message || message.kind !== "route") return null;
+  const conversationId = message.conversationId == null ? null : identifier(message.conversationId);
+  if (message.conversationId != null && !conversationId) return null;
+  if (!Number.isSafeInteger(message.generation) || (message.generation as number) < 0) return null;
+  return { conversationId, generation: message.generation as number };
+}
+
+export function parseParkHandshake(value: unknown): ParkHandshake | null {
+  const message = record(value);
+  if (!message || message.kind !== "park") return null;
+  const conversationId = identifier(message.conversationId);
+  if (!conversationId || !Number.isSafeInteger(message.generation) || (message.generation as number) < 0) return null;
+  return { conversationId, generation: message.generation as number };
+}
+
+export function acceptParkHandshake(
+  handshake: ParkHandshake,
+  context: { conversationId: string | null; generation: number }
+): boolean {
+  return handshake.conversationId === context.conversationId && handshake.generation === context.generation;
 }
 
 export function acceptPrepareHandshake(
