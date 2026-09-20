@@ -1,9 +1,10 @@
+import type { ConversationSync } from "../core/conversationSync";
 import { PromptPanel } from "../prompts/panel";
-import { PREVIEW_KEY } from "../prompts/storage";
-import { loadCurrentConversationSnapshot } from "../conversation/normalizeConversation";
 import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
+import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import { YADA_ACCENT, YADA_ACCENT_SOFT, YADA_TOOLBAR_HOST_ID } from "../styles";
+import { QuotaIndicator } from "./quotaIndicator";
 import { detectYadaTheme, observeYadaTheme } from "./theme";
 
 type CopyState = "idle" | "pending" | "success" | "error" | "empty";
@@ -18,10 +19,13 @@ export class YadaToolbar {
   private placementTimer = 0;
 
   private prompts: PromptPanel | null = null;
-  private previewAssistant = false;
-  constructor(private readonly onPreviewMode: (assistant: boolean) => void = () => {}) {}
+  private quota: QuotaIndicator | null = null;
+  constructor(private readonly sync: ConversationSync | null = null) {}
 
-  closePanels(): void { this.prompts?.close(); }
+  closePanels(): void {
+    this.prompts?.close();
+    this.quota?.close();
+  }
 
   mount(): void {
     if (this.host?.isConnected) return;
@@ -41,24 +45,8 @@ export class YadaToolbar {
       void this.copyAll();
     });
 
+    this.quota = new QuotaIndicator(this.query<HTMLButtonElement>("[data-quota]")!);
     this.prompts = new PromptPanel( this.query<HTMLButtonElement>("[data-prompts]")!);
-    const mode = this.query<HTMLButtonElement>("[data-preview-mode]")!;
-    const applyMode = (): void => {
-      mode.setAttribute("aria-pressed", String(this.previewAssistant));
-      mode.title = this.previewAssistant ? "预览：User + ChatGPT" : "预览：User";
-      mode.setAttribute("aria-label", mode.title);
-      this.onPreviewMode(this.previewAssistant);
-    };
-    let modeTouched = false;
-    void chrome.storage.local.get(PREVIEW_KEY).then(data => {
-      if (!this.host || modeTouched) return;
-      this.previewAssistant = data[PREVIEW_KEY] === true; applyMode();
-    }).catch(() => applyMode());
-    mode.addEventListener("click", () => {
-      modeTouched = true;
-      this.previewAssistant = !this.previewAssistant; applyMode();
-      void chrome.storage.local.set({ [PREVIEW_KEY]: this.previewAssistant }).catch(() => { mode.title = "预览模式保存失败，下次打开将恢复旧设置"; });
-    });
 
     this.disposeTheme = observeYadaTheme((theme) => {
       this.host?.setAttribute("data-yada-theme", theme);
@@ -92,6 +80,8 @@ export class YadaToolbar {
   }
 
   dispose(): void {
+    this.quota?.dispose();
+    this.quota = null;
     this.prompts?.dispose();
     window.clearTimeout(this.copyResetTimer);
     window.clearTimeout(this.placementTimer);
@@ -189,10 +179,23 @@ export class YadaToolbar {
           cursor: default;
           opacity: 0.66;
         }
-        [data-preview-mode] { padding: 0; width: 20px; height: 20px; font-size: 16px; color: var(--yada-muted); border: 0; background: transparent; }
-        [data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        button[data-quota] {
+          padding: 0;
+          width: 20px;
+          height: 20px;
+          border: 0;
+          background: transparent;
+          border-radius: 50%;
+          flex-shrink: 0;
+          line-height: 0;
+        }
+        button[data-quota] canvas {
+          display: block;
+          width: 20px;
+          height: 20px;
+        }
       </style>
-      <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
+      <button type="button" data-quota aria-haspopup="dialog" aria-expanded="false" aria-label="Pro 额度：读取中" title="Pro 额度：读取中"><canvas width="32" height="32" aria-hidden="true"></canvas></button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
     `;
@@ -204,15 +207,23 @@ export class YadaToolbar {
     this.setCopyState("pending", "复制中...", 0);
 
     try {
-      const snapshot = await loadCurrentConversationSnapshot();
-      const markdown = formatTurnsAsMarkdown(snapshot.turns);
+      const id = getConversationIdFromUrl();
+      if (id && this.sync && this.sync.getActiveConversationId() !== id) this.sync.setActiveConversation(id);
+      let snapshot = this.sync?.getSnapshot() ?? null;
+      if (!snapshot && this.sync) {
+        await this.sync.requestSync("copy");
+        snapshot = this.sync.getSnapshot();
+      }
+      if (!snapshot) throw new Error("No conversation snapshot");
+      const turns = snapshot.activeTurns;
+      const markdown = formatTurnsAsMarkdown(turns);
       if (!markdown) {
         this.setCopyState("empty", "没有可复制内容");
         return;
       }
 
       await writeTextToClipboard(markdown);
-      this.setCopyState("success", `已复制 ${snapshot.turns.length} 轮`);
+      this.setCopyState("success", `已复制 ${turns.length} 轮`);
     } catch (error) {
       console.error("ChatGPT Yada: copy all failed", error);
       this.setCopyState("error", "复制失败");

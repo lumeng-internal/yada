@@ -18,7 +18,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 [data-prompt-action="add"]:hover, .yada-prompt-add:hover { background:#0c8567; }
 .yada-prompt-list { min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:10px; scrollbar-width:thin; }
 .yada-prompt-item { border:1px solid var(--border); border-radius:10px; padding:10px 12px; flex-shrink:0; cursor:default; }
-.yada-prompt-item-title { margin:0; font-size:13px; overflow-wrap:anywhere; min-width:0; }
+.yada-prompt-item-title { flex:1; margin:0; font-size:13px; overflow-wrap:anywhere; min-width:0; }
 .yada-prompt-icon { width:30px; height:30px; padding:6px; border-color:transparent; display:grid; place-items:center; }
 .yada-prompt-icon[data-prompt-action="delete"] { color:#c86464; }
 .yada-prompt-item-content { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }
@@ -29,3 +29,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px 
 [role="alert"] { margin:0; color:#c86464; }
 .sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
 @media (max-width:640px) { .yada-prompt-panel { right:12px; bottom:12px; } .yada-prompt-header { gap:6px; } }
+
+.yada-prompt-grip { width:18px; height:18px; flex:0 0 18px; display:grid; place-items:center; color:var(--muted); cursor:grab; touch-action:none; }
+.yada-prompt-chosen .yada-prompt-grip { cursor:grabbing; }
+.yada-prompt-ghost { opacity:0.45; }

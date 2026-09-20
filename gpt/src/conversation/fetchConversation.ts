@@ -32,6 +32,13 @@ export type ApiConversation = {
   update_time?: number;
   current_node?: string;
   mapping?: Record<string, ApiConversationNode>;
+  messages?: ApiConversationMessage[];
+  workspace_id?: string;
+  workspaceId?: string;
+  workspace_type?: string;
+  workspaceType?: string;
+  is_workspace?: boolean;
+  isWorkspace?: boolean;
 };
 
 type SessionResponse = {
@@ -45,10 +52,53 @@ export async function fetchCurrentConversation(conversationId = getConversationI
   return fetchConversation(conversationId, signal);
 }
 
+function abortError(): DOMException {
+  return new DOMException("Aborted", "AbortError");
+}
+
+export class ChatGPTApiTimeoutError extends Error {
+  constructor() {
+    super("ChatGPT API timed out");
+    this.name = "ChatGPTApiTimeoutError";
+  }
+}
+
+export async function chatgptApi(
+  path: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number } = {}
+): Promise<Response> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", headers.get("Accept") ?? "application/json");
+  const accessToken = await getAccessToken();
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+    headers.set("X-Authorization", `Bearer ${accessToken}`);
+  }
+  const accountId = getChatGptAccountId();
+  if (accountId && !headers.has("Chatgpt-Account-Id")) {
+    headers.set("Chatgpt-Account-Id", accountId);
+  }
+  const controller = new AbortController();
+  const abort = (): void => controller.abort();
+  init.signal?.addEventListener("abort", abort, { once: true });
+  if (init.signal?.aborted) controller.abort();
+  const timer = setTimeout(abort, options.timeoutMs ?? 15_000);
+  try {
+    if (controller.signal.aborted && init.signal?.aborted) throw abortError();
+    return await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
+  } catch (error) {
+    if (init.signal?.aborted) throw abortError();
+    if (controller.signal.aborted) throw new ChatGPTApiTimeoutError();
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener("abort", abort);
+  }
+}
+
 export async function fetchConversation(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {
-  const headers: HeadersInit = {
-    Accept: "application/json"
-  };
+  const headers: HeadersInit = { Accept: "application/json" };
   const accessToken = await getAccessToken();
   if (accessToken) {
     headers.Authorization = `Bearer ${accessToken}`;
@@ -58,12 +108,17 @@ export async function fetchConversation(conversationId: string, signal?: AbortSi
   if (accountId) {
     headers["Chatgpt-Account-Id"] = accountId;
   }
-
   return fetchCompleteConversation(conversationId, headers, signal);
 }
 
 async function getAccessToken(): Promise<string | null> {
-  sessionTokenPromise ??= fetchSessionToken();
+  sessionTokenPromise ??= fetchSessionToken().then((token) => {
+    if (!token) sessionTokenPromise = null;
+    return token;
+  }, (error) => {
+    sessionTokenPromise = null;
+    throw error;
+  });
   return sessionTokenPromise;
 }
 
@@ -81,7 +136,7 @@ async function fetchSessionToken(): Promise<string | null> {
   }
 }
 
-function getChatGptAccountId(): string | null {
+export function getChatGptAccountId(): string | null {
   try {
     const raw = window.localStorage.getItem("_account");
     if (!raw) return null;

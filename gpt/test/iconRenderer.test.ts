@@ -1,0 +1,31 @@
+import { describe, expect, it } from "vitest";
+import { remainingToRatio, renderQuotaIcons, ringGeometry } from "../src/quota/iconRenderer";
+import { snapshotTitle, snapshotToRings } from "../src/quota/iconState";
+import { calculateQuotaSnapshot } from "../src/quota/calculator";
+
+describe("icon renderer", () => {
+  it("generates 16/32/48/128 image data with remaining mapped to ring fill", () => {
+    const icons = renderQuotaIcons({ outer: 1, middle: 0.5, inner: 0, center: "48" });
+    expect(icons[16].width).toBe(16);
+    expect(icons[32].width).toBe(32);
+    expect(icons[48].width).toBe(48);
+    expect(icons[128].width).toBe(128);
+    expect(ringGeometry(32)).toHaveLength(3);
+    expect(remainingToRatio(62, 200)).toBeCloseTo(0.31);
+  });
+
+  it("uses a dash when coverage is partial and never says official remaining", () => {
+    const snapshot = calculateQuotaSnapshot({
+      accountKey: "a",
+      plan: "pro",
+      workspaceKind: "personal",
+      events: [],
+      historyComplete: false,
+      unclassifiedTurns: 0
+    });
+    const rings = snapshotToRings(snapshot);
+    expect(rings.center).toBe("—");
+    const title = snapshotTitle(snapshot);
+    expect(title).not.toMatch(/官方/);
+  });
+});

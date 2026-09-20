@@ -1,12 +1,11 @@
 import type { PromptLibrary } from "./types";
 export const PROMPT_KEY = "chatgpt-yada:prompt-library:v1";
-export const PREVIEW_KEY = "chatgpt-yada:preview-assistant:v1";
 
 export function parseLibrary(value: unknown): PromptLibrary {
-  if (value === undefined) return { version: 1, prompts: [] };
+  if (value === undefined) return { version: 2, prompts: [] };
   if (!value || typeof value !== "object") throw new Error("提示词数据无效");
-  const data = value as PromptLibrary;
-  if (data.version !== 1 || !Array.isArray(data.prompts)) throw new Error("提示词版本不支持");
+  const data = value as { version: number; prompts: PromptLibrary["prompts"] };
+  if ((data.version !== 1 && data.version !== 2) || !Array.isArray(data.prompts)) throw new Error("提示词版本不支持");
   const ids = new Set<string>();
   for (const p of data.prompts) {
     if (!p || typeof p.id !== "string" || !p.id || ids.has(p.id)
@@ -14,10 +13,14 @@ export function parseLibrary(value: unknown): PromptLibrary {
       || !Number.isFinite(p.createdAt) || !Number.isFinite(p.updatedAt)) throw new Error("提示词数据无效");
     ids.add(p.id);
   }
-  return data;
+  return { version: 2, prompts: data.version === 1
+    ? [...data.prompts].sort((a, b) => b.updatedAt - a.updatedAt) : [...data.prompts] };
 }
 export async function readLibrary(): Promise<PromptLibrary> {
-  return parseLibrary((await chrome.storage.local.get(PROMPT_KEY))[PROMPT_KEY]);
+  const raw = (await chrome.storage.local.get(PROMPT_KEY))[PROMPT_KEY];
+  const library = parseLibrary(raw);
+  if (raw?.version === 1) await saveLibrary(library);
+  return library;
 }
 export async function saveLibrary(library: PromptLibrary): Promise<void> {
   await chrome.storage.local.set({ [PROMPT_KEY]: parseLibrary(library) });

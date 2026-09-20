@@ -1,128 +1,93 @@
-# Third-party notices — ChatGPT Yada 2.2.2
+# Third-party notices — ChatGPT Yada 4.0.0
 
-## Intake and scope
+## GPT Conversation Toolkit
 
-Loongphy/chatgpt-usage — https://github.com/Loongphy/chatgpt-usage
-Fixed commit: f1811fb5788e040fd6b35a1d25dd7b76238d8d65.
-Only chatgpt-always-toc.user.js is used; its own header declares @author loongphy and @license MIT. No other files from this repository are copied.
+https://github.com/bujue3709/GPT-Conversation-Toolkit
+Commit: ca628eeaed87323c195aa7b6d2750d2804e6ac77
+License: MIT
 
-- src/rail/nativeSkeleton.ts: direct-child skeleton scan, phantom filtering, observed user parity, scroll-root lookup, container identity and active-turn tracking. Entry count now comes from the complete API; this file only collects and binds currently materialized skeletons.
-- src/rail/jump.ts: target position, long-distance direct scroll, 280ms cubic easing, 200/600/1200/2000ms fresh-node corrections and user-input cancellation.
-- src/rail/controller.ts, view.ts and officialNavigation.ts: debounced scanning, userMessageId structural fingerprint, route reset and native TOC yielding. Yada retains its own UI and host lifecycle; native visibility uses whole-document buttons and immediate observation.
-- src/utils/route.ts: SPA route lifecycle; rAF URL observation also handles extension isolated-world history changes without a page bridge.
+Introduced:
 
-The persistent official skeleton still solves targets whose message bodies are unmounted. Omit upstream text caching, list UI, CSS and host replacement.
+- Full-conversation / paginated API contracts into `src/conversation/completeConversation.ts` (already present from 3.0.1; pagination now keeps the original `messages` view).
+- Prompt modal interaction patterns already in `src/prompts/`.
 
-canxin121/chatgpt-web-performance-fix — https://github.com/canxin121/chatgpt-web-performance-fix
-Fixed commit: c4b12ddd87220ab8d2a14001da46aba5e773f5c7 (MIT).
+Read-only for native navigation: `features/virtualizer-bridge.js`, `features/virtualizer-bridge-page.js`, `features/virtualized-jump.js` were used to understand ChatGPT's virtual list. React Fiber object-graph scanning, private `scrollToIndex` search, and deep React state walks were not ported.
 
-- src/chatgpt-performance-fix.user.ts → src/history/historyPage.ts. Transplanted only conversation-pagination-sentinel recognition, document_start IntersectionObserver wrapping, native callback/generation recording, synthetic intersecting entries, sentinel replacement, and bounded page driving. Not transplanted: performance CSS, CodeMirror management, message metadata, cache, settings menu, sidebar, or other unrelated code.
+Not introduced: Reader, bookmarks, PDF/PNG export, cloud backup, a second navigation state machine.
 
-Leo7805/luna-toc — https://github.com/Leo7805/luna-toc
-Fixed commit: 1339969ec25d7c9b63068abd3776ce41780023ed (MIT).
+## LunaTOC
 
-- src/pageHook/conversationBackfill.ts, src/platforms/chatgpt/pageHook.ts and src/pageHook/conversationCapture.ts → src/history/historyClient.ts, historyState.ts, historyHydrator.ts and historyPage.ts URL/page_info handling. Used for has_previous_page / start_cursor, `/backend-api/conversations/{id}/messages?before=&include_has_versions=true&num_turns=100`, loading/ended state, same-conversation backfill guard, and page/content event protocol. Yada's completeConversation.ts remains the copy API and is not rewritten.
+https://github.com/Leo7805/luna-toc
+Commit: 1339969ec25d7c9b63068abd3776ce41780023ed
+License: MIT
 
-GPT Conversation Toolkit — https://github.com/bujue3709/GPT-Conversation-Toolkit
-Fixed commit: b637ccef982703cd20486db9e9211eda9b25a1aa (MIT).
+Historical source only. The previous `vendor/luna-navigation/` fingerprint / segment / virtual-search core has been removed from production and tests. Yada no longer ships Luna Virtual Search.
 
-- features/prompt-library.js and styles.css modal sections → src/prompts/panel.ts and panel.css. Retain independent body Shadow DOM modal, backdrop, list, editor and theme. Simplify to compact SVG copy/edit/delete controls and local v1 storage; remove search, footer and composer insertion.
-- features/conversation-api.js → src/conversation/completeConversation.ts: complete mapping validation and before/num_turns/include_has_versions pagination, merge and reconstruction. Preserve Yada normalization, active branch, copy and timestamps.
+Not introduced: sidebar UI, settings page, prompt library UI, application shell, outline UI, MAIN-world page-hook IIFE.
 
-The previous Toolkit virtualized-jump/index/bridge and AI-MarkDone alignment/navigation implementations are removed from the production source and current build.
+## AI-MarkDone
 
-## Loongphy file license
+https://github.com/zhaoliangbin42/AI-MarkDone
+Commit: d6cc562931607f378c48023420f814de1f7c9d60
+License: MIT
 
-MIT License
+Ported navigation closure only. File mapping and adaptations are listed in `NOTICE.md`.
 
-Copyright (c) loongphy
+Not copied: Reader, bookmarks, annotations, PDF/PNG, Google Drive, formulas, cloud backup, settings center, non-ChatGPT platforms, bookmark pending-navigation restorer, or the 200-step monotonic seeker.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## MKRingProgressView
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+https://github.com/maxkonovalov/MKRingProgressView
+Commit: 660888aab1d2ab0ed7eb9eb53caec12af4955fa7
+License: MIT
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Visual reference only for Apple Watch-style three rings. No Swift runtime copied.
 
-## chatgpt-web-performance-fix license
+## react-activity-rings
 
-MIT License
+https://github.com/JonasDoesThings/react-activity-rings
+Commit: 891656158768694a1f327ea5d414085b2819a55f
+License: MIT
 
-Copyright (c) canxin121
+Ported ideas only: multi-ring radius, remaining-percentage arcs, rounded caps, ring gaps. Rewritten as TypeScript + OffscreenCanvas. React is not a dependency.
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## ai-usage-extension
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+https://github.com/cupcakedev/ai-usage-extension
+Commit: 67e2fdb8d4a69d2dbe5de1a4b86a9f7daf9831e0
+License: MIT
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Reference only: MV3 service worker, `chrome.action.setIcon`, multi-size ImageData, storage-driven icon updates, popup/background sync.
 
-## luna-toc license
+## Vibe Bar
 
-MIT License
+https://github.com/AstroQore/vibe-bar
+Commit: af26391c5bcc074108072af8f2807fc4c47edf21
+License: AGPL-3.0
 
-Copyright (c) Leo7805
+ChatGPT Chat quota 核心已从 Swift 移植到 `src/quota/vibebar/`。文件对照、版权与修改说明见 `NOTICE.md`。未复制 macOS 应用壳或菜单栏 UI。`gpt/` 因此以 AGPL-3.0 发布。
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+## GPT Navigator Helper
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+Design-research only. Not bundled. Users do not install it.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+## Historical note
 
-## GPT Conversation Toolkit license
+3.1.1 native bootstrap and “install GPT Navigator Helper so official navigation appears” are obsolete product instructions. The current empty `?message=` preparation is not that bootstrap: it does not paginate history, wrap IntersectionObserver, or loop-refresh.
 
-MIT License
+## License texts
+
+### MIT (Toolkit / LunaTOC / AI-MarkDone / MKRingProgressView / react-activity-rings / ai-usage-extension)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 Copyright (c) 2026 bujue3709
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+Copyright (c) 2026 ChatTOC
+Copyright (c) 2026 zhaoliangbin42
+Copyright (c) 2015 Max Konovalov
+Copyright (c) JonasDoesThings
+Copyright (c) cupcakedev

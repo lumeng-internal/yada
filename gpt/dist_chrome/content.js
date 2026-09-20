@@ -1,4 +1,4497 @@
-var Ke=Object.defineProperty;var Xe=(y,v,E)=>v in y?Ke(y,v,{enumerable:!0,configurable:!0,writable:!0,value:E}):y[v]=E;var a=(y,v,E)=>Xe(y,typeof v!="symbol"?v+"":v,E);(function(){"use strict";var St;function y(r=window.location.href){try{return new URL(r).hostname==="chatgpt.com"}catch{return!1}}function v(r=window.location.href){var t,e,i;try{const n=new URL(r);return((t=n.pathname.match(/^\/c\/([a-z0-9-]+)/i))==null?void 0:t[1])??((e=n.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i))==null?void 0:e[1])??null}catch{return((i=r.match(/\/c\/([a-z0-9-]+)/i))==null?void 0:i[1])??null}}function E(r=window.location.href){return y(r)&&v(r)!==null}const Lt=":host{font:13px/1.5 system-ui;color-scheme:light}:host([hidden]),[hidden]{display:none!important}*{box-sizing:border-box}.yada-prompt-modal{position:fixed;top:0;right:0;bottom:0;left:0;z-index:2147483647;--bg:#fff;--text:#303030;--muted:#666;--border:#8884;--hover:#8881;color:var(--text);overscroll-behavior:contain}.yada-prompt-modal[data-toolkit-theme=dark]{--bg:#272727;--text:#eee;--muted:#bbb;--hover:#fff1;color-scheme:dark}.yada-prompt-backdrop{position:absolute;top:0;right:0;bottom:0;left:0;background:#0006;touch-action:none}.yada-prompt-panel{position:absolute;right:20px;bottom:20px;width:min(620px,calc(100vw - 24px));min-height:0;height:auto;max-height:min(72vh,680px);display:flex;flex-direction:column;gap:12px;padding:16px;overflow:hidden;background:var(--bg);border:1px solid var(--border);border-radius:16px;box-shadow:0 12px 40px #0003}.yada-prompt-header,.yada-prompt-item-header{display:flex;align-items:center;justify-content:space-between;gap:12px}.yada-prompt-header{flex-shrink:0}.yada-prompt-header strong{font-size:16px}.yada-prompt-header-actions,.yada-prompt-item-actions{display:flex;gap:4px;flex-shrink:0}button{font:inherit;color:inherit;background:transparent;border:1px solid var(--border);border-radius:8px;padding:5px 9px;cursor:pointer}button:hover{background:var(--hover)}button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #10a37f;outline-offset:2px}[data-prompt-action=add],.yada-prompt-add{color:#fff;background:#10a37f;border-color:#10a37f}[data-prompt-action=add]:hover,.yada-prompt-add:hover{background:#0c8567}.yada-prompt-list{min-height:0;overflow-y:auto;overscroll-behavior:contain;display:flex;flex-direction:column;gap:10px;scrollbar-width:thin}.yada-prompt-item{border:1px solid var(--border);border-radius:10px;padding:10px 12px;flex-shrink:0;cursor:default}.yada-prompt-item-title{margin:0;font-size:13px;overflow-wrap:anywhere;min-width:0}.yada-prompt-icon{width:30px;height:30px;padding:6px;border-color:transparent;display:grid;place-items:center}.yada-prompt-icon[data-prompt-action=delete]{color:#c86464}.yada-prompt-item-content{margin:6px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:5;overflow:hidden}.yada-prompt-empty{margin:0;padding:12px;text-align:center;color:var(--muted)}.yada-prompt-editor{display:grid;grid-template-columns:1fr 1fr;gap:10px;min-height:0;flex-shrink:0}.yada-prompt-editor input,.yada-prompt-editor textarea{grid-column:1 / -1;width:100%;background:var(--bg);color:inherit;border:1px solid var(--border);border-radius:8px;padding:8px;font:inherit}.yada-prompt-editor textarea{height:clamp(50px,20vh,180px);min-height:0;resize:none;overscroll-behavior:contain}[role=alert]{margin:0;color:#c86464}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}@media(max-width:640px){.yada-prompt-panel{right:12px;bottom:12px}.yada-prompt-header{gap:6px}}";async function J(r){try{await navigator.clipboard.writeText(r);return}catch{Pt(r)}}function Pt(r){const t=document.createElement("textarea");t.value=r,t.setAttribute("readonly","true"),t.style.position="fixed",t.style.top="-1000px",t.style.left="-1000px",document.documentElement.append(t),t.select();const e=document.execCommand("copy");if(t.remove(),!e)throw new Error("Clipboard fallback failed")}const H="chatgpt-yada:prompt-library:v1",q="chatgpt-yada:preview-assistant:v1";function K(r){if(r===void 0)return{version:1,prompts:[]};if(!r||typeof r!="object")throw new Error("提示词数据无效");const t=r;if(t.version!==1||!Array.isArray(t.prompts))throw new Error("提示词版本不支持");const e=new Set;for(const i of t.prompts){if(!i||typeof i.id!="string"||!i.id||e.has(i.id)||typeof i.title!="string"||typeof i.content!="string"||!Number.isFinite(i.createdAt)||!Number.isFinite(i.updatedAt))throw new Error("提示词数据无效");e.add(i.id)}return t}async function Rt(){return K((await chrome.storage.local.get(H))[H])}async function _t(r){await chrome.storage.local.set({[H]:K(r)})}function _(){const r=document.documentElement,t=X(r,"data-theme")??X(document.body,"data-theme");return t!=null&&t.toLowerCase().includes("dark")?"dark":t!=null&&t.toLowerCase().includes("light")?"light":r.classList.contains("dark")?"dark":r.classList.contains("light")?"light":getComputedStyle(r).colorScheme.includes("dark")||window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light"}function X(r,t){return r instanceof Element?r.getAttribute(t):null}function F(r){const t=()=>r(_()),e=new MutationObserver(t);e.observe(document.documentElement,{attributes:!0,attributeFilter:["class","data-theme"]}),e.observe(document.body,{attributes:!0,attributeFilter:["class","data-theme"]});const i=window.matchMedia("(prefers-color-scheme: dark)");return i.addEventListener("change",t),t(),()=>{e.disconnect(),i.removeEventListener("change",t)}}const $=r=>`<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${r}</svg>`,D={copy:$('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),edit:$('<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>'),delete:$('<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>'),check:$('<path d="m5 12 4 4L19 6"/>')},Q="chatgpt-yada-prompt-host";class $t{constructor(t){a(this,"host",document.createElement("div"));a(this,"root");a(this,"modal");a(this,"library",{version:1,prompts:[]});a(this,"copyTimers",new Map);a(this,"generation",0);a(this,"busy",!1);a(this,"disposed",!1);a(this,"editing",null);a(this,"disposeTheme");a(this,"stopPageScroll",t=>{const e=t.target instanceof Element?t.target:null,i=e==null?void 0:e.closest(".yada-prompt-list, textarea");if(!i||i.scrollHeight<=i.clientHeight){t.preventDefault();return}t instanceof WheelEvent&&(t.deltaY<0&&i.scrollTop<=0||t.deltaY>0&&i.scrollTop+i.clientHeight>=i.scrollHeight)&&t.preventDefault()});a(this,"close",()=>{this.generation++;for(const[t,e]of this.copyTimers)clearTimeout(e),t.innerHTML=D.copy;this.copyTimers.clear(),this.host.hidden=!0,this.button.setAttribute("aria-expanded","false")});a(this,"toggle",async()=>{if(!this.host.hidden){this.close();return}const t=++this.generation;this.host.isConnected||document.body.append(this.host),this.host.hidden=!1,this.button.setAttribute("aria-expanded","true"),this.query('[role="alert"]').hidden=!0,this.query("form").hidden=!0;try{const e=await Rt();if(this.disposed||t!==this.generation)return;this.library=e,this.renderList(),this.query('[data-prompt-action="add"]').focus()}catch{t===this.generation&&this.error("无法读取提示词，请重新打开重试。")}});a(this,"outside",t=>{!this.host.hidden&&!t.composedPath().includes(this.host)&&!t.composedPath().includes(this.button)&&this.close()});a(this,"keydown",t=>{if(!this.host.hidden&&(t.key==="Escape"&&(t.stopPropagation(),this.close(),this.button.focus()),t.key==="Tab")){const e=[...this.modal.querySelectorAll("button, input, textarea")].filter(o=>o.getClientRects().length&&!o.disabled),i=e[0],n=e.at(-1),s=this.root.activeElement;t.shiftKey&&s===i?(t.preventDefault(),n==null||n.focus()):!t.shiftKey&&s===n&&(t.preventDefault(),i==null||i.focus())}});a(this,"handleClick",t=>{const e=t.target instanceof Element?t.target:null,i=e==null?void 0:e.closest("[data-prompt-action]");if(!i||this.host.hidden)return;const n=i.dataset.promptAction;if(n==="close"){this.close(),this.button.focus();return}if(this.busy)return;const s=this.library.prompts.find(o=>o.id===i.dataset.promptId);n==="add"&&this.edit(),n==="cancel"&&(this.query("form").hidden=!0,this.renderList()),n==="edit"&&s&&this.edit(s),n==="delete"&&s&&this.persist({version:1,prompts:this.library.prompts.filter(o=>o.id!==s.id)}),n==="copy"&&s&&this.copy(s,i)});var i;this.button=t,(i=document.getElementById(Q))==null||i.remove(),this.host.id=Q,this.host.dataset.yadaRoot="true",this.host.hidden=!0,this.root=this.host.attachShadow({mode:"open"});const e=document.createElement("style");e.textContent=Lt,this.modal=document.createElement("section"),this.modal.className="yada-prompt-modal is-visible",this.modal.innerHTML=`
+"use strict";
+(() => {
+  // src/conversation/completeConversation.ts
+  var PAGE_NUM_TURNS = 100;
+  var MAX_PAGES = 500;
+  function unwrap(data) {
+    return data.conversation ?? data;
+  }
+  function abortError() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  function isAbortError(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
+  function isCompleteConversationMapping(raw) {
+    const data = unwrap(raw), mapping = data.mapping;
+    let next = data.current_node ?? data.current_node_id ?? "";
+    if (!mapping || !next || !mapping[next]) return false;
+    const seen = /* @__PURE__ */ new Set();
+    while (next) {
+      if (seen.has(next) || !mapping[next]) return false;
+      seen.add(next);
+      next = mapping[next].parent ?? "";
+    }
+    return true;
+  }
+  function getPaginatedConversationApiUrl(conversationId, before = "") {
+    const id = encodeURIComponent(conversationId);
+    const path = before ? `/backend-api/conversations/${id}/messages` : `/backend-api/conversations/${id}`;
+    const params = new URLSearchParams();
+    if (before) params.set("before", before);
+    params.set("include_has_versions", "true");
+    params.set("num_turns", String(PAGE_NUM_TURNS));
+    return `${path}?${params}`;
+  }
+  function getPaginatedConversationCursor(data) {
+    const page = data.page_info ?? data.pageInfo;
+    if (!page || typeof (page.has_previous_page ?? page.hasPreviousPage) !== "boolean") throw new Error("Missing pagination completeness metadata");
+    const previous = page.has_previous_page === true || page.hasPreviousPage === true;
+    const cursor = page.start_cursor ?? page.startCursor ?? "";
+    if (previous && !cursor) throw new Error("Pagination requested an older page without a cursor");
+    return previous ? cursor : "";
+  }
+  function mergePaginatedConversationMessages(older, newer) {
+    const seen = /* @__PURE__ */ new Set();
+    return [...older, ...newer].filter((message) => {
+      if (!message?.id) throw new Error("Conversation message has no stable ID");
+      if (seen.has(message.id)) return false;
+      seen.add(message.id);
+      return true;
+    });
+  }
+  function buildConversationMappingFromMessages(messages, id, current) {
+    const rootId = `paginated-root:${id}`;
+    const mapping = { [rootId]: { id: rootId, parent: "", children: [] } };
+    let parent = rootId;
+    for (const message of messages) {
+      mapping[parent].children = [message.id];
+      mapping[message.id] = { id: message.id, parent, children: [], message };
+      parent = message.id;
+    }
+    if (current && !mapping[current]) throw new Error("Active branch tip missing after pagination");
+    return { id, mapping, current_node: current || parent };
+  }
+  function isTransientTransportError(error) {
+    if (isAbortError(error)) return true;
+    if (!(error instanceof Error)) return false;
+    return /timed out/i.test(error.message) || /API failed: 429\b/.test(error.message) || /API failed: 5\d{2}\b/.test(error.message) || /Failed to fetch|NetworkError|network/i.test(error.message);
+  }
+  function shouldFallbackToLegacyConversation(error) {
+    if (isAbortError(error) || isTransientTransportError(error)) return false;
+    if (error instanceof Error && /API failed: \d+/.test(error.message)) return false;
+    return true;
+  }
+  async function wait(ms, signal) {
+    if (ms <= 0) return;
+    if (signal?.aborted) throw abortError();
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        signal?.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(abortError());
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+  async function fetchCompleteConversation(id, headers, signal, options = {}) {
+    const requestTimeoutMs = options.requestTimeoutMs ?? 1e4;
+    const rateLimitWaitMs = options.rateLimitWaitMs ?? 1e3;
+    const request = async (url) => {
+      const once = async () => {
+        const controller = new AbortController();
+        const abort = () => controller.abort();
+        signal?.addEventListener("abort", abort, { once: true });
+        if (signal?.aborted) controller.abort();
+        const timer = setTimeout(abort, requestTimeoutMs);
+        try {
+          if (signal?.aborted || controller.signal.aborted) throw abortError();
+          const response2 = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
+          if (signal?.aborted) throw abortError();
+          if (controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
+          return response2;
+        } catch (error) {
+          if (signal?.aborted) throw abortError();
+          if (controller.signal.aborted || isAbortError(error) && !signal?.aborted) {
+            throw new Error("ChatGPT conversation API timed out");
+          }
+          throw error;
+        } finally {
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", abort);
+        }
+      };
+      let response = await once();
+      if (response.status === 429) {
+        await wait(rateLimitWaitMs, signal);
+        response = await once();
+      }
+      if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+      const data = await response.json();
+      if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
+      return data;
+    };
+    const complete = (raw) => {
+      const data = unwrap(raw);
+      if (!isCompleteConversationMapping(raw)) throw new Error("Incomplete active conversation path");
+      return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
+    };
+    const base = `/backend-api/conversation/${encodeURIComponent(id)}`;
+    let lastError;
+    try {
+      const first = unwrap(await request(getPaginatedConversationApiUrl(id)));
+      if (Array.isArray(first.messages)) {
+        let messages = mergePaginatedConversationMessages([], first.messages);
+        let cursor = getPaginatedConversationCursor(first);
+        const seen = /* @__PURE__ */ new Set();
+        let count = 1;
+        while (cursor) {
+          if (signal?.aborted) throw abortError();
+          if (seen.has(cursor) || count >= MAX_PAGES) throw new Error("Conversation pagination stalled");
+          seen.add(cursor);
+          const page = unwrap(await request(getPaginatedConversationApiUrl(id, cursor)));
+          if (!Array.isArray(page.messages)) throw new Error("Conversation message page returned no messages");
+          messages = mergePaginatedConversationMessages(page.messages, messages);
+          cursor = getPaginatedConversationCursor(page);
+          count++;
+        }
+        if (!messages.length) throw new Error("Paginated conversation is empty");
+        const current = first.current_node ?? first.current_node_id ?? "";
+        const rebuilt = buildConversationMappingFromMessages(messages, id, current);
+        return { ...first, ...rebuilt, messages };
+      }
+      if (isCompleteConversationMapping(first)) return complete(first);
+      throw new Error("Paginated conversation API returned no messages");
+    } catch (error) {
+      lastError = error;
+      if (!shouldFallbackToLegacyConversation(error)) throw error;
+    }
+    try {
+      return complete(await request(`${base}?include_full_conversation=true`));
+    } catch (error) {
+      lastError = error;
+      if (!shouldFallbackToLegacyConversation(error)) throw error;
+    }
+    for (const url of [base, `${base}?offset=0&limit=100000`]) {
+      try {
+        return complete(await request(url));
+      } catch (error) {
+        lastError = error;
+        if (!shouldFallbackToLegacyConversation(error)) throw error;
+      }
+    }
+    throw lastError;
+  }
+
+  // src/platform/chatgptAdapter.ts
+  function isChatGptPage(url = window.location.href) {
+    try {
+      return new URL(url).hostname === "chatgpt.com";
+    } catch {
+      return false;
+    }
+  }
+  function getConversationIdFromUrl(url = window.location.href) {
+    try {
+      const parsed = new URL(url);
+      return parsed.pathname.match(/^\/c\/([a-z0-9-]+)/i)?.[1] ?? parsed.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i)?.[1] ?? document.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
+    } catch {
+      return url.match(/\/c\/([a-z0-9-]+)/i)?.[1] ?? document.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
+    }
+  }
+  function isChatGptConversationPage(url = window.location.href) {
+    return isChatGptPage(url) && getConversationIdFromUrl(url) !== null;
+  }
+
+  // src/conversation/fetchConversation.ts
+  var sessionTokenPromise = null;
+  async function fetchCurrentConversation(conversationId = getConversationIdFromUrl(), signal) {
+    if (!conversationId) return null;
+    return fetchConversation(conversationId, signal);
+  }
+  function abortError2() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  var ChatGPTApiTimeoutError = class extends Error {
+    constructor() {
+      super("ChatGPT API timed out");
+      this.name = "ChatGPTApiTimeoutError";
+    }
+  };
+  async function chatgptApi(path, init = {}, options = {}) {
+    const headers = new Headers(init.headers);
+    headers.set("Accept", headers.get("Accept") ?? "application/json");
+    const accessToken = await getAccessToken();
+    if (accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+      headers.set("X-Authorization", `Bearer ${accessToken}`);
+    }
+    const accountId = getChatGptAccountId();
+    if (accountId && !headers.has("Chatgpt-Account-Id")) {
+      headers.set("Chatgpt-Account-Id", accountId);
+    }
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    init.signal?.addEventListener("abort", abort, { once: true });
+    if (init.signal?.aborted) controller.abort();
+    const timer = setTimeout(abort, options.timeoutMs ?? 15e3);
+    try {
+      if (controller.signal.aborted && init.signal?.aborted) throw abortError2();
+      return await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
+    } catch (error) {
+      if (init.signal?.aborted) throw abortError2();
+      if (controller.signal.aborted) throw new ChatGPTApiTimeoutError();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", abort);
+    }
+  }
+  async function fetchConversation(conversationId, signal) {
+    const headers = { Accept: "application/json" };
+    const accessToken = await getAccessToken();
+    if (accessToken) {
+      headers.Authorization = `Bearer ${accessToken}`;
+      headers["X-Authorization"] = `Bearer ${accessToken}`;
+    }
+    const accountId = getChatGptAccountId();
+    if (accountId) {
+      headers["Chatgpt-Account-Id"] = accountId;
+    }
+    return fetchCompleteConversation(conversationId, headers, signal);
+  }
+  async function getAccessToken() {
+    sessionTokenPromise ??= fetchSessionToken().then((token) => {
+      if (!token) sessionTokenPromise = null;
+      return token;
+    }, (error) => {
+      sessionTokenPromise = null;
+      throw error;
+    });
+    return sessionTokenPromise;
+  }
+  async function fetchSessionToken() {
+    try {
+      const response = await fetch("/api/auth/session", {
+        credentials: "include",
+        headers: { Accept: "application/json" }
+      });
+      if (!response.ok) return null;
+      const session = await response.json();
+      return typeof session.accessToken === "string" ? session.accessToken : null;
+    } catch {
+      return null;
+    }
+  }
+  function getChatGptAccountId() {
+    try {
+      const raw = window.localStorage.getItem("_account");
+      if (!raw) return null;
+      if (/^account-[a-z0-9_-]+$/i.test(raw)) return raw;
+      const parsed = JSON.parse(raw);
+      return findAccountId(parsed);
+    } catch {
+      return null;
+    }
+  }
+  function findAccountId(value) {
+    if (!value || typeof value !== "object") return null;
+    const record2 = value;
+    for (const key of ["accountId", "account_id", "currentAccountId", "current_account_id", "id"]) {
+      const candidate = record2[key];
+      if (typeof candidate === "string" && /^account-[a-z0-9_-]+$/i.test(candidate)) {
+        return candidate;
+      }
+    }
+    for (const candidate of Object.values(record2)) {
+      const nested = findAccountId(candidate);
+      if (nested) return nested;
+    }
+    return null;
+  }
+
+  // src/conversation/composerGuard.ts
+  var DIRECT_COMPOSER_SELECTOR = [
+    "textarea",
+    "input",
+    "form",
+    "#prompt-textarea",
+    '[id*="prompt-textarea" i]',
+    '[data-testid*="composer" i]',
+    '[data-testid*="prompt-textarea" i]',
+    '[data-testid*="send-button" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    '[class*="composer" i]',
+    '[class*="prompt-textarea" i]'
+  ].join(", ");
+  var COMPOSER_HINT_SELECTOR = [
+    "textarea",
+    "input",
+    "form",
+    "#prompt-textarea",
+    '[id*="prompt-textarea" i]',
+    '[data-testid*="composer" i]',
+    '[data-testid*="prompt-textarea" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    '[class*="composer" i]',
+    '[class*="prompt-textarea" i]',
+    ".ProseMirror"
+  ].join(", ");
+  var DRAFT_CONTROL_SELECTOR = [
+    "textarea",
+    "input",
+    "#prompt-textarea",
+    '[id*="prompt-textarea" i]',
+    '[data-testid*="prompt-textarea" i]',
+    '[role="textbox"]',
+    '[contenteditable="true"]',
+    ".ProseMirror"
+  ].join(", ");
+
+  // src/conversation/attachmentSummary.ts
+  var FILE_EXTENSION_LABELS = [
+    [/\.pdf$/i, "PDF 文件"],
+    [/\.(?:md|markdown)$/i, "Markdown 文件"],
+    [/\.csv$/i, "CSV 文件"],
+    [/\.txt$/i, "文本文件"],
+    [/\.json$/i, "JSON 文件"],
+    [/\.(?:xlsx|xls)$/i, "Excel 文件"],
+    [/\.(?:docx|doc)$/i, "Word 文件"],
+    [/\.(?:zip|rar|7z)$/i, "压缩文件"]
+  ];
+  var IMAGE_EXTENSION_PATTERN = /\.(?:png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i;
+  function summarizeAttachments(attachments) {
+    return attachments.map(formatAttachment).filter(Boolean).join(" ");
+  }
+  function combineTextAndAttachments(text, attachments) {
+    const cleanText = normalizeBlockText(text);
+    const summary = summarizeAttachments(attachments);
+    if (cleanText && summary) return `${summary}
+${cleanText}`;
+    if (cleanText) return cleanText;
+    if (summary) return summary;
+    return "";
+  }
+  function noTextPlaceholder() {
+    return "[无文字消息]";
+  }
+  function extractApiAttachments(message) {
+    const attachments = [];
+    const content = readRecord(message.content);
+    const metadata = readRecord(message.metadata);
+    if (Array.isArray(content?.parts)) {
+      for (const part of content.parts) {
+        collectAttachmentFromPart(part, attachments);
+      }
+    }
+    const contentHasImage = attachments.some((attachment) => attachment.kind === "image");
+    for (const key of ["attachments", "files", "uploaded_files"]) {
+      const value = metadata?.[key] ?? message[key];
+      if (Array.isArray(value)) {
+        for (const item of value) {
+          const collected = [];
+          collectAttachmentFromPart(item, collected);
+          attachments.push(...collected.filter((attachment) => !(contentHasImage && attachment.kind === "image")));
+        }
+      }
+    }
+    const aggregateResult = readRecord(metadata?.aggregate_result);
+    if (Array.isArray(aggregateResult?.messages)) {
+      for (const item of aggregateResult.messages) {
+        const record2 = readRecord(item);
+        if (record2 && readString(record2, "message_type") === "image") {
+          const url = readString(record2, "image_url") ?? readString(record2, "url") ?? void 0;
+          attachments.push({ kind: "image", label: "图片", key: makeKey("image", url ?? "aggregate") });
+        }
+      }
+    }
+    return dedupeAttachments(attachments);
+  }
+  function getFileLabel(filename, mimeType) {
+    if (mimeType?.includes("pdf")) return "PDF 文件";
+    if (mimeType?.includes("markdown")) return "Markdown 文件";
+    if (mimeType?.includes("json")) return "JSON 文件";
+    if (mimeType?.includes("csv")) return "CSV 文件";
+    if (mimeType?.includes("text")) return "文本文件";
+    if (mimeType?.includes("spreadsheet") || mimeType?.includes("excel")) return "Excel 文件";
+    if (mimeType?.includes("word")) return "Word 文件";
+    if (filename) {
+      const match = FILE_EXTENSION_LABELS.find(([pattern]) => pattern.test(filename));
+      if (match) return match[1];
+    }
+    return "文件";
+  }
+  function formatAttachment(attachment) {
+    if (attachment.kind === "image") return "[图片]";
+    if (attachment.kind === "pasted") return "[粘贴内容]";
+    if (attachment.kind === "file") {
+      return attachment.filename ? `[${attachment.label}] ${attachment.filename}` : `[${attachment.label}]`;
+    }
+    return "";
+  }
+  function collectAttachmentFromPart(part, attachments) {
+    const record2 = readRecord(part);
+    if (!record2) return;
+    const contentType = (readString(record2, "content_type") ?? readString(record2, "type") ?? "").toLowerCase();
+    const filename = readString(record2, "file_name") ?? readString(record2, "filename") ?? readString(record2, "name") ?? readString(record2, "title") ?? void 0;
+    const mimeType = readString(record2, "mime_type") ?? readString(record2, "mimetype") ?? readString(record2, "mime") ?? void 0;
+    const assetPointer = readString(record2, "asset_pointer") ?? readString(record2, "image_asset_pointer") ?? readString(record2, "url") ?? readString(record2, "href") ?? void 0;
+    const key = makeKey("api", assetPointer ?? filename ?? mimeType ?? contentType);
+    if (isImageContent(contentType, filename, mimeType, assetPointer)) {
+      attachments.push({ kind: "image", label: "图片", key });
+      return;
+    }
+    if (contentType.includes("paste") || contentType.includes("pasted") || record2.pasted === true) {
+      attachments.push({ kind: "pasted", label: "粘贴内容", key: key ?? "pasted" });
+      return;
+    }
+    if (filename || contentType.includes("file") || mimeType) {
+      attachments.push({ kind: "file", label: getFileLabel(filename, mimeType), filename, mimeType, key });
+      return;
+    }
+  }
+  function dedupeAttachments(attachments) {
+    const seen = /* @__PURE__ */ new Set();
+    const result = [];
+    let anonymousImageIndex = 0;
+    for (const attachment of attachments) {
+      const key = getDedupeKey(attachment, anonymousImageIndex);
+      if (attachment.kind === "image" && !attachment.key) anonymousImageIndex += 1;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push({
+        kind: attachment.kind,
+        label: attachment.label,
+        filename: attachment.filename,
+        mimeType: attachment.mimeType
+      });
+    }
+    return result;
+  }
+  function normalizeBlockText(value) {
+    return value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function readRecord(value) {
+    return value && typeof value === "object" ? value : null;
+  }
+  function readString(record2, key) {
+    const value = record2[key];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  function isImageContent(contentType, filename, mimeType, assetPointer) {
+    return contentType.includes("image") || mimeType?.toLowerCase().startsWith("image/") === true || isImageFilename(filename) || assetPointer?.startsWith("sediment://") === true || assetPointer?.startsWith("data:image/") === true;
+  }
+  function isImageFilename(filename) {
+    return Boolean(filename && IMAGE_EXTENSION_PATTERN.test(filename));
+  }
+  function getDedupeKey(attachment, anonymousImageIndex) {
+    if (attachment.key) return `${attachment.kind}:${attachment.key}`;
+    if (attachment.kind === "image") return `image:${attachment.filename ?? `anonymous-${anonymousImageIndex}`}`;
+    if (attachment.kind === "pasted") return "pasted";
+    return `file:${attachment.filename ?? ""}:${attachment.mimeType ?? ""}:${attachment.label}`;
+  }
+  function makeKey(prefix, value) {
+    const normalized = value.replace(/\s+/g, " ").trim().toLowerCase();
+    return normalized ? `${prefix}:${normalized}` : void 0;
+  }
+
+  // src/conversation/normalizeConversation.ts
+  function normalizeConversation(conversation) {
+    const nodes = getCurrentBranchNodes(conversation);
+    const turns = [];
+    let pendingUser = null;
+    for (const node of nodes) {
+      const message = node.message;
+      if (!message || shouldSkipMessage(message)) continue;
+      const role = readRole(message);
+      if (role !== "user" && role !== "assistant") continue;
+      const payload = extractMessagePayload(message);
+      if (!payload.markdown) continue;
+      if (role === "user") {
+        if (pendingUser) {
+          turns.push(makeTurn(turns.length, pendingUser, null));
+        }
+        pendingUser = payload;
+        continue;
+      }
+      if (!pendingUser) continue;
+      turns.push(makeTurn(turns.length, pendingUser, payload));
+      pendingUser = null;
+    }
+    if (pendingUser) {
+      turns.push(makeTurn(turns.length, pendingUser, null));
+    }
+    return turns;
+  }
+  function getCurrentBranchNodes(conversation) {
+    const mapping = conversation.mapping ?? {};
+    const startNodeId = conversation.current_node ?? Object.values(mapping).find((node) => !node.children || node.children.length === 0)?.id;
+    const result = [];
+    const seen = /* @__PURE__ */ new Set();
+    let currentNodeId = startNodeId;
+    while (currentNodeId && !seen.has(currentNodeId)) {
+      seen.add(currentNodeId);
+      const node = mapping[currentNodeId];
+      if (!node) break;
+      if (node.parent === void 0 && !node.message) break;
+      result.unshift(node);
+      currentNodeId = node.parent;
+    }
+    return result;
+  }
+  function makeTurn(index2, user, assistant) {
+    return {
+      id: user.messageId ?? assistant?.messageId ?? `api-turn-${index2 + 1}`,
+      index: index2,
+      globalIndex: index2,
+      displayNumber: index2 + 1,
+      renderedLocalIndex: null,
+      userMessageId: user.messageId,
+      assistantMessageId: assistant?.messageId,
+      userCreatedAt: user.createdAt,
+      assistantCreatedAt: assistant?.createdAt,
+      userMarkdown: user.markdown,
+      assistantMarkdown: assistant?.markdown ?? "",
+      userPreview: user.preview,
+      assistantPreview: assistant?.preview ?? "",
+      attachments: [...user.attachments, ...assistant?.attachments ?? []]
+    };
+  }
+  function shouldSkipMessage(message) {
+    if (!message.content) return true;
+    const role = readRole(message);
+    if (role === "system" || role === "tool") return true;
+    const recipient = message.recipient;
+    if (recipient && recipient !== "all") return true;
+    const channel = message.channel;
+    if (channel && channel !== "final") return true;
+    const metadata = message.metadata ?? {};
+    if (metadata.is_visually_hidden_from_conversation === true || metadata.is_hidden === true || metadata.hidden === true) {
+      return true;
+    }
+    const contentType = readString2(message.content, "content_type");
+    return contentType === "thoughts" || contentType === "reasoning_recap" || contentType === "model_editable_context" || contentType === "user_editable_context";
+  }
+  function extractMessagePayload(message) {
+    const attachments = extractApiAttachments(message);
+    const markdown = combineTextAndAttachments(extractApiMarkdown(message), attachments) || noTextPlaceholder();
+    return {
+      messageId: message.id,
+      createdAt: message.create_time,
+      markdown,
+      preview: makePreview(markdown),
+      attachments
+    };
+  }
+  function extractApiMarkdown(message) {
+    const content = message.content;
+    if (!content) return "";
+    const contentType = readString2(content, "content_type");
+    if (contentType === "text") {
+      return normalizeMarkdown(joinStringParts(content.parts));
+    }
+    if (contentType === "multimodal_text") {
+      return normalizeMarkdown(extractMultimodalText(content.parts));
+    }
+    if (contentType === "code") {
+      const language = readString2(content, "language") ?? "";
+      const text = readString2(content, "text") ?? "";
+      return text ? `\`\`\`${language}
+${text}
+\`\`\`` : "";
+    }
+    if (contentType === "execution_output") {
+      const text = readString2(content, "text") ?? "";
+      return text ? `Result:
+\`\`\`
+${text}
+\`\`\`` : "";
+    }
+    if (contentType === "tether_quote") {
+      const title = readString2(content, "title") ?? "";
+      const text = readString2(content, "text") ?? "";
+      return normalizeMarkdown(`> ${title || text}`);
+    }
+    if (contentType === "tether_browsing_display") {
+      const result = readString2(content, "result") ?? readString2(content, "summary") ?? "";
+      return normalizeMarkdown(result);
+    }
+    return "";
+  }
+  function extractMultimodalText(parts) {
+    if (!Array.isArray(parts)) return "";
+    return parts.map((part) => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object") return "";
+      const record2 = part;
+      const contentType = readString2(record2, "content_type") ?? readString2(record2, "type") ?? "";
+      if (contentType.includes("image") || contentType.includes("file")) return "";
+      return readString2(record2, "text") ?? readString2(record2, "content") ?? readString2(record2, "markdown") ?? "";
+    }).filter(Boolean).join("\n\n");
+  }
+  function joinStringParts(parts) {
+    if (!Array.isArray(parts)) return "";
+    return parts.map((part) => typeof part === "string" ? part : "").filter(Boolean).join("\n\n");
+  }
+  function readRole(message) {
+    return message.author?.role;
+  }
+  function readString2(record2, key) {
+    const value = record2[key];
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  function normalizeMarkdown(value) {
+    return value.replace(/\u00a0/g, " ").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+  }
+  function makePreview(markdown) {
+    const plain = markdown.replace(/```[\s\S]*?```/g, "[代码块]").replace(/[#*_>`~-]/g, "").replace(/[ \t]+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    return plain.length > 180 ? `${plain.slice(0, 179)}…` : plain;
+  }
+
+  // src/quota/vibebar/json.ts
+  var VALID_MODEL = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+  function asObject(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("ChatGPT Chat response exceeds the read bound or is not an object.");
+    }
+    return value;
+  }
+  function parseDate(value) {
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
+      return Math.round(value < 1e12 ? value * 1e3 : value);
+    }
+    if (typeof value === "string") {
+      const parsed = Date.parse(value);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+    return null;
+  }
+  function validModel(value) {
+    return VALID_MODEL.test(value);
+  }
+
+  // src/quota/vibebar/modelLimits.ts
+  function modelLimits(data, now) {
+    if (!data || typeof data !== "object") return [];
+    const rows = data.model_limits;
+    if (!Array.isArray(rows)) return [];
+    const limits = [];
+    for (const row of rows) {
+      if (!row || typeof row !== "object") continue;
+      const record2 = row;
+      const model = typeof record2.model_slug === "string" ? record2.model_slug : null;
+      if (!model || !validModel(model)) continue;
+      const reset = parseDate(record2.resets_after);
+      if (reset != null && reset <= now) continue;
+      const fallbackRaw = typeof record2.using_default_model_slug === "string" ? record2.using_default_model_slug : null;
+      const fallbackModel = fallbackRaw && validModel(fallbackRaw) ? fallbackRaw : null;
+      limits.push({ model, resetsAt: reset, fallbackModel });
+    }
+    return limits;
+  }
+
+  // src/quota/vibebar/conversationParser.ts
+  var HEX = "0123456789abcdef";
+  async function identity(value) {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
+    const bytes = new Uint8Array(digest);
+    let out = "chat-";
+    for (const byte of bytes) {
+      out += HEX[byte >> 4];
+      out += HEX[byte & 15];
+    }
+    return out;
+  }
+  function isWork(origin, model) {
+    const originKey = origin?.toLowerCase() ?? "";
+    const modelKey = model?.toLowerCase() ?? "";
+    return ["tpp", "flora", "codex"].includes(originKey) || modelKey.endsWith("-wm") || modelKey.includes("codex");
+  }
+  function isTemporary(value) {
+    if (!value || typeof value !== "object") return false;
+    const record2 = value;
+    return record2.is_temporary_chat === true || record2.isTemporary === true;
+  }
+  function conversationOrigin(value) {
+    if (!value || typeof value !== "object") return null;
+    const origin = value.conversation_origin;
+    return typeof origin === "string" && origin.trim() ? origin.trim() : null;
+  }
+  async function parseConversation(data, id, updatedAt, since) {
+    const root = asObject(data);
+    const conversationId = typeof root.conversation_id === "string" ? root.conversation_id : typeof root.id === "string" ? root.id : null;
+    const mapping = root.mapping;
+    if (conversationId !== id || !mapping || typeof mapping !== "object" || Array.isArray(mapping)) {
+      throw new Error("ChatGPT Chat conversation identity or mapping is missing.");
+    }
+    const origin = conversationOrigin(root);
+    const defaultModel = typeof root.default_model_slug === "string" ? root.default_model_slug : null;
+    if (isWork(origin, defaultModel)) {
+      return { updatedAt, turns: [], isWork: true, unclassifiedTurns: 0 };
+    }
+    const knownOrigin = origin == null || origin === "chat" || origin === "chatgpt";
+    const nodes = mapping;
+    const users = {};
+    for (const [key, node] of Object.entries(nodes)) {
+      const message = messageOf(node);
+      if (roleOf(message) !== "user") continue;
+      const created = parseDate(message.create_time);
+      if (created != null && created < since) continue;
+      users[key] = message;
+    }
+    const replies = {};
+    const owners = new Map(Object.keys(users).map((key) => [key, key]));
+    const orphans = /* @__PURE__ */ new Set();
+    for (const [key, node] of Object.entries(nodes)) {
+      const message = messageOf(node);
+      if (!isFinalAssistant(message)) continue;
+      let cursor = key;
+      const path = [];
+      const visited = /* @__PURE__ */ new Set();
+      let owner;
+      while (cursor && !visited.has(cursor)) {
+        visited.add(cursor);
+        const known = owners.get(cursor);
+        if (known) {
+          owner = known;
+          break;
+        }
+        if (orphans.has(cursor)) break;
+        const candidate = messageOf(nodes[cursor]);
+        if (roleOf(candidate) === "user") break;
+        path.push(cursor);
+        cursor = typeof nodes[cursor]?.parent === "string" ? nodes[cursor].parent : null;
+      }
+      if (owner) {
+        for (const nodeId of path) owners.set(nodeId, owner);
+        (replies[owner] ??= []).push(message);
+      } else {
+        for (const nodeId of path) orphans.add(nodeId);
+      }
+    }
+    const turns = /* @__PURE__ */ new Map();
+    let unknown = 0;
+    for (const [nodeID, user] of Object.entries(users)) {
+      const messageID = typeof user.id === "string" ? user.id : "";
+      const created = parseDate(user.create_time);
+      const reply = newest(replies[nodeID] ?? []);
+      const metadata = reply && typeof reply.metadata === "object" && reply.metadata ? reply.metadata : null;
+      const model = typeof metadata?.model_slug === "string" ? metadata.model_slug : null;
+      if (!knownOrigin || !messageID || created == null || !reply || !model || !validModel(model)) {
+        unknown += 1;
+        continue;
+      }
+      if (isWork(origin, model)) continue;
+      const key = await identity(`${id}:${messageID}`);
+      turns.set(key, { id: key, createdAt: created, model });
+    }
+    return { updatedAt, turns: [...turns.values()], isWork: false, unclassifiedTurns: unknown };
+  }
+  function messageOf(node) {
+    if (!node || typeof node.message !== "object" || !node.message) return {};
+    return node.message;
+  }
+  function roleOf(message) {
+    const author = message.author;
+    if (!author || typeof author !== "object") return null;
+    const role = author.role;
+    return typeof role === "string" ? role : null;
+  }
+  function isFinalAssistant(message) {
+    if (roleOf(message) !== "assistant") return false;
+    if (message.recipient !== "all") return false;
+    if (message.status !== "finished_successfully") return false;
+    if (!(message.channel == null || message.channel === "final")) return false;
+    const content = message.content;
+    const contentType = content && typeof content === "object" ? content.content_type : null;
+    return contentType === "text" || contentType === "multimodal_text";
+  }
+  function newest(messages) {
+    if (!messages.length) return null;
+    return messages.reduce((best, current) => {
+      const a = parseDate(best.create_time) ?? 0;
+      const b = parseDate(current.create_time) ?? 0;
+      return b > a ? current : best;
+    });
+  }
+
+  // src/quota/vibebar/historyReader.ts
+  var HISTORY_WINDOW_SECONDS = 7 * 86400;
+  var HISTORY_PAGE_SIZE = 50;
+  var HISTORY_MAX_PAGES = 4;
+  var HISTORY_DETAIL_BUDGET = 24;
+  var HISTORY_DEADLINE_MS = 25e3;
+  var HISTORY_CACHE_KEY = "chatgpt-yada:quota-history:v2";
+  var RetryableHistoryTransportError = class extends Error {
+  };
+  var UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  function createChromeHistoryStore() {
+    return {
+      async load(identity2) {
+        const data = await chrome.storage.local.get(HISTORY_CACHE_KEY);
+        const all = data[HISTORY_CACHE_KEY] ?? {};
+        return all[identity2] ?? { conversations: {} };
+      },
+      async save(cache, identity2) {
+        const data = await chrome.storage.local.get(HISTORY_CACHE_KEY);
+        const all = data[HISTORY_CACHE_KEY] ?? {};
+        all[identity2] = cache;
+        await chrome.storage.local.set({ [HISTORY_CACHE_KEY]: all });
+      }
+    };
+  }
+  async function readChatHistory(input) {
+    const windowSeconds = input.windowSeconds ?? HISTORY_WINDOW_SECONDS;
+    const pageSize = input.pageSize ?? HISTORY_PAGE_SIZE;
+    const maxPages = input.maxPages ?? HISTORY_MAX_PAGES;
+    const detailBudget = input.detailBudget ?? HISTORY_DETAIL_BUDGET;
+    const deadlineMs = input.deadlineMs ?? HISTORY_DEADLINE_MS;
+    const clock = input.clock ?? Date.now;
+    const cutoff = input.now - windowSeconds * 1e3;
+    const deadline = input.now + deadlineMs;
+    let cache = await input.store.load(input.identity);
+    const keepAfter = input.now - 2 * windowSeconds * 1e3;
+    cache = {
+      conversations: Object.fromEntries(
+        Object.entries(cache.conversations).filter(([, value]) => value.updatedAt >= keepAfter)
+      )
+    };
+    const seen = /* @__PURE__ */ new Set();
+    let streamsFinished = 0;
+    let failures = 0;
+    let retryableFailures = 0;
+    let permanentFailures = 0;
+    let work = 0;
+    let unknown = 0;
+    let fetched = 0;
+    let fetchedSuccessfully = 0;
+    let read = 0;
+    let cancelled = false;
+    let hitDeadline = false;
+    let hitDetailBudget = false;
+    const turns = [];
+    const aborted = () => Boolean(input.signal?.aborted);
+    const recordFailure = (error) => {
+      failures += 1;
+      if (error instanceof RetryableHistoryTransportError) retryableFailures += 1;
+      else permanentFailures += 1;
+    };
+    try {
+      for (const archived of [false, true]) {
+        let offset = 0;
+        let reachedEnd = false;
+        for (let page = 0; page < maxPages; page++) {
+          if (aborted()) throw abortError3();
+          if (clock() >= deadline) {
+            hitDeadline = true;
+            break;
+          }
+          const path = `/backend-api/conversations?offset=${offset}&limit=${pageSize}&order=updated&is_archived=${archived}`;
+          const data = await input.transport.request(path, input.signal);
+          const root = asObject(data);
+          const items = Array.isArray(root.items) ? root.items : null;
+          if (!items) throw new Error("ChatGPT Chat history list has no items.");
+          const before = seen.size;
+          for (const item of items) {
+            const id = typeof item.id === "string" ? item.id : "";
+            if (!id || seen.has(id)) continue;
+            seen.add(id);
+            const updated = parseDate(item.update_time);
+            if (updated != null && updated < cutoff) {
+              reachedEnd = true;
+              continue;
+            }
+            if (isWork(typeof item.conversation_origin === "string" ? item.conversation_origin : null, null)) {
+              work += 1;
+              continue;
+            }
+            if (item.is_temporary_chat === true) continue;
+            if (!UUID.test(id) || updated == null) {
+              failures += 1;
+              permanentFailures += 1;
+              continue;
+            }
+            const key = await identity(id);
+            let parsed = cache.conversations[key];
+            if (parsed?.updatedAt !== updated) {
+              if (fetched < detailBudget && clock() < deadline) {
+                fetched += 1;
+                try {
+                  const detail = await (input.fetchDetail ? input.fetchDetail(id, input.signal) : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
+                  parsed = await parseConversation(detail, id, updated, cutoff);
+                  cache.conversations[key] = parsed;
+                  fetchedSuccessfully += 1;
+                } catch (error) {
+                  if (isAbortError2(error)) throw error;
+                  recordFailure(error);
+                }
+              } else {
+                if (fetched >= detailBudget) hitDetailBudget = true;
+                if (clock() >= deadline) hitDeadline = true;
+                failures += 1;
+              }
+            }
+            if (parsed) {
+              read += 1;
+              if (parsed.isWork) work += 1;
+              unknown += parsed.unclassifiedTurns;
+              turns.push(...parsed.turns);
+            }
+          }
+          offset += items.length;
+          if (!items.length || items.length < pageSize) reachedEnd = true;
+          if (reachedEnd) break;
+          if (seen.size === before) {
+            failures += 1;
+            permanentFailures += 1;
+            break;
+          }
+        }
+        if (reachedEnd) streamsFinished += 1;
+      }
+    } catch (error) {
+      if (isAbortError2(error)) cancelled = true;
+      else recordFailure(error);
+    }
+    if (!cancelled) await input.store.save(cache, input.identity);
+    const recent = turns.filter((turn) => turn.createdAt >= cutoff && turn.createdAt <= input.now);
+    const complete = streamsFinished === 2 && failures === 0 && !cancelled && !hitDetailBudget && !hitDeadline;
+    return {
+      turns: recent,
+      summary: {
+        queriedAt: input.now,
+        observedFrom: cutoff,
+        complete,
+        conversationsRead: read,
+        conversationsFetched: fetchedSuccessfully,
+        excludedWorkConversations: work,
+        unclassifiedTurns: unknown,
+        failedConversations: failures,
+        retryableFailures,
+        permanentFailures,
+        cancelled,
+        hitDetailBudget,
+        hitDeadline
+      }
+    };
+  }
+  function abortError3() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  function isAbortError2(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
+
+  // src/conversation/readConversation.ts
+  function abortError4() {
+    return new DOMException("Aborted", "AbortError");
+  }
+  function isAbortError3(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
+  async function readConversation(conversationId, signal) {
+    if (signal?.aborted) throw abortError4();
+    if (!conversationId) throw new Error("No active ChatGPT conversation");
+    const conversation = await fetchCurrentConversation(conversationId, signal);
+    if (signal?.aborted) throw abortError4();
+    if (!conversation) throw new Error("ChatGPT conversation was not returned");
+    const now = Date.now();
+    const parsed = await parseConversation(
+      conversation,
+      conversation.id ?? conversation.conversation_id ?? conversationId,
+      now,
+      now - HISTORY_WINDOW_SECONDS * 1e3
+    );
+    return {
+      conversationId: conversation.id ?? conversation.conversation_id ?? conversationId,
+      revision: 0,
+      capturedAt: now,
+      activeTurns: normalizeConversation(conversation),
+      quotaTurns: parsed.turns,
+      quotaIsWork: parsed.isWork,
+      quotaUnclassifiedTurns: parsed.unclassifiedTurns,
+      quotaOrigin: conversationOrigin(conversation),
+      quotaTemporary: isTemporary(conversation),
+      title: conversation.title
+    };
+  }
+
+  // src/core/conversationSync.ts
+  var ConversationSync = class {
+    activeConversationId = null;
+    generation = 0;
+    runningPromise = null;
+    dirty = false;
+    abortController = null;
+    latestSnapshot = null;
+    lastError = null;
+    listeners = /* @__PURE__ */ new Set();
+    observer = null;
+    lastStreamingState = false;
+    seenAssistantMessageIds = /* @__PURE__ */ new Set();
+    disposed = false;
+    published = 0;
+    read;
+    constructor(options = {}) {
+      this.read = options.readConversation ?? readConversation;
+    }
+    subscribe(listener) {
+      this.listeners.add(listener);
+      void listener(this.latestSnapshot);
+      return () => this.listeners.delete(listener);
+    }
+    requestSync(_reason) {
+      if (this.disposed) return Promise.reject(abortError4());
+      this.dirty = true;
+      if (this.runningPromise) return this.runningPromise;
+      this.runningPromise = Promise.resolve().then(() => this.runLoop());
+      return this.runningPromise;
+    }
+    setActiveConversation(conversationId) {
+      if (this.activeConversationId === conversationId) return;
+      this.generation += 1;
+      this.abortController?.abort();
+      this.abortController = null;
+      this.activeConversationId = conversationId;
+      this.seenAssistantMessageIds.clear();
+      this.lastStreamingState = false;
+      this.latestSnapshot = null;
+      this.lastError = null;
+      if (!conversationId) {
+        this.dirty = false;
+        void this.publish(null);
+        return;
+      }
+      this.dirty = true;
+      void this.requestSync("route");
+    }
+    getSnapshot() {
+      return this.latestSnapshot;
+    }
+    getLastError() {
+      return this.lastError;
+    }
+    getActiveConversationId() {
+      return this.activeConversationId;
+    }
+    mountPageObserver(root = document.documentElement) {
+      if (this.observer || typeof MutationObserver === "undefined") return;
+      this.observer = new MutationObserver(() => this.inspectPageSignals());
+      this.observer.observe(root, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: ["data-is-streaming", "data-message-id", "data-message-author-role"]
+      });
+    }
+    dispose() {
+      this.disposed = true;
+      this.generation += 1;
+      this.abortController?.abort();
+      this.abortController = null;
+      this.dirty = false;
+      this.observer?.disconnect();
+      this.observer = null;
+      this.listeners.clear();
+      this.latestSnapshot = null;
+      this.runningPromise = null;
+      this.seenAssistantMessageIds.clear();
+    }
+    async runLoop() {
+      try {
+        while (this.dirty && !this.disposed) {
+          this.dirty = false;
+          const conversationId = this.activeConversationId;
+          const generation = this.generation;
+          if (!conversationId) {
+            await this.publish(null);
+            continue;
+          }
+          this.abortController?.abort();
+          this.abortController = new AbortController();
+          const signal = this.abortController.signal;
+          try {
+            const snapshot = await this.read(conversationId, signal);
+            if (this.disposed || signal.aborted) throw abortError4();
+            if (this.activeConversationId === conversationId && this.generation === generation) {
+              snapshot.revision = ++this.published;
+              this.lastError = null;
+              await this.publish(snapshot);
+            }
+          } catch (error) {
+            if (this.disposed) return;
+            if (isAbortError3(error) || this.generation !== generation) continue;
+            if (this.activeConversationId === conversationId) {
+              this.lastError = error instanceof Error ? error : new Error(String(error));
+              if (!this.latestSnapshot) await this.publish(null);
+            }
+          }
+        }
+      } finally {
+        this.runningPromise = null;
+        if (this.dirty && !this.disposed) {
+          await this.requestSync("drain");
+        }
+      }
+    }
+    async publish(snapshot) {
+      this.latestSnapshot = snapshot;
+      if (snapshot) {
+        for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+        for (const turn of snapshot.activeTurns) {
+          if (turn.assistantMessageId) this.seenAssistantMessageIds.add(turn.assistantMessageId);
+        }
+      }
+      await Promise.all([...this.listeners].map((listener) => listener(snapshot)));
+    }
+    inspectPageSignals() {
+      if (this.disposed || !this.activeConversationId) return;
+      const streaming = isAssistantStreaming();
+      const wasStreaming = this.lastStreamingState;
+      this.lastStreamingState = streaming;
+      if (streaming) return;
+      if (wasStreaming) void this.requestSync("streaming-end");
+      for (const id of collectStableAssistantMessageIds()) {
+        if (this.seenAssistantMessageIds.has(id)) continue;
+        this.seenAssistantMessageIds.add(id);
+        void this.requestSync("new-assistant");
+      }
+    }
+  };
+  function isAssistantStreaming(root = document) {
+    return Boolean(
+      root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')
+    );
+  }
+  function collectStableAssistantMessageIds(root = document) {
+    const ids = [];
+    for (const node of root.querySelectorAll('[data-message-author-role="assistant"][data-message-id]')) {
+      if (node.getAttribute("data-is-streaming") === "true" || node.classList.contains("result-streaming")) continue;
+      const id = node.dataset.messageId;
+      if (id) ids.push(id);
+    }
+    return ids;
+  }
+
+  // src/nativeNavigator/dom.ts
+  var MESSAGE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
+  var OFFICIAL_ROOT_SELECTOR = [
+    'main [class$="_convSearchResultHighlightRoot"]',
+    'main [class*="_convSearchResultHighlightRoot "]'
+  ].join(",");
+  var OFFICIAL_CONTAINER_TOKENS = ["fixed", "inset-e-4", "top-1/2", "z-20", "-translate-y-1/2"];
+  var SENTINEL_SELECTOR = '[data-testid="conversation-pagination-sentinel"]';
+  function conversationScroller() {
+    const surface = document.querySelector("main, [role=main]") ?? document;
+    const message = surface.querySelector(MESSAGE_SELECTOR);
+    if (!message) return null;
+    let ancestor = message.parentElement;
+    while (ancestor) {
+      const style = getComputedStyle(ancestor);
+      if (ancestor.clientHeight > 100 && ["auto", "scroll", "overlay"].some((value) => style.overflowY.includes(value))) {
+        return ancestor;
+      }
+      ancestor = ancestor.parentElement;
+    }
+    return document.scrollingElement;
+  }
+  function viewportTop(scroller) {
+    if (scroller === document.scrollingElement) return 0;
+    const rectangle = scroller.getBoundingClientRect();
+    return rectangle.top + scroller.clientTop;
+  }
+  function readNativePrompts(root = document) {
+    const candidates = [...root.querySelectorAll(OFFICIAL_ROOT_SELECTOR)];
+    if (candidates.length !== 1) return { found: 0, visible: 0 };
+    const container = [...candidates[0].children].find(
+      (child) => child instanceof HTMLElement && OFFICIAL_CONTAINER_TOKENS.every((token) => child.classList.contains(token)) && !child.closest("[data-yada-root]")
+    );
+    if (!container) return { found: 0, visible: 0 };
+    const buttons = [...container.querySelectorAll("button")];
+    const indexes = buttons.map(readPromptIndex);
+    if (!indexes.length || indexes.some((index2) => index2 === null)) return { found: 0, visible: 0 };
+    const numeric = indexes;
+    if (new Set(numeric).size !== numeric.length) return { found: 0, visible: 0 };
+    const first = Math.min(...numeric);
+    const ordered = [...numeric].map((index2) => index2 - (first === 1 ? 1 : 0)).sort((left, right) => left - right);
+    if (!ordered.every((index2, position) => index2 === position)) return { found: 0, visible: 0 };
+    return { found: buttons.length, visible: buttons.filter(elementVisible).length };
+  }
+  function saveReadingPosition() {
+    const scroller = conversationScroller();
+    if (!scroller) return null;
+    const top = viewportTop(scroller);
+    const bottom = Math.min(innerHeight, top + scroller.clientHeight);
+    const onScreen = [...document.querySelectorAll(MESSAGE_SELECTOR)].filter((message) => {
+      const rectangle = message.getBoundingClientRect();
+      return rectangle.bottom > top + 8 && rectangle.top < bottom - 8;
+    });
+    const anchor = onScreen.find((message) => message.getBoundingClientRect().top >= top) ?? onScreen[0];
+    if (!anchor) return null;
+    return {
+      identity: stableMessageIdentity(anchor),
+      element: anchor,
+      offset: anchor.getBoundingClientRect().top - top,
+      scroller
+    };
+  }
+  function readingPositionDrift(position) {
+    if (!position.scroller.isConnected || conversationScroller() !== position.scroller) return null;
+    let anchor = position.element.isConnected ? position.element : null;
+    if (position.identity) anchor = findStableMessage(position.identity);
+    if (!anchor) return null;
+    return anchor.getBoundingClientRect().top - viewportTop(position.scroller) - position.offset;
+  }
+  function stableLayoutAvailable() {
+    const scroller = conversationScroller();
+    if (!scroller || getComputedStyle(scroller).overflowAnchor === "none") return false;
+    return !document.querySelector(
+      '[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming, button[data-testid="stop-button"], [data-stream-active="true"]'
+    );
+  }
+  function safeDesktopLayout() {
+    return document.visibilityState === "visible" && innerWidth >= 1024 && matchMedia("(hover: hover)").matches && stableLayoutAvailable();
+  }
+  function exposePaginationSentinel(scroller) {
+    const matches2 = [...scroller.querySelectorAll(SENTINEL_SELECTOR)];
+    if (matches2.length !== 1) return null;
+    const element = matches2[0];
+    const rectangle = element.getBoundingClientRect();
+    if (!element.isConnected || element.getClientRects().length === 0 || rectangle.height > 100) return null;
+    const ownedStyles = /* @__PURE__ */ new Map([
+      ["position", "sticky"],
+      ["top", "80px"],
+      ["opacity", "0"],
+      ["pointer-events", "none"]
+    ]);
+    const previous = /* @__PURE__ */ new Map();
+    for (const [property, value] of ownedStyles) {
+      previous.set(property, {
+        value: element.style.getPropertyValue(property),
+        priority: element.style.getPropertyPriority(property)
+      });
+      element.style.setProperty(property, value, "important");
+    }
+    let active = true;
+    return {
+      element,
+      release() {
+        if (!active) return;
+        active = false;
+        for (const [property, value] of ownedStyles) {
+          if (element.style.getPropertyValue(property) !== value || element.style.getPropertyPriority(property) !== "important") continue;
+          const original = previous.get(property);
+          if (original.value) element.style.setProperty(property, original.value, original.priority);
+          else element.style.removeProperty(property);
+        }
+      }
+    };
+  }
+  function readPromptIndex(button) {
+    const explicit = button.dataset.tocItemIndex;
+    if (explicit && /^\d+$/.test(explicit)) return Number(explicit);
+    for (const name of ["aria-label", "aria-description"]) {
+      const match = /^prompt\s+(\d+)(?:\b|:)/i.exec(button.getAttribute(name) ?? "");
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+  function elementVisible(element) {
+    if (!element.isConnected || element.getClientRects().length === 0) return false;
+    const style = getComputedStyle(element);
+    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+    const rectangle = element.getBoundingClientRect();
+    return rectangle.width > 0 && rectangle.height > 0 && rectangle.right > 0 && rectangle.left < innerWidth && rectangle.bottom > 0 && rectangle.top < innerHeight;
+  }
+  function stableMessageIdentity(element) {
+    let node = element;
+    for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
+      for (const attribute of ["data-message-id", "data-turn-id", "data-turn-id-container"]) {
+        const value = node.getAttribute(attribute);
+        if (value && value.length <= 256) return { attribute, value };
+      }
+      if (node.tagName === "ARTICLE") break;
+    }
+    return null;
+  }
+  function findStableMessage(identity2) {
+    const matches2 = [...document.querySelectorAll(`[${identity2.attribute}="${CSS.escape(identity2.value)}"]`)];
+    if (matches2.length !== 1) return null;
+    return matches2[0].matches(MESSAGE_SELECTOR) ? matches2[0] : matches2[0].querySelector(MESSAGE_SELECTOR);
+  }
+
+  // src/nativeNavigator/protocol.ts
+  var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
+  var PREPARE_HEARTBEAT_MS = 4e3;
+  var PREPARE_ACK_WAIT_MS = 1e3;
+  var HISTORY_ISSUES = /* @__PURE__ */ new Set([
+    null,
+    "http-error",
+    "capture-unavailable",
+    "unlinked",
+    "stalled",
+    "limit"
+  ]);
+  function emptyHistory(conversationId, generation = 0) {
+    return {
+      conversationId,
+      generation,
+      initialVersion: 0,
+      revision: 0,
+      pending: 0,
+      pages: 0,
+      messages: 0,
+      prompts: 0,
+      boundary: "unknown",
+      cursorPresent: false,
+      boosted: false,
+      issue: null
+    };
+  }
+  function record(value) {
+    return value != null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+  function identifier(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
+  }
+  function conversationIdFromUrl(input) {
+    try {
+      const parts = new URL(input).pathname.split("/").filter(Boolean);
+      const marker = parts.indexOf("c");
+      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
+    } catch {
+      return null;
+    }
+  }
+  function isMessageDeepLink(input = location.href) {
+    try {
+      const params = new URL(input).searchParams;
+      return params.has("message") || params.has("messageId");
+    } catch {
+      return false;
+    }
+  }
+  function isNativeHistoryState(value) {
+    const candidate = record(value);
+    if (!candidate) return false;
+    if (candidate.conversationId !== null && !identifier(candidate.conversationId)) return false;
+    if (candidate.boundary !== "unknown" && candidate.boundary !== "more" && candidate.boundary !== "complete") return false;
+    if (!HISTORY_ISSUES.has(candidate.issue) || typeof candidate.cursorPresent !== "boolean") return false;
+    if (typeof candidate.boosted !== "boolean") return false;
+    for (const key of ["generation", "initialVersion", "revision", "pending", "pages", "messages", "prompts"]) {
+      const number = candidate[key];
+      if (!Number.isSafeInteger(number) || number < 0 || number > 1e6) return false;
+    }
+    return true;
+  }
+
+  // src/nativeNavigator/hydrator.ts
+  var ACTIVE_LIMIT_MS = 6e4;
+  var ADDITIONAL_PAGE_LIMIT = 20;
+  var PAGE_PROGRESS_LIMIT_MS = 12e3;
+  var NATIVE_APPEARANCE_WAIT_MS = 2500;
+  var RECOVERY_IDLE_MS = 2500;
+  var MAX_RECOVERIES = 3;
+  var DEBUG_KEY = "chatgpt-yada:native-nav-debug";
+  function officialNavigatorReadiness(native, waitedMs, waitLimitMs = NATIVE_APPEARANCE_WAIT_MS) {
+    if (native.found > 0 && native.visible > 0) return "ready-complete";
+    if (native.found > 0) return "hidden";
+    if (waitedMs < waitLimitMs) return "waiting-native";
+    return "loaded-no-native";
+  }
+  var OfficialNavigatorHydrator = class {
+    constructor(sync) {
+      this.sync = sync;
+    }
+    state = emptyHistory(conversationIdFromUrl(location.href));
+    expectedPrompts = 0;
+    context = "";
+    firstPage = 0;
+    activeMs = 0;
+    recoveries = 0;
+    peakDrift = 0;
+    completeSince = 0;
+    connected = false;
+    terminal = false;
+    phase = "waiting";
+    issue = null;
+    lastUserInput = performance.now() - RECOVERY_IDLE_MS;
+    lastOutcome = null;
+    prepareEnabled = false;
+    heartbeat = 0;
+    operation = null;
+    timer = 0;
+    mutations = null;
+    unsubscribe = null;
+    disposed = false;
+    mount() {
+      this.unsubscribe = this.sync.subscribe((snapshot) => {
+        this.expectedPrompts = snapshot?.conversationId === this.state.conversationId ? snapshot.activeTurns.length : 0;
+        this.schedule();
+      });
+      addEventListener("message", this.onMessage);
+      addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
+      addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
+      addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("resize", this.onEnvironment, { passive: true });
+      document.addEventListener("visibilitychange", this.onEnvironment);
+      this.mutations = new MutationObserver(() => this.schedule());
+      this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+      this.requestState();
+      this.schedule(600);
+    }
+    resetRoute() {
+      this.cancel("route");
+      this.state = emptyHistory(conversationIdFromUrl(location.href), this.state.generation + 1);
+      this.connected = false;
+      this.expectedPrompts = 0;
+      this.resetContext("", 0);
+      this.setPhase("waiting");
+      this.requestState();
+      this.schedule(300);
+    }
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.cancel("dispose");
+      clearTimeout(this.timer);
+      this.timer = 0;
+      this.mutations?.disconnect();
+      this.mutations = null;
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+      removeEventListener("message", this.onMessage);
+      removeEventListener("wheel", this.onUserInput, true);
+      removeEventListener("touchstart", this.onUserInput, true);
+      removeEventListener("pointerdown", this.onUserInput, true);
+      removeEventListener("keydown", this.onUserInput, true);
+      removeEventListener("resize", this.onEnvironment);
+      document.removeEventListener("visibilitychange", this.onEnvironment);
+      delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
+    }
+    onMessage = (event) => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = record(event.data);
+      if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state" || !isNativeHistoryState(message.state)) return;
+      const incoming = message.state;
+      if (incoming.conversationId !== conversationIdFromUrl(location.href)) return;
+      if (incoming.generation < this.state.generation) return;
+      if (incoming.generation === this.state.generation && incoming.revision < this.state.revision) return;
+      const incomingContext = `${incoming.conversationId ?? ""}:${incoming.generation}:${incoming.initialVersion}`;
+      if (incomingContext !== this.context) {
+        this.cancel("context");
+        this.resetContext(incomingContext, incoming.pages);
+      }
+      this.state = incoming;
+      this.connected = true;
+      this.schedule();
+    };
+    onUserInput = () => {
+      this.lastUserInput = performance.now();
+      if (this.operation) {
+        this.cancel("user");
+        this.setPhase("interrupted");
+      } else {
+        this.schedule(RECOVERY_IDLE_MS);
+      }
+    };
+    onEnvironment = () => {
+      if (document.visibilityState !== "visible") this.cancel("hidden");
+      this.schedule(document.visibilityState === "visible" ? RECOVERY_IDLE_MS : 800);
+    };
+    schedule(delayMs = 180) {
+      if (this.disposed) return;
+      clearTimeout(this.timer);
+      this.timer = window.setTimeout(() => {
+        this.timer = 0;
+        void this.evaluate();
+      }, Math.max(0, delayMs));
+    }
+    async evaluate() {
+      if (this.disposed || this.operation) return;
+      const native = readNativePrompts();
+      if (!this.connected || !this.state.conversationId || this.state.initialVersion === 0 || this.state.pending > 0) {
+        this.setPhase("waiting");
+        return;
+      }
+      if (isMessageDeepLink()) {
+        this.terminal = true;
+        this.setPhase("deep-link");
+        return;
+      }
+      if (this.state.boundary === "complete") {
+        this.finishWithNativeState(native);
+        return;
+      }
+      if (this.terminal) {
+        this.publishDiagnostics();
+        return;
+      }
+      const recoverableStalled = this.state.issue === "stalled" && this.state.boundary === "more";
+      if (!recoverableStalled && (this.state.issue || this.state.boundary === "unknown")) {
+        this.terminal = true;
+        this.setPhase("unverified", this.state.issue ?? "unverified-history");
+        return;
+      }
+      if (!safeDesktopLayout()) {
+        this.setPhase("deferred");
+        this.schedule(800);
+        return;
+      }
+      const idleFor = performance.now() - this.lastUserInput;
+      if (idleFor < RECOVERY_IDLE_MS) {
+        this.setPhase("deferred");
+        this.schedule(RECOVERY_IDLE_MS - idleFor);
+        return;
+      }
+      if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
+        this.terminal = true;
+        this.setPhase("limit", "limit");
+        return;
+      }
+      await this.launchAttempt();
+    }
+    finishWithNativeState(native) {
+      if (this.completeSince === 0) this.completeSince = performance.now();
+      const readiness = officialNavigatorReadiness(
+        native,
+        performance.now() - this.completeSince,
+        NATIVE_APPEARANCE_WAIT_MS
+      );
+      if (readiness === "waiting-native") {
+        this.setPhase("waiting-native");
+        this.schedule(NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince));
+        return;
+      }
+      this.terminal = true;
+      this.setPhase(readiness);
+    }
+    async launchAttempt() {
+      const controller = new AbortController();
+      const attemptContext = this.context;
+      const started = performance.now();
+      this.operation = controller;
+      this.setPhase("automatic-loading");
+      let outcome;
+      try {
+        this.startPrepare();
+        await this.waitForBoostedAck(controller.signal);
+        outcome = await this.hydrate(controller.signal, attemptContext);
+      } catch {
+        outcome = controller.signal.reason === "user" || controller.signal.reason === "hidden" ? "interrupted" : "changed";
+      } finally {
+        this.stopPrepare();
+        this.activeMs += Math.max(0, performance.now() - started);
+        if (this.operation === controller) this.operation = null;
+      }
+      if (this.disposed || attemptContext !== this.context) return;
+      this.lastOutcome = outcome;
+      if (outcome === "complete") {
+        this.completeSince = 0;
+        this.schedule(0);
+        return;
+      }
+      if (outcome === "interrupted") {
+        if (this.recoveries < MAX_RECOVERIES && this.activeMs < ACTIVE_LIMIT_MS) {
+          this.recoveries += 1;
+          this.setPhase("recovering");
+          this.schedule(RECOVERY_IDLE_MS);
+        } else {
+          this.terminal = true;
+          this.setPhase("recovery-limit", "recovery-limit");
+        }
+        return;
+      }
+      if (outcome === "stalled") {
+        if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
+          this.terminal = true;
+          this.setPhase("limit", "limit");
+          return;
+        }
+        this.setPhase("stalled", "stalled");
+        this.schedule(180);
+        return;
+      }
+      this.terminal = true;
+      this.setPhase(outcome, outcome);
+    }
+    async hydrate(signal, context) {
+      const position = saveReadingPosition();
+      if (!position || !stableLayoutAvailable()) return "incompatible-layout";
+      const activeDeadline = performance.now() + Math.max(0, ACTIVE_LIMIT_MS - this.activeMs);
+      let exposure = null;
+      const release = () => {
+        exposure?.release();
+        exposure = null;
+      };
+      const watch = watchReadingPosition(
+        position,
+        signal,
+        (drift) => {
+          this.peakDrift = Math.max(this.peakDrift, Math.abs(drift));
+        },
+        release
+      );
+      signal.addEventListener("abort", release, { once: true });
+      const problem = () => {
+        if (signal.aborted) throw signal.reason;
+        if (context !== this.context || this.state.conversationId !== conversationIdFromUrl(location.href)) return "changed";
+        if (watch.problem()) return watch.problem();
+        if (document.visibilityState !== "visible") return "interrupted";
+        if (this.state.issue) return this.state.issue;
+        if (this.state.boundary === "unknown") return "unverified";
+        if (performance.now() >= activeDeadline || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) return "limit";
+        return null;
+      };
+      try {
+        for (; ; ) {
+          const currentProblem = problem();
+          if (currentProblem) return currentProblem;
+          if (this.state.pending > 0) {
+            await abortableDelay(40, signal);
+            continue;
+          }
+          if (this.state.boundary === "complete") return "complete";
+          const pageAtStart = this.state.pages;
+          const pendingAtStart = this.state.pending;
+          exposure = exposePaginationSentinel(position.scroller);
+          if (!exposure) return "incompatible-layout";
+          const pageDeadline = Math.min(activeDeadline, performance.now() + PAGE_PROGRESS_LIMIT_MS);
+          let hostStarted = false;
+          while (performance.now() < pageDeadline) {
+            await abortableDelay(20, signal);
+            const waitProblem = problem();
+            if (waitProblem) return waitProblem;
+            if (this.state.pending > pendingAtStart || this.state.pages !== pageAtStart || this.state.boundary === "complete") {
+              hostStarted = true;
+              release();
+              break;
+            }
+            const rectangle = exposure.element.getBoundingClientRect();
+            const top = position.scroller === document.scrollingElement ? 0 : position.scroller.getBoundingClientRect().top + position.scroller.clientTop;
+            if (!exposure.element.isConnected || rectangle.bottom < top || rectangle.top > top + position.scroller.clientHeight) {
+              return "incompatible-layout";
+            }
+          }
+          release();
+          if (!hostStarted) return "stalled";
+          while (this.state.pending > 0 || this.state.pages === pageAtStart) {
+            const completionProblem = problem();
+            if (completionProblem) return completionProblem;
+            if (performance.now() >= pageDeadline) return "stalled";
+            await abortableDelay(40, signal);
+          }
+          await abortableDelay(240, signal);
+        }
+      } finally {
+        release();
+        watch.dispose();
+        signal.removeEventListener("abort", release);
+      }
+    }
+    cancel(reason) {
+      this.operation?.abort(reason);
+      this.stopPrepare();
+    }
+    startPrepare() {
+      this.sendPrepare(true);
+      this.clearHeartbeat();
+      this.heartbeat = window.setInterval(() => this.sendPrepare(true), PREPARE_HEARTBEAT_MS);
+    }
+    stopPrepare() {
+      this.clearHeartbeat();
+      if (!this.prepareEnabled) return;
+      this.sendPrepare(false);
+    }
+    sendPrepare(enabled) {
+      if (!this.state.conversationId) {
+        this.prepareEnabled = false;
+        return;
+      }
+      this.prepareEnabled = enabled;
+      window.postMessage({
+        channel: NATIVE_NAV_CHANNEL,
+        kind: "prepare",
+        enabled,
+        conversationId: this.state.conversationId,
+        generation: this.state.generation
+      }, location.origin);
+    }
+    clearHeartbeat() {
+      if (!this.heartbeat) return;
+      clearInterval(this.heartbeat);
+      this.heartbeat = 0;
+    }
+    async waitForBoostedAck(signal) {
+      const until = performance.now() + PREPARE_ACK_WAIT_MS;
+      while (!this.state.boosted && performance.now() < until) {
+        await abortableDelay(40, signal);
+      }
+    }
+    resetContext(context, firstPage) {
+      this.context = context;
+      this.firstPage = firstPage;
+      this.activeMs = 0;
+      this.recoveries = 0;
+      this.peakDrift = 0;
+      this.completeSince = 0;
+      this.terminal = false;
+      this.issue = null;
+      this.lastOutcome = null;
+    }
+    setPhase(phase, issue = null) {
+      this.phase = phase;
+      this.issue = issue;
+      this.publishDiagnostics();
+    }
+    publishDiagnostics() {
+      if (!debugEnabled()) {
+        delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
+        return;
+      }
+      const native = readNativePrompts();
+      globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__ = {
+        phase: this.phase,
+        conversationId: this.state.conversationId,
+        pages: this.state.pages,
+        messages: this.state.messages,
+        capturedPrompts: this.state.prompts,
+        expectedPrompts: this.expectedPrompts,
+        nativeFound: native.found,
+        nativeVisible: native.visible,
+        boundary: this.state.boundary,
+        cursorPresent: this.state.cursorPresent,
+        boosted: this.state.boosted,
+        prepareActive: this.prepareEnabled,
+        issue: this.issue ?? this.state.issue,
+        lastOutcome: this.lastOutcome,
+        recoveryCount: this.recoveries,
+        elapsedActiveMs: Math.round(this.activeMs),
+        maxObservedDriftPx: Math.round(this.peakDrift * 10) / 10
+      };
+    }
+    requestState() {
+      window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "hello" }, location.origin);
+    }
+  };
+  function watchReadingPosition(position, signal, onDrift, onUnsafe) {
+    let issue = null;
+    let missingFrames = 0;
+    let frame = 0;
+    let active = true;
+    const inspect = () => {
+      if (!active || signal.aborted) return;
+      const drift = readingPositionDrift(position);
+      if (drift === null) missingFrames += 1;
+      else {
+        missingFrames = 0;
+        onDrift(drift);
+      }
+      if (drift !== null && Math.abs(drift) > 8 || missingFrames > 3 || !stableLayoutAvailable()) {
+        issue = "layout-changed";
+        onUnsafe();
+        return;
+      }
+      frame = requestAnimationFrame(inspect);
+    };
+    frame = requestAnimationFrame(inspect);
+    return {
+      problem: () => issue,
+      dispose() {
+        active = false;
+        cancelAnimationFrame(frame);
+      }
+    };
+  }
+  function debugEnabled() {
+    try {
+      return localStorage.getItem(DEBUG_KEY) === "1";
+    } catch {
+      return false;
+    }
+  }
+  function abortableDelay(ms, signal) {
+    return new Promise((resolve, reject) => {
+      if (signal.aborted) {
+        reject(signal.reason);
+        return;
+      }
+      const timer = window.setTimeout(() => {
+        signal.removeEventListener("abort", onAbort);
+        resolve();
+      }, ms);
+      const onAbort = () => {
+        clearTimeout(timer);
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  // src/shared/timeout.ts
+  function withTimeout(promise, timeoutMs, message = "timeout") {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      return Promise.reject(new Error(message));
+    }
+    let timer;
+    return new Promise((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      Promise.resolve(promise).then(
+        (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        (error) => {
+          clearTimeout(timer);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  // src/shared/messages.ts
+  var MESSAGE_TIMEOUT_MS = 15e3;
+  var REFRESH_TIMEOUT_MS = 45e3;
+  function sendRuntimeMessage(message, timeoutMs = MESSAGE_TIMEOUT_MS) {
+    return withTimeout(Promise.resolve(chrome.runtime.sendMessage(message)), timeoutMs, "扩展消息超时");
+  }
+
+  // src/quota/vibebar/allowances.ts
+  var WEEK_SECONDS = 7 * 86400;
+  function parsePlanType(value) {
+    if (!value || typeof value !== "object") return null;
+    const raw = value.plan_type;
+    if (typeof raw !== "string") return null;
+    const plan = raw.trim().toLowerCase();
+    if (plan === "pro" || plan === "prolite") return plan;
+    return null;
+  }
+
+  // src/quota/pageClient.ts
+  async function readChatAccount(signal) {
+    let userId = null;
+    let plan = null;
+    try {
+      const session = await chatgptApi("/api/auth/session", { signal });
+      if (session.ok) {
+        const data = await session.json();
+        userId = typeof data.user?.id === "string" ? data.user.id : null;
+      }
+    } catch {
+      userId = null;
+    }
+    try {
+      const usage = await chatgptApi("/backend-api/wham/usage", { signal });
+      if (usage.ok) {
+        const data = await usage.json();
+        if (!userId) userId = typeof data.user_id === "string" ? data.user_id : typeof data.account_id === "string" ? data.account_id : null;
+        plan = parsePlanType(data);
+      }
+    } catch {
+      plan = null;
+    }
+    const accountId = getChatGptAccountId();
+    const identityKey = await identity(`${userId ?? "unknown"}:${accountId ?? "personal"}`);
+    return { userId, accountId, plan, identity: identityKey };
+  }
+  async function readModelLimits(now = Date.now(), signal) {
+    try {
+      const offsetMin = -Math.round((/* @__PURE__ */ new Date()).getTimezoneOffset());
+      const response = await chatgptApi("/backend-api/conversation/init", {
+        method: "POST",
+        signal,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          conversation_id: null,
+          gizmo_id: null,
+          requested_default_model: null,
+          system_hints: [],
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          timezone_offset_min: offsetMin
+        })
+      });
+      if (!response.ok) return [];
+      return modelLimits(await response.json(), now);
+    } catch {
+      return [];
+    }
+  }
+
+  // src/quota/tracker.ts
+  var FIRST_HISTORY_DELAY_MS = 4e3;
+  var NEXT_HISTORY_SLICE_DELAY_MS = 1500;
+  var MAX_HISTORY_PASSES = 20;
+  var MAX_TRANSIENT_RETRIES = 2;
+  var HISTORY_RECONCILE_INTERVAL_MS = 10 * 60 * 1e3;
+  var HISTORY_LIST_TIMEOUT_MS = 45e3;
+  async function requestHistoryList(path, signal) {
+    try {
+      const response = await chatgptApi(path, { signal }, { timeoutMs: HISTORY_LIST_TIMEOUT_MS });
+      if (response.status === 401 || response.status === 403) {
+        throw Object.assign(new Error("login"), { name: "AbortError" });
+      }
+      if ([408, 500, 502, 503, 504].includes(response.status)) {
+        throw new RetryableHistoryTransportError(`history ${response.status}`);
+      }
+      if (!response.ok) throw new Error(`history ${response.status}`);
+      return await response.json();
+    } catch (error) {
+      if (!signal?.aborted && (error instanceof ChatGPTApiTimeoutError || error instanceof TypeError)) {
+        throw new RetryableHistoryTransportError("History list transport interrupted");
+      }
+      throw error;
+    }
+  }
+  async function requestHistoryDetail(id, signal) {
+    try {
+      return await fetchConversation(id, signal);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (!signal?.aborted && (error instanceof TypeError || error instanceof ChatGPTApiTimeoutError || /API timed out|API failed: (408|500|502|503|504)\b/.test(message))) {
+        throw new RetryableHistoryTransportError("History detail transport interrupted");
+      }
+      throw error;
+    }
+  }
+  function shouldReconcileHistory(snapshot, now) {
+    return !snapshot.historyComplete || !snapshot.lastHistorySuccessAt || now - snapshot.lastHistorySuccessAt >= HISTORY_RECONCILE_INTERVAL_MS;
+  }
+  var QuotaTracker = class {
+    constructor(sync) {
+      this.sync = sync;
+    }
+    unsubscribe = null;
+    ingestQueue = Promise.resolve();
+    history = createChromeHistoryStore();
+    disposed = false;
+    historyFlight = null;
+    historyTimer = 0;
+    historyAbort = null;
+    nextHistoryAt = 0;
+    forceHistory = false;
+    historyIdentity = null;
+    mount() {
+      this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
+      document.addEventListener("visibilitychange", this.onVisibility);
+      this.scheduleHistory(FIRST_HISTORY_DELAY_MS);
+    }
+    async refreshCurrent() {
+      try {
+        await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
+        await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
+      } finally {
+        this.nextHistoryAt = 0;
+        this.forceHistory = true;
+        this.scheduleHistory(0);
+      }
+    }
+    dispose() {
+      this.disposed = true;
+      this.historyAbort?.abort();
+      window.clearTimeout(this.historyTimer);
+      this.unsubscribe?.();
+      this.unsubscribe = null;
+      document.removeEventListener("visibilitychange", this.onVisibility);
+    }
+    onSnapshot(snapshot) {
+      const work = this.ingestQueue.then(() => this.writeLedger(snapshot));
+      this.ingestQueue = work.catch(() => void 0);
+      return this.ingestQueue;
+    }
+    scheduleHistory(delayMs) {
+      if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+      window.clearTimeout(this.historyTimer);
+      this.historyTimer = window.setTimeout(() => this.startHistoryScan(), Math.max(0, delayMs));
+    }
+    startHistoryScan() {
+      if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+      const controller = new AbortController();
+      this.historyAbort = controller;
+      this.historyFlight = this.scanHistory(controller.signal).catch(() => {
+        this.forceHistory = false;
+        this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS;
+      }).finally(() => {
+        this.historyAbort = null;
+        this.historyFlight = null;
+        this.scheduleHistory(this.forceHistory ? 0 : Math.max(600, this.nextHistoryAt - Date.now()));
+      });
+    }
+    async scanHistory(signal) {
+      const account = await readChatAccount(signal);
+      if (signal.aborted || this.disposed) return;
+      if (!account.userId) throw new Error("login");
+      const response = await sendRuntimeMessage({
+        type: "quota/get-state",
+        accountKey: account.identity,
+        plan: account.plan ?? void 0
+      });
+      if (!response.snapshot || response.error) throw new Error("quota state unavailable");
+      const baseline = response.snapshot;
+      const force = this.forceHistory;
+      this.forceHistory = false;
+      if (!force && !shouldReconcileHistory(baseline, Date.now())) {
+        this.nextHistoryAt = baseline.lastHistorySuccessAt + HISTORY_RECONCILE_INTERVAL_MS;
+        return;
+      }
+      const retryDue = (baseline.lastHistoryAttemptAt ?? 0) + HISTORY_RECONCILE_INTERVAL_MS;
+      if (!force && baseline.lastHistoryError && Date.now() < retryDue) {
+        this.nextHistoryAt = retryDue;
+        return;
+      }
+      if (signal.aborted) return;
+      this.historyIdentity = account.identity;
+      const attemptAt = Date.now();
+      try {
+        await this.publish(account, {
+          syncStatus: baseline.historyComplete ? "ready" : "backfill",
+          lastHistoryAttemptAt: attemptAt
+        });
+        let cache = structuredClone(await this.history.load(account.identity));
+        const store = {
+          load: async () => cache,
+          save: async (next) => {
+            cache = next;
+          }
+        };
+        let dataPass = 1;
+        let retries = 0;
+        while (!signal.aborted) {
+          const result = await readChatHistory({
+            transport: { request: requestHistoryList },
+            fetchDetail: requestHistoryDetail,
+            store,
+            identity: account.identity,
+            now: Date.now(),
+            signal
+          });
+          if (signal.aborted || this.disposed) return;
+          const summary = result.summary;
+          if (summary.cancelled) throw new Error("login");
+          if (summary.complete) {
+            const successAt = Date.now();
+            await this.publish(account, {
+              events: toEvents(result.turns, account.identity, "personal"),
+              historyCache: cache,
+              historyComplete: true,
+              syncStatus: "ready",
+              unclassifiedTurns: summary.unclassifiedTurns,
+              lastHistorySuccessAt: successAt,
+              lastHistoryAttemptAt: attemptAt,
+              lastHistoryError: null
+            });
+            this.nextHistoryAt = successAt + HISTORY_RECONCILE_INTERVAL_MS;
+            return;
+          }
+          if (summary.permanentFailures > 0) throw new Error("历史数据暂不完整");
+          if (summary.retryableFailures > 0) {
+            if (retries >= MAX_TRANSIENT_RETRIES) throw new Error("历史接口暂不可用");
+            await pause(retries++ === 0 ? 1500 : 5e3, signal);
+          } else if (historyNeedsAnotherPass(summary) && dataPass < MAX_HISTORY_PASSES) {
+            dataPass += 1;
+            await pause(NEXT_HISTORY_SLICE_DELAY_MS, signal);
+          } else {
+            throw new Error("历史数据暂不完整");
+          }
+        }
+      } catch (error) {
+        if (signal.aborted || this.disposed) return;
+        await this.publish(account, {
+          syncStatus: "error",
+          lastHistoryAttemptAt: attemptAt,
+          lastHistoryError: conciseError(error)
+        });
+        this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS;
+      }
+    }
+    async publish(account, extras) {
+      const response = await sendRuntimeMessage({
+        type: "quota/ingest",
+        events: [],
+        plan: account.plan ?? void 0,
+        accountKey: account.identity,
+        ...extras
+      });
+      if (response?.error) throw new Error(response.error);
+    }
+    async writeLedger(snapshot) {
+      if (this.disposed || !snapshot) return;
+      const account = await readChatAccount();
+      if (this.disposed || !account.userId) return;
+      const accountChanged = this.historyIdentity !== null && this.historyIdentity !== account.identity;
+      if (accountChanged) {
+        this.historyAbort?.abort();
+        this.nextHistoryAt = 0;
+      }
+      this.historyIdentity = account.identity;
+      const classification = classifySnapshot(snapshot);
+      const events = snapshot.quotaIsWork ? [] : toEvents(snapshot.quotaTurns, account.identity, classification);
+      await this.publish(account, {
+        events,
+        workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
+      });
+      if (accountChanged) this.scheduleHistory(0);
+      const limits = await readModelLimits();
+      if (!this.disposed) await this.publish(account, {
+        limits,
+        workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
+      });
+    }
+    onVisibility = () => {
+      if (document.visibilityState === "hidden") {
+        this.historyAbort?.abort();
+        window.clearTimeout(this.historyTimer);
+        return;
+      }
+      this.scheduleHistory(0);
+    };
+  };
+  function pause(ms, signal) {
+    return new Promise((resolve) => {
+      const done = () => {
+        window.clearTimeout(timer);
+        signal.removeEventListener("abort", done);
+        resolve();
+      };
+      const timer = window.setTimeout(done, ms);
+      signal.addEventListener("abort", done, { once: true });
+      if (signal.aborted) done();
+    });
+  }
+  function classifySnapshot(snapshot) {
+    if (snapshot.quotaIsWork) return "work";
+    if (snapshot.quotaTemporary) return "temporary";
+    if (snapshot.quotaOrigin && snapshot.quotaOrigin !== "chat" && snapshot.quotaOrigin !== "chatgpt") return "unknown";
+    return "personal";
+  }
+  function toEvents(turns, accountKey, classification) {
+    return turns.map((turn) => ({
+      id: turn.id,
+      accountKey,
+      createdAt: turn.createdAt,
+      model: turn.model,
+      classification
+    }));
+  }
+  function conciseError(error) {
+    const message = error instanceof Error ? error.message : String(error || "");
+    if (/login/i.test(message)) return "ChatGPT 登录状态不可用";
+    if (/timeout|timed out|超时/i.test(message)) return "历史读取超时";
+    if (/history \d+/.test(message)) return "历史接口暂不可用";
+    return "历史读取失败";
+  }
+  function historyNeedsAnotherPass(summary) {
+    return !summary.complete && !summary.cancelled && summary.permanentFailures === 0 && summary.retryableFailures === 0 && summary.conversationsFetched > 0 && (summary.hitDetailBudget || summary.hitDeadline);
+  }
+
+  // node_modules/sortablejs/modular/sortable.esm.js
+  function ownKeys(object, enumerableOnly) {
+    var keys = Object.keys(object);
+    if (Object.getOwnPropertySymbols) {
+      var symbols = Object.getOwnPropertySymbols(object);
+      if (enumerableOnly) {
+        symbols = symbols.filter(function(sym) {
+          return Object.getOwnPropertyDescriptor(object, sym).enumerable;
+        });
+      }
+      keys.push.apply(keys, symbols);
+    }
+    return keys;
+  }
+  function _objectSpread2(target) {
+    for (var i = 1; i < arguments.length; i++) {
+      var source = arguments[i] != null ? arguments[i] : {};
+      if (i % 2) {
+        ownKeys(Object(source), true).forEach(function(key) {
+          _defineProperty(target, key, source[key]);
+        });
+      } else if (Object.getOwnPropertyDescriptors) {
+        Object.defineProperties(target, Object.getOwnPropertyDescriptors(source));
+      } else {
+        ownKeys(Object(source)).forEach(function(key) {
+          Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+        });
+      }
+    }
+    return target;
+  }
+  function _typeof(obj) {
+    "@babel/helpers - typeof";
+    if (typeof Symbol === "function" && typeof Symbol.iterator === "symbol") {
+      _typeof = function(obj2) {
+        return typeof obj2;
+      };
+    } else {
+      _typeof = function(obj2) {
+        return obj2 && typeof Symbol === "function" && obj2.constructor === Symbol && obj2 !== Symbol.prototype ? "symbol" : typeof obj2;
+      };
+    }
+    return _typeof(obj);
+  }
+  function _defineProperty(obj, key, value) {
+    if (key in obj) {
+      Object.defineProperty(obj, key, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true
+      });
+    } else {
+      obj[key] = value;
+    }
+    return obj;
+  }
+  function _extends() {
+    _extends = Object.assign || function(target) {
+      for (var i = 1; i < arguments.length; i++) {
+        var source = arguments[i];
+        for (var key in source) {
+          if (Object.prototype.hasOwnProperty.call(source, key)) {
+            target[key] = source[key];
+          }
+        }
+      }
+      return target;
+    };
+    return _extends.apply(this, arguments);
+  }
+  function _objectWithoutPropertiesLoose(source, excluded) {
+    if (source == null) return {};
+    var target = {};
+    var sourceKeys = Object.keys(source);
+    var key, i;
+    for (i = 0; i < sourceKeys.length; i++) {
+      key = sourceKeys[i];
+      if (excluded.indexOf(key) >= 0) continue;
+      target[key] = source[key];
+    }
+    return target;
+  }
+  function _objectWithoutProperties(source, excluded) {
+    if (source == null) return {};
+    var target = _objectWithoutPropertiesLoose(source, excluded);
+    var key, i;
+    if (Object.getOwnPropertySymbols) {
+      var sourceSymbolKeys = Object.getOwnPropertySymbols(source);
+      for (i = 0; i < sourceSymbolKeys.length; i++) {
+        key = sourceSymbolKeys[i];
+        if (excluded.indexOf(key) >= 0) continue;
+        if (!Object.prototype.propertyIsEnumerable.call(source, key)) continue;
+        target[key] = source[key];
+      }
+    }
+    return target;
+  }
+  var version = "1.15.6";
+  function userAgent(pattern) {
+    if (typeof window !== "undefined" && window.navigator) {
+      return !!/* @__PURE__ */ navigator.userAgent.match(pattern);
+    }
+  }
+  var IE11OrLess = userAgent(/(?:Trident.*rv[ :]?11\.|msie|iemobile|Windows Phone)/i);
+  var Edge = userAgent(/Edge/i);
+  var FireFox = userAgent(/firefox/i);
+  var Safari = userAgent(/safari/i) && !userAgent(/chrome/i) && !userAgent(/android/i);
+  var IOS = userAgent(/iP(ad|od|hone)/i);
+  var ChromeForAndroid = userAgent(/chrome/i) && userAgent(/android/i);
+  var captureMode = {
+    capture: false,
+    passive: false
+  };
+  function on(el, event, fn) {
+    el.addEventListener(event, fn, !IE11OrLess && captureMode);
+  }
+  function off(el, event, fn) {
+    el.removeEventListener(event, fn, !IE11OrLess && captureMode);
+  }
+  function matches(el, selector) {
+    if (!selector) return;
+    selector[0] === ">" && (selector = selector.substring(1));
+    if (el) {
+      try {
+        if (el.matches) {
+          return el.matches(selector);
+        } else if (el.msMatchesSelector) {
+          return el.msMatchesSelector(selector);
+        } else if (el.webkitMatchesSelector) {
+          return el.webkitMatchesSelector(selector);
+        }
+      } catch (_) {
+        return false;
+      }
+    }
+    return false;
+  }
+  function getParentOrHost(el) {
+    return el.host && el !== document && el.host.nodeType ? el.host : el.parentNode;
+  }
+  function closest(el, selector, ctx, includeCTX) {
+    if (el) {
+      ctx = ctx || document;
+      do {
+        if (selector != null && (selector[0] === ">" ? el.parentNode === ctx && matches(el, selector) : matches(el, selector)) || includeCTX && el === ctx) {
+          return el;
+        }
+        if (el === ctx) break;
+      } while (el = getParentOrHost(el));
+    }
+    return null;
+  }
+  var R_SPACE = /\s+/g;
+  function toggleClass(el, name, state) {
+    if (el && name) {
+      if (el.classList) {
+        el.classList[state ? "add" : "remove"](name);
+      } else {
+        var className = (" " + el.className + " ").replace(R_SPACE, " ").replace(" " + name + " ", " ");
+        el.className = (className + (state ? " " + name : "")).replace(R_SPACE, " ");
+      }
+    }
+  }
+  function css(el, prop, val) {
+    var style = el && el.style;
+    if (style) {
+      if (val === void 0) {
+        if (document.defaultView && document.defaultView.getComputedStyle) {
+          val = document.defaultView.getComputedStyle(el, "");
+        } else if (el.currentStyle) {
+          val = el.currentStyle;
+        }
+        return prop === void 0 ? val : val[prop];
+      } else {
+        if (!(prop in style) && prop.indexOf("webkit") === -1) {
+          prop = "-webkit-" + prop;
+        }
+        style[prop] = val + (typeof val === "string" ? "" : "px");
+      }
+    }
+  }
+  function matrix(el, selfOnly) {
+    var appliedTransforms = "";
+    if (typeof el === "string") {
+      appliedTransforms = el;
+    } else {
+      do {
+        var transform = css(el, "transform");
+        if (transform && transform !== "none") {
+          appliedTransforms = transform + " " + appliedTransforms;
+        }
+      } while (!selfOnly && (el = el.parentNode));
+    }
+    var matrixFn = window.DOMMatrix || window.WebKitCSSMatrix || window.CSSMatrix || window.MSCSSMatrix;
+    return matrixFn && new matrixFn(appliedTransforms);
+  }
+  function find(ctx, tagName, iterator) {
+    if (ctx) {
+      var list = ctx.getElementsByTagName(tagName), i = 0, n = list.length;
+      if (iterator) {
+        for (; i < n; i++) {
+          iterator(list[i], i);
+        }
+      }
+      return list;
+    }
+    return [];
+  }
+  function getWindowScrollingElement() {
+    var scrollingElement = document.scrollingElement;
+    if (scrollingElement) {
+      return scrollingElement;
+    } else {
+      return document.documentElement;
+    }
+  }
+  function getRect(el, relativeToContainingBlock, relativeToNonStaticParent, undoScale, container) {
+    if (!el.getBoundingClientRect && el !== window) return;
+    var elRect, top, left, bottom, right, height, width;
+    if (el !== window && el.parentNode && el !== getWindowScrollingElement()) {
+      elRect = el.getBoundingClientRect();
+      top = elRect.top;
+      left = elRect.left;
+      bottom = elRect.bottom;
+      right = elRect.right;
+      height = elRect.height;
+      width = elRect.width;
+    } else {
+      top = 0;
+      left = 0;
+      bottom = window.innerHeight;
+      right = window.innerWidth;
+      height = window.innerHeight;
+      width = window.innerWidth;
+    }
+    if ((relativeToContainingBlock || relativeToNonStaticParent) && el !== window) {
+      container = container || el.parentNode;
+      if (!IE11OrLess) {
+        do {
+          if (container && container.getBoundingClientRect && (css(container, "transform") !== "none" || relativeToNonStaticParent && css(container, "position") !== "static")) {
+            var containerRect = container.getBoundingClientRect();
+            top -= containerRect.top + parseInt(css(container, "border-top-width"));
+            left -= containerRect.left + parseInt(css(container, "border-left-width"));
+            bottom = top + elRect.height;
+            right = left + elRect.width;
+            break;
+          }
+        } while (container = container.parentNode);
+      }
+    }
+    if (undoScale && el !== window) {
+      var elMatrix = matrix(container || el), scaleX = elMatrix && elMatrix.a, scaleY = elMatrix && elMatrix.d;
+      if (elMatrix) {
+        top /= scaleY;
+        left /= scaleX;
+        width /= scaleX;
+        height /= scaleY;
+        bottom = top + height;
+        right = left + width;
+      }
+    }
+    return {
+      top,
+      left,
+      bottom,
+      right,
+      width,
+      height
+    };
+  }
+  function isScrolledPast(el, elSide, parentSide) {
+    var parent = getParentAutoScrollElement(el, true), elSideVal = getRect(el)[elSide];
+    while (parent) {
+      var parentSideVal = getRect(parent)[parentSide], visible = void 0;
+      if (parentSide === "top" || parentSide === "left") {
+        visible = elSideVal >= parentSideVal;
+      } else {
+        visible = elSideVal <= parentSideVal;
+      }
+      if (!visible) return parent;
+      if (parent === getWindowScrollingElement()) break;
+      parent = getParentAutoScrollElement(parent, false);
+    }
+    return false;
+  }
+  function getChild(el, childNum, options, includeDragEl) {
+    var currentChild = 0, i = 0, children = el.children;
+    while (i < children.length) {
+      if (children[i].style.display !== "none" && children[i] !== Sortable.ghost && (includeDragEl || children[i] !== Sortable.dragged) && closest(children[i], options.draggable, el, false)) {
+        if (currentChild === childNum) {
+          return children[i];
+        }
+        currentChild++;
+      }
+      i++;
+    }
+    return null;
+  }
+  function lastChild(el, selector) {
+    var last = el.lastElementChild;
+    while (last && (last === Sortable.ghost || css(last, "display") === "none" || selector && !matches(last, selector))) {
+      last = last.previousElementSibling;
+    }
+    return last || null;
+  }
+  function index(el, selector) {
+    var index2 = 0;
+    if (!el || !el.parentNode) {
+      return -1;
+    }
+    while (el = el.previousElementSibling) {
+      if (el.nodeName.toUpperCase() !== "TEMPLATE" && el !== Sortable.clone && (!selector || matches(el, selector))) {
+        index2++;
+      }
+    }
+    return index2;
+  }
+  function getRelativeScrollOffset(el) {
+    var offsetLeft = 0, offsetTop = 0, winScroller = getWindowScrollingElement();
+    if (el) {
+      do {
+        var elMatrix = matrix(el), scaleX = elMatrix.a, scaleY = elMatrix.d;
+        offsetLeft += el.scrollLeft * scaleX;
+        offsetTop += el.scrollTop * scaleY;
+      } while (el !== winScroller && (el = el.parentNode));
+    }
+    return [offsetLeft, offsetTop];
+  }
+  function indexOfObject(arr, obj) {
+    for (var i in arr) {
+      if (!arr.hasOwnProperty(i)) continue;
+      for (var key in obj) {
+        if (obj.hasOwnProperty(key) && obj[key] === arr[i][key]) return Number(i);
+      }
+    }
+    return -1;
+  }
+  function getParentAutoScrollElement(el, includeSelf) {
+    if (!el || !el.getBoundingClientRect) return getWindowScrollingElement();
+    var elem = el;
+    var gotSelf = false;
+    do {
+      if (elem.clientWidth < elem.scrollWidth || elem.clientHeight < elem.scrollHeight) {
+        var elemCSS = css(elem);
+        if (elem.clientWidth < elem.scrollWidth && (elemCSS.overflowX == "auto" || elemCSS.overflowX == "scroll") || elem.clientHeight < elem.scrollHeight && (elemCSS.overflowY == "auto" || elemCSS.overflowY == "scroll")) {
+          if (!elem.getBoundingClientRect || elem === document.body) return getWindowScrollingElement();
+          if (gotSelf || includeSelf) return elem;
+          gotSelf = true;
+        }
+      }
+    } while (elem = elem.parentNode);
+    return getWindowScrollingElement();
+  }
+  function extend(dst, src) {
+    if (dst && src) {
+      for (var key in src) {
+        if (src.hasOwnProperty(key)) {
+          dst[key] = src[key];
+        }
+      }
+    }
+    return dst;
+  }
+  function isRectEqual(rect1, rect2) {
+    return Math.round(rect1.top) === Math.round(rect2.top) && Math.round(rect1.left) === Math.round(rect2.left) && Math.round(rect1.height) === Math.round(rect2.height) && Math.round(rect1.width) === Math.round(rect2.width);
+  }
+  var _throttleTimeout;
+  function throttle(callback, ms) {
+    return function() {
+      if (!_throttleTimeout) {
+        var args = arguments, _this = this;
+        if (args.length === 1) {
+          callback.call(_this, args[0]);
+        } else {
+          callback.apply(_this, args);
+        }
+        _throttleTimeout = setTimeout(function() {
+          _throttleTimeout = void 0;
+        }, ms);
+      }
+    };
+  }
+  function cancelThrottle() {
+    clearTimeout(_throttleTimeout);
+    _throttleTimeout = void 0;
+  }
+  function scrollBy(el, x, y) {
+    el.scrollLeft += x;
+    el.scrollTop += y;
+  }
+  function clone(el) {
+    var Polymer = window.Polymer;
+    var $ = window.jQuery || window.Zepto;
+    if (Polymer && Polymer.dom) {
+      return Polymer.dom(el).cloneNode(true);
+    } else if ($) {
+      return $(el).clone(true)[0];
+    } else {
+      return el.cloneNode(true);
+    }
+  }
+  function getChildContainingRectFromElement(container, options, ghostEl2) {
+    var rect = {};
+    Array.from(container.children).forEach(function(child) {
+      var _rect$left, _rect$top, _rect$right, _rect$bottom;
+      if (!closest(child, options.draggable, container, false) || child.animated || child === ghostEl2) return;
+      var childRect = getRect(child);
+      rect.left = Math.min((_rect$left = rect.left) !== null && _rect$left !== void 0 ? _rect$left : Infinity, childRect.left);
+      rect.top = Math.min((_rect$top = rect.top) !== null && _rect$top !== void 0 ? _rect$top : Infinity, childRect.top);
+      rect.right = Math.max((_rect$right = rect.right) !== null && _rect$right !== void 0 ? _rect$right : -Infinity, childRect.right);
+      rect.bottom = Math.max((_rect$bottom = rect.bottom) !== null && _rect$bottom !== void 0 ? _rect$bottom : -Infinity, childRect.bottom);
+    });
+    rect.width = rect.right - rect.left;
+    rect.height = rect.bottom - rect.top;
+    rect.x = rect.left;
+    rect.y = rect.top;
+    return rect;
+  }
+  var expando = "Sortable" + (/* @__PURE__ */ new Date()).getTime();
+  function AnimationStateManager() {
+    var animationStates = [], animationCallbackId;
+    return {
+      captureAnimationState: function captureAnimationState() {
+        animationStates = [];
+        if (!this.options.animation) return;
+        var children = [].slice.call(this.el.children);
+        children.forEach(function(child) {
+          if (css(child, "display") === "none" || child === Sortable.ghost) return;
+          animationStates.push({
+            target: child,
+            rect: getRect(child)
+          });
+          var fromRect = _objectSpread2({}, animationStates[animationStates.length - 1].rect);
+          if (child.thisAnimationDuration) {
+            var childMatrix = matrix(child, true);
+            if (childMatrix) {
+              fromRect.top -= childMatrix.f;
+              fromRect.left -= childMatrix.e;
+            }
+          }
+          child.fromRect = fromRect;
+        });
+      },
+      addAnimationState: function addAnimationState(state) {
+        animationStates.push(state);
+      },
+      removeAnimationState: function removeAnimationState(target) {
+        animationStates.splice(indexOfObject(animationStates, {
+          target
+        }), 1);
+      },
+      animateAll: function animateAll(callback) {
+        var _this = this;
+        if (!this.options.animation) {
+          clearTimeout(animationCallbackId);
+          if (typeof callback === "function") callback();
+          return;
+        }
+        var animating = false, animationTime = 0;
+        animationStates.forEach(function(state) {
+          var time = 0, target = state.target, fromRect = target.fromRect, toRect = getRect(target), prevFromRect = target.prevFromRect, prevToRect = target.prevToRect, animatingRect = state.rect, targetMatrix = matrix(target, true);
+          if (targetMatrix) {
+            toRect.top -= targetMatrix.f;
+            toRect.left -= targetMatrix.e;
+          }
+          target.toRect = toRect;
+          if (target.thisAnimationDuration) {
+            if (isRectEqual(prevFromRect, toRect) && !isRectEqual(fromRect, toRect) && // Make sure animatingRect is on line between toRect & fromRect
+            (animatingRect.top - toRect.top) / (animatingRect.left - toRect.left) === (fromRect.top - toRect.top) / (fromRect.left - toRect.left)) {
+              time = calculateRealTime(animatingRect, prevFromRect, prevToRect, _this.options);
+            }
+          }
+          if (!isRectEqual(toRect, fromRect)) {
+            target.prevFromRect = fromRect;
+            target.prevToRect = toRect;
+            if (!time) {
+              time = _this.options.animation;
+            }
+            _this.animate(target, animatingRect, toRect, time);
+          }
+          if (time) {
+            animating = true;
+            animationTime = Math.max(animationTime, time);
+            clearTimeout(target.animationResetTimer);
+            target.animationResetTimer = setTimeout(function() {
+              target.animationTime = 0;
+              target.prevFromRect = null;
+              target.fromRect = null;
+              target.prevToRect = null;
+              target.thisAnimationDuration = null;
+            }, time);
+            target.thisAnimationDuration = time;
+          }
+        });
+        clearTimeout(animationCallbackId);
+        if (!animating) {
+          if (typeof callback === "function") callback();
+        } else {
+          animationCallbackId = setTimeout(function() {
+            if (typeof callback === "function") callback();
+          }, animationTime);
+        }
+        animationStates = [];
+      },
+      animate: function animate(target, currentRect, toRect, duration) {
+        if (duration) {
+          css(target, "transition", "");
+          css(target, "transform", "");
+          var elMatrix = matrix(this.el), scaleX = elMatrix && elMatrix.a, scaleY = elMatrix && elMatrix.d, translateX = (currentRect.left - toRect.left) / (scaleX || 1), translateY = (currentRect.top - toRect.top) / (scaleY || 1);
+          target.animatingX = !!translateX;
+          target.animatingY = !!translateY;
+          css(target, "transform", "translate3d(" + translateX + "px," + translateY + "px,0)");
+          this.forRepaintDummy = repaint(target);
+          css(target, "transition", "transform " + duration + "ms" + (this.options.easing ? " " + this.options.easing : ""));
+          css(target, "transform", "translate3d(0,0,0)");
+          typeof target.animated === "number" && clearTimeout(target.animated);
+          target.animated = setTimeout(function() {
+            css(target, "transition", "");
+            css(target, "transform", "");
+            target.animated = false;
+            target.animatingX = false;
+            target.animatingY = false;
+          }, duration);
+        }
+      }
+    };
+  }
+  function repaint(target) {
+    return target.offsetWidth;
+  }
+  function calculateRealTime(animatingRect, fromRect, toRect, options) {
+    return Math.sqrt(Math.pow(fromRect.top - animatingRect.top, 2) + Math.pow(fromRect.left - animatingRect.left, 2)) / Math.sqrt(Math.pow(fromRect.top - toRect.top, 2) + Math.pow(fromRect.left - toRect.left, 2)) * options.animation;
+  }
+  var plugins = [];
+  var defaults = {
+    initializeByDefault: true
+  };
+  var PluginManager = {
+    mount: function mount(plugin) {
+      for (var option2 in defaults) {
+        if (defaults.hasOwnProperty(option2) && !(option2 in plugin)) {
+          plugin[option2] = defaults[option2];
+        }
+      }
+      plugins.forEach(function(p) {
+        if (p.pluginName === plugin.pluginName) {
+          throw "Sortable: Cannot mount plugin ".concat(plugin.pluginName, " more than once");
+        }
+      });
+      plugins.push(plugin);
+    },
+    pluginEvent: function pluginEvent(eventName, sortable, evt) {
+      var _this = this;
+      this.eventCanceled = false;
+      evt.cancel = function() {
+        _this.eventCanceled = true;
+      };
+      var eventNameGlobal = eventName + "Global";
+      plugins.forEach(function(plugin) {
+        if (!sortable[plugin.pluginName]) return;
+        if (sortable[plugin.pluginName][eventNameGlobal]) {
+          sortable[plugin.pluginName][eventNameGlobal](_objectSpread2({
+            sortable
+          }, evt));
+        }
+        if (sortable.options[plugin.pluginName] && sortable[plugin.pluginName][eventName]) {
+          sortable[plugin.pluginName][eventName](_objectSpread2({
+            sortable
+          }, evt));
+        }
+      });
+    },
+    initializePlugins: function initializePlugins(sortable, el, defaults2, options) {
+      plugins.forEach(function(plugin) {
+        var pluginName = plugin.pluginName;
+        if (!sortable.options[pluginName] && !plugin.initializeByDefault) return;
+        var initialized = new plugin(sortable, el, sortable.options);
+        initialized.sortable = sortable;
+        initialized.options = sortable.options;
+        sortable[pluginName] = initialized;
+        _extends(defaults2, initialized.defaults);
+      });
+      for (var option2 in sortable.options) {
+        if (!sortable.options.hasOwnProperty(option2)) continue;
+        var modified = this.modifyOption(sortable, option2, sortable.options[option2]);
+        if (typeof modified !== "undefined") {
+          sortable.options[option2] = modified;
+        }
+      }
+    },
+    getEventProperties: function getEventProperties(name, sortable) {
+      var eventProperties = {};
+      plugins.forEach(function(plugin) {
+        if (typeof plugin.eventProperties !== "function") return;
+        _extends(eventProperties, plugin.eventProperties.call(sortable[plugin.pluginName], name));
+      });
+      return eventProperties;
+    },
+    modifyOption: function modifyOption(sortable, name, value) {
+      var modifiedValue;
+      plugins.forEach(function(plugin) {
+        if (!sortable[plugin.pluginName]) return;
+        if (plugin.optionListeners && typeof plugin.optionListeners[name] === "function") {
+          modifiedValue = plugin.optionListeners[name].call(sortable[plugin.pluginName], value);
+        }
+      });
+      return modifiedValue;
+    }
+  };
+  function dispatchEvent(_ref) {
+    var sortable = _ref.sortable, rootEl2 = _ref.rootEl, name = _ref.name, targetEl = _ref.targetEl, cloneEl2 = _ref.cloneEl, toEl = _ref.toEl, fromEl = _ref.fromEl, oldIndex2 = _ref.oldIndex, newIndex2 = _ref.newIndex, oldDraggableIndex2 = _ref.oldDraggableIndex, newDraggableIndex2 = _ref.newDraggableIndex, originalEvent = _ref.originalEvent, putSortable2 = _ref.putSortable, extraEventProperties = _ref.extraEventProperties;
+    sortable = sortable || rootEl2 && rootEl2[expando];
+    if (!sortable) return;
+    var evt, options = sortable.options, onName = "on" + name.charAt(0).toUpperCase() + name.substr(1);
+    if (window.CustomEvent && !IE11OrLess && !Edge) {
+      evt = new CustomEvent(name, {
+        bubbles: true,
+        cancelable: true
+      });
+    } else {
+      evt = document.createEvent("Event");
+      evt.initEvent(name, true, true);
+    }
+    evt.to = toEl || rootEl2;
+    evt.from = fromEl || rootEl2;
+    evt.item = targetEl || rootEl2;
+    evt.clone = cloneEl2;
+    evt.oldIndex = oldIndex2;
+    evt.newIndex = newIndex2;
+    evt.oldDraggableIndex = oldDraggableIndex2;
+    evt.newDraggableIndex = newDraggableIndex2;
+    evt.originalEvent = originalEvent;
+    evt.pullMode = putSortable2 ? putSortable2.lastPutMode : void 0;
+    var allEventProperties = _objectSpread2(_objectSpread2({}, extraEventProperties), PluginManager.getEventProperties(name, sortable));
+    for (var option2 in allEventProperties) {
+      evt[option2] = allEventProperties[option2];
+    }
+    if (rootEl2) {
+      rootEl2.dispatchEvent(evt);
+    }
+    if (options[onName]) {
+      options[onName].call(sortable, evt);
+    }
+  }
+  var _excluded = ["evt"];
+  var pluginEvent2 = function pluginEvent3(eventName, sortable) {
+    var _ref = arguments.length > 2 && arguments[2] !== void 0 ? arguments[2] : {}, originalEvent = _ref.evt, data = _objectWithoutProperties(_ref, _excluded);
+    PluginManager.pluginEvent.bind(Sortable)(eventName, sortable, _objectSpread2({
+      dragEl,
+      parentEl,
+      ghostEl,
+      rootEl,
+      nextEl,
+      lastDownEl,
+      cloneEl,
+      cloneHidden,
+      dragStarted: moved,
+      putSortable,
+      activeSortable: Sortable.active,
+      originalEvent,
+      oldIndex,
+      oldDraggableIndex,
+      newIndex,
+      newDraggableIndex,
+      hideGhostForTarget: _hideGhostForTarget,
+      unhideGhostForTarget: _unhideGhostForTarget,
+      cloneNowHidden: function cloneNowHidden() {
+        cloneHidden = true;
+      },
+      cloneNowShown: function cloneNowShown() {
+        cloneHidden = false;
+      },
+      dispatchSortableEvent: function dispatchSortableEvent(name) {
+        _dispatchEvent({
+          sortable,
+          name,
+          originalEvent
+        });
+      }
+    }, data));
+  };
+  function _dispatchEvent(info) {
+    dispatchEvent(_objectSpread2({
+      putSortable,
+      cloneEl,
+      targetEl: dragEl,
+      rootEl,
+      oldIndex,
+      oldDraggableIndex,
+      newIndex,
+      newDraggableIndex
+    }, info));
+  }
+  var dragEl;
+  var parentEl;
+  var ghostEl;
+  var rootEl;
+  var nextEl;
+  var lastDownEl;
+  var cloneEl;
+  var cloneHidden;
+  var oldIndex;
+  var newIndex;
+  var oldDraggableIndex;
+  var newDraggableIndex;
+  var activeGroup;
+  var putSortable;
+  var awaitingDragStarted = false;
+  var ignoreNextClick = false;
+  var sortables = [];
+  var tapEvt;
+  var touchEvt;
+  var lastDx;
+  var lastDy;
+  var tapDistanceLeft;
+  var tapDistanceTop;
+  var moved;
+  var lastTarget;
+  var lastDirection;
+  var pastFirstInvertThresh = false;
+  var isCircumstantialInvert = false;
+  var targetMoveDistance;
+  var ghostRelativeParent;
+  var ghostRelativeParentInitialScroll = [];
+  var _silent = false;
+  var savedInputChecked = [];
+  var documentExists = typeof document !== "undefined";
+  var PositionGhostAbsolutely = IOS;
+  var CSSFloatProperty = Edge || IE11OrLess ? "cssFloat" : "float";
+  var supportDraggable = documentExists && !ChromeForAndroid && !IOS && "draggable" in document.createElement("div");
+  var supportCssPointerEvents = (function() {
+    if (!documentExists) return;
+    if (IE11OrLess) {
+      return false;
+    }
+    var el = document.createElement("x");
+    el.style.cssText = "pointer-events:auto";
+    return el.style.pointerEvents === "auto";
+  })();
+  var _detectDirection = function _detectDirection2(el, options) {
+    var elCSS = css(el), elWidth = parseInt(elCSS.width) - parseInt(elCSS.paddingLeft) - parseInt(elCSS.paddingRight) - parseInt(elCSS.borderLeftWidth) - parseInt(elCSS.borderRightWidth), child1 = getChild(el, 0, options), child2 = getChild(el, 1, options), firstChildCSS = child1 && css(child1), secondChildCSS = child2 && css(child2), firstChildWidth = firstChildCSS && parseInt(firstChildCSS.marginLeft) + parseInt(firstChildCSS.marginRight) + getRect(child1).width, secondChildWidth = secondChildCSS && parseInt(secondChildCSS.marginLeft) + parseInt(secondChildCSS.marginRight) + getRect(child2).width;
+    if (elCSS.display === "flex") {
+      return elCSS.flexDirection === "column" || elCSS.flexDirection === "column-reverse" ? "vertical" : "horizontal";
+    }
+    if (elCSS.display === "grid") {
+      return elCSS.gridTemplateColumns.split(" ").length <= 1 ? "vertical" : "horizontal";
+    }
+    if (child1 && firstChildCSS["float"] && firstChildCSS["float"] !== "none") {
+      var touchingSideChild2 = firstChildCSS["float"] === "left" ? "left" : "right";
+      return child2 && (secondChildCSS.clear === "both" || secondChildCSS.clear === touchingSideChild2) ? "vertical" : "horizontal";
+    }
+    return child1 && (firstChildCSS.display === "block" || firstChildCSS.display === "flex" || firstChildCSS.display === "table" || firstChildCSS.display === "grid" || firstChildWidth >= elWidth && elCSS[CSSFloatProperty] === "none" || child2 && elCSS[CSSFloatProperty] === "none" && firstChildWidth + secondChildWidth > elWidth) ? "vertical" : "horizontal";
+  };
+  var _dragElInRowColumn = function _dragElInRowColumn2(dragRect, targetRect, vertical) {
+    var dragElS1Opp = vertical ? dragRect.left : dragRect.top, dragElS2Opp = vertical ? dragRect.right : dragRect.bottom, dragElOppLength = vertical ? dragRect.width : dragRect.height, targetS1Opp = vertical ? targetRect.left : targetRect.top, targetS2Opp = vertical ? targetRect.right : targetRect.bottom, targetOppLength = vertical ? targetRect.width : targetRect.height;
+    return dragElS1Opp === targetS1Opp || dragElS2Opp === targetS2Opp || dragElS1Opp + dragElOppLength / 2 === targetS1Opp + targetOppLength / 2;
+  };
+  var _detectNearestEmptySortable = function _detectNearestEmptySortable2(x, y) {
+    var ret;
+    sortables.some(function(sortable) {
+      var threshold = sortable[expando].options.emptyInsertThreshold;
+      if (!threshold || lastChild(sortable)) return;
+      var rect = getRect(sortable), insideHorizontally = x >= rect.left - threshold && x <= rect.right + threshold, insideVertically = y >= rect.top - threshold && y <= rect.bottom + threshold;
+      if (insideHorizontally && insideVertically) {
+        return ret = sortable;
+      }
+    });
+    return ret;
+  };
+  var _prepareGroup = function _prepareGroup2(options) {
+    function toFn(value, pull) {
+      return function(to, from, dragEl2, evt) {
+        var sameGroup = to.options.group.name && from.options.group.name && to.options.group.name === from.options.group.name;
+        if (value == null && (pull || sameGroup)) {
+          return true;
+        } else if (value == null || value === false) {
+          return false;
+        } else if (pull && value === "clone") {
+          return value;
+        } else if (typeof value === "function") {
+          return toFn(value(to, from, dragEl2, evt), pull)(to, from, dragEl2, evt);
+        } else {
+          var otherGroup = (pull ? to : from).options.group.name;
+          return value === true || typeof value === "string" && value === otherGroup || value.join && value.indexOf(otherGroup) > -1;
+        }
+      };
+    }
+    var group = {};
+    var originalGroup = options.group;
+    if (!originalGroup || _typeof(originalGroup) != "object") {
+      originalGroup = {
+        name: originalGroup
+      };
+    }
+    group.name = originalGroup.name;
+    group.checkPull = toFn(originalGroup.pull, true);
+    group.checkPut = toFn(originalGroup.put);
+    group.revertClone = originalGroup.revertClone;
+    options.group = group;
+  };
+  var _hideGhostForTarget = function _hideGhostForTarget2() {
+    if (!supportCssPointerEvents && ghostEl) {
+      css(ghostEl, "display", "none");
+    }
+  };
+  var _unhideGhostForTarget = function _unhideGhostForTarget2() {
+    if (!supportCssPointerEvents && ghostEl) {
+      css(ghostEl, "display", "");
+    }
+  };
+  if (documentExists && !ChromeForAndroid) {
+    document.addEventListener("click", function(evt) {
+      if (ignoreNextClick) {
+        evt.preventDefault();
+        evt.stopPropagation && evt.stopPropagation();
+        evt.stopImmediatePropagation && evt.stopImmediatePropagation();
+        ignoreNextClick = false;
+        return false;
+      }
+    }, true);
+  }
+  var nearestEmptyInsertDetectEvent = function nearestEmptyInsertDetectEvent2(evt) {
+    if (dragEl) {
+      evt = evt.touches ? evt.touches[0] : evt;
+      var nearest = _detectNearestEmptySortable(evt.clientX, evt.clientY);
+      if (nearest) {
+        var event = {};
+        for (var i in evt) {
+          if (evt.hasOwnProperty(i)) {
+            event[i] = evt[i];
+          }
+        }
+        event.target = event.rootEl = nearest;
+        event.preventDefault = void 0;
+        event.stopPropagation = void 0;
+        nearest[expando]._onDragOver(event);
+      }
+    }
+  };
+  var _checkOutsideTargetEl = function _checkOutsideTargetEl2(evt) {
+    if (dragEl) {
+      dragEl.parentNode[expando]._isOutsideThisEl(evt.target);
+    }
+  };
+  function Sortable(el, options) {
+    if (!(el && el.nodeType && el.nodeType === 1)) {
+      throw "Sortable: `el` must be an HTMLElement, not ".concat({}.toString.call(el));
+    }
+    this.el = el;
+    this.options = options = _extends({}, options);
+    el[expando] = this;
+    var defaults2 = {
+      group: null,
+      sort: true,
+      disabled: false,
+      store: null,
+      handle: null,
+      draggable: /^[uo]l$/i.test(el.nodeName) ? ">li" : ">*",
+      swapThreshold: 1,
+      // percentage; 0 <= x <= 1
+      invertSwap: false,
+      // invert always
+      invertedSwapThreshold: null,
+      // will be set to same as swapThreshold if default
+      removeCloneOnHide: true,
+      direction: function direction() {
+        return _detectDirection(el, this.options);
+      },
+      ghostClass: "sortable-ghost",
+      chosenClass: "sortable-chosen",
+      dragClass: "sortable-drag",
+      ignore: "a, img",
+      filter: null,
+      preventOnFilter: true,
+      animation: 0,
+      easing: null,
+      setData: function setData(dataTransfer, dragEl2) {
+        dataTransfer.setData("Text", dragEl2.textContent);
+      },
+      dropBubble: false,
+      dragoverBubble: false,
+      dataIdAttr: "data-id",
+      delay: 0,
+      delayOnTouchOnly: false,
+      touchStartThreshold: (Number.parseInt ? Number : window).parseInt(window.devicePixelRatio, 10) || 1,
+      forceFallback: false,
+      fallbackClass: "sortable-fallback",
+      fallbackOnBody: false,
+      fallbackTolerance: 0,
+      fallbackOffset: {
+        x: 0,
+        y: 0
+      },
+      // Disabled on Safari: #1571; Enabled on Safari IOS: #2244
+      supportPointer: Sortable.supportPointer !== false && "PointerEvent" in window && (!Safari || IOS),
+      emptyInsertThreshold: 5
+    };
+    PluginManager.initializePlugins(this, el, defaults2);
+    for (var name in defaults2) {
+      !(name in options) && (options[name] = defaults2[name]);
+    }
+    _prepareGroup(options);
+    for (var fn in this) {
+      if (fn.charAt(0) === "_" && typeof this[fn] === "function") {
+        this[fn] = this[fn].bind(this);
+      }
+    }
+    this.nativeDraggable = options.forceFallback ? false : supportDraggable;
+    if (this.nativeDraggable) {
+      this.options.touchStartThreshold = 1;
+    }
+    if (options.supportPointer) {
+      on(el, "pointerdown", this._onTapStart);
+    } else {
+      on(el, "mousedown", this._onTapStart);
+      on(el, "touchstart", this._onTapStart);
+    }
+    if (this.nativeDraggable) {
+      on(el, "dragover", this);
+      on(el, "dragenter", this);
+    }
+    sortables.push(this.el);
+    options.store && options.store.get && this.sort(options.store.get(this) || []);
+    _extends(this, AnimationStateManager());
+  }
+  Sortable.prototype = /** @lends Sortable.prototype */
+  {
+    constructor: Sortable,
+    _isOutsideThisEl: function _isOutsideThisEl(target) {
+      if (!this.el.contains(target) && target !== this.el) {
+        lastTarget = null;
+      }
+    },
+    _getDirection: function _getDirection(evt, target) {
+      return typeof this.options.direction === "function" ? this.options.direction.call(this, evt, target, dragEl) : this.options.direction;
+    },
+    _onTapStart: function _onTapStart(evt) {
+      if (!evt.cancelable) return;
+      var _this = this, el = this.el, options = this.options, preventOnFilter = options.preventOnFilter, type = evt.type, touch = evt.touches && evt.touches[0] || evt.pointerType && evt.pointerType === "touch" && evt, target = (touch || evt).target, originalTarget = evt.target.shadowRoot && (evt.path && evt.path[0] || evt.composedPath && evt.composedPath()[0]) || target, filter = options.filter;
+      _saveInputCheckedState(el);
+      if (dragEl) {
+        return;
+      }
+      if (/mousedown|pointerdown/.test(type) && evt.button !== 0 || options.disabled) {
+        return;
+      }
+      if (originalTarget.isContentEditable) {
+        return;
+      }
+      if (!this.nativeDraggable && Safari && target && target.tagName.toUpperCase() === "SELECT") {
+        return;
+      }
+      target = closest(target, options.draggable, el, false);
+      if (target && target.animated) {
+        return;
+      }
+      if (lastDownEl === target) {
+        return;
+      }
+      oldIndex = index(target);
+      oldDraggableIndex = index(target, options.draggable);
+      if (typeof filter === "function") {
+        if (filter.call(this, evt, target, this)) {
+          _dispatchEvent({
+            sortable: _this,
+            rootEl: originalTarget,
+            name: "filter",
+            targetEl: target,
+            toEl: el,
+            fromEl: el
+          });
+          pluginEvent2("filter", _this, {
+            evt
+          });
+          preventOnFilter && evt.preventDefault();
+          return;
+        }
+      } else if (filter) {
+        filter = filter.split(",").some(function(criteria) {
+          criteria = closest(originalTarget, criteria.trim(), el, false);
+          if (criteria) {
+            _dispatchEvent({
+              sortable: _this,
+              rootEl: criteria,
+              name: "filter",
+              targetEl: target,
+              fromEl: el,
+              toEl: el
+            });
+            pluginEvent2("filter", _this, {
+              evt
+            });
+            return true;
+          }
+        });
+        if (filter) {
+          preventOnFilter && evt.preventDefault();
+          return;
+        }
+      }
+      if (options.handle && !closest(originalTarget, options.handle, el, false)) {
+        return;
+      }
+      this._prepareDragStart(evt, touch, target);
+    },
+    _prepareDragStart: function _prepareDragStart(evt, touch, target) {
+      var _this = this, el = _this.el, options = _this.options, ownerDocument = el.ownerDocument, dragStartFn;
+      if (target && !dragEl && target.parentNode === el) {
+        var dragRect = getRect(target);
+        rootEl = el;
+        dragEl = target;
+        parentEl = dragEl.parentNode;
+        nextEl = dragEl.nextSibling;
+        lastDownEl = target;
+        activeGroup = options.group;
+        Sortable.dragged = dragEl;
+        tapEvt = {
+          target: dragEl,
+          clientX: (touch || evt).clientX,
+          clientY: (touch || evt).clientY
+        };
+        tapDistanceLeft = tapEvt.clientX - dragRect.left;
+        tapDistanceTop = tapEvt.clientY - dragRect.top;
+        this._lastX = (touch || evt).clientX;
+        this._lastY = (touch || evt).clientY;
+        dragEl.style["will-change"] = "all";
+        dragStartFn = function dragStartFn2() {
+          pluginEvent2("delayEnded", _this, {
+            evt
+          });
+          if (Sortable.eventCanceled) {
+            _this._onDrop();
+            return;
+          }
+          _this._disableDelayedDragEvents();
+          if (!FireFox && _this.nativeDraggable) {
+            dragEl.draggable = true;
+          }
+          _this._triggerDragStart(evt, touch);
+          _dispatchEvent({
+            sortable: _this,
+            name: "choose",
+            originalEvent: evt
+          });
+          toggleClass(dragEl, options.chosenClass, true);
+        };
+        options.ignore.split(",").forEach(function(criteria) {
+          find(dragEl, criteria.trim(), _disableDraggable);
+        });
+        on(ownerDocument, "dragover", nearestEmptyInsertDetectEvent);
+        on(ownerDocument, "mousemove", nearestEmptyInsertDetectEvent);
+        on(ownerDocument, "touchmove", nearestEmptyInsertDetectEvent);
+        if (options.supportPointer) {
+          on(ownerDocument, "pointerup", _this._onDrop);
+          !this.nativeDraggable && on(ownerDocument, "pointercancel", _this._onDrop);
+        } else {
+          on(ownerDocument, "mouseup", _this._onDrop);
+          on(ownerDocument, "touchend", _this._onDrop);
+          on(ownerDocument, "touchcancel", _this._onDrop);
+        }
+        if (FireFox && this.nativeDraggable) {
+          this.options.touchStartThreshold = 4;
+          dragEl.draggable = true;
+        }
+        pluginEvent2("delayStart", this, {
+          evt
+        });
+        if (options.delay && (!options.delayOnTouchOnly || touch) && (!this.nativeDraggable || !(Edge || IE11OrLess))) {
+          if (Sortable.eventCanceled) {
+            this._onDrop();
+            return;
+          }
+          if (options.supportPointer) {
+            on(ownerDocument, "pointerup", _this._disableDelayedDrag);
+            on(ownerDocument, "pointercancel", _this._disableDelayedDrag);
+          } else {
+            on(ownerDocument, "mouseup", _this._disableDelayedDrag);
+            on(ownerDocument, "touchend", _this._disableDelayedDrag);
+            on(ownerDocument, "touchcancel", _this._disableDelayedDrag);
+          }
+          on(ownerDocument, "mousemove", _this._delayedDragTouchMoveHandler);
+          on(ownerDocument, "touchmove", _this._delayedDragTouchMoveHandler);
+          options.supportPointer && on(ownerDocument, "pointermove", _this._delayedDragTouchMoveHandler);
+          _this._dragStartTimer = setTimeout(dragStartFn, options.delay);
+        } else {
+          dragStartFn();
+        }
+      }
+    },
+    _delayedDragTouchMoveHandler: function _delayedDragTouchMoveHandler(e) {
+      var touch = e.touches ? e.touches[0] : e;
+      if (Math.max(Math.abs(touch.clientX - this._lastX), Math.abs(touch.clientY - this._lastY)) >= Math.floor(this.options.touchStartThreshold / (this.nativeDraggable && window.devicePixelRatio || 1))) {
+        this._disableDelayedDrag();
+      }
+    },
+    _disableDelayedDrag: function _disableDelayedDrag() {
+      dragEl && _disableDraggable(dragEl);
+      clearTimeout(this._dragStartTimer);
+      this._disableDelayedDragEvents();
+    },
+    _disableDelayedDragEvents: function _disableDelayedDragEvents() {
+      var ownerDocument = this.el.ownerDocument;
+      off(ownerDocument, "mouseup", this._disableDelayedDrag);
+      off(ownerDocument, "touchend", this._disableDelayedDrag);
+      off(ownerDocument, "touchcancel", this._disableDelayedDrag);
+      off(ownerDocument, "pointerup", this._disableDelayedDrag);
+      off(ownerDocument, "pointercancel", this._disableDelayedDrag);
+      off(ownerDocument, "mousemove", this._delayedDragTouchMoveHandler);
+      off(ownerDocument, "touchmove", this._delayedDragTouchMoveHandler);
+      off(ownerDocument, "pointermove", this._delayedDragTouchMoveHandler);
+    },
+    _triggerDragStart: function _triggerDragStart(evt, touch) {
+      touch = touch || evt.pointerType == "touch" && evt;
+      if (!this.nativeDraggable || touch) {
+        if (this.options.supportPointer) {
+          on(document, "pointermove", this._onTouchMove);
+        } else if (touch) {
+          on(document, "touchmove", this._onTouchMove);
+        } else {
+          on(document, "mousemove", this._onTouchMove);
+        }
+      } else {
+        on(dragEl, "dragend", this);
+        on(rootEl, "dragstart", this._onDragStart);
+      }
+      try {
+        if (document.selection) {
+          _nextTick(function() {
+            document.selection.empty();
+          });
+        } else {
+          window.getSelection().removeAllRanges();
+        }
+      } catch (err) {
+      }
+    },
+    _dragStarted: function _dragStarted(fallback, evt) {
+      awaitingDragStarted = false;
+      if (rootEl && dragEl) {
+        pluginEvent2("dragStarted", this, {
+          evt
+        });
+        if (this.nativeDraggable) {
+          on(document, "dragover", _checkOutsideTargetEl);
+        }
+        var options = this.options;
+        !fallback && toggleClass(dragEl, options.dragClass, false);
+        toggleClass(dragEl, options.ghostClass, true);
+        Sortable.active = this;
+        fallback && this._appendGhost();
+        _dispatchEvent({
+          sortable: this,
+          name: "start",
+          originalEvent: evt
+        });
+      } else {
+        this._nulling();
+      }
+    },
+    _emulateDragOver: function _emulateDragOver() {
+      if (touchEvt) {
+        this._lastX = touchEvt.clientX;
+        this._lastY = touchEvt.clientY;
+        _hideGhostForTarget();
+        var target = document.elementFromPoint(touchEvt.clientX, touchEvt.clientY);
+        var parent = target;
+        while (target && target.shadowRoot) {
+          target = target.shadowRoot.elementFromPoint(touchEvt.clientX, touchEvt.clientY);
+          if (target === parent) break;
+          parent = target;
+        }
+        dragEl.parentNode[expando]._isOutsideThisEl(target);
+        if (parent) {
+          do {
+            if (parent[expando]) {
+              var inserted = void 0;
+              inserted = parent[expando]._onDragOver({
+                clientX: touchEvt.clientX,
+                clientY: touchEvt.clientY,
+                target,
+                rootEl: parent
+              });
+              if (inserted && !this.options.dragoverBubble) {
+                break;
+              }
+            }
+            target = parent;
+          } while (parent = getParentOrHost(parent));
+        }
+        _unhideGhostForTarget();
+      }
+    },
+    _onTouchMove: function _onTouchMove(evt) {
+      if (tapEvt) {
+        var options = this.options, fallbackTolerance = options.fallbackTolerance, fallbackOffset = options.fallbackOffset, touch = evt.touches ? evt.touches[0] : evt, ghostMatrix = ghostEl && matrix(ghostEl, true), scaleX = ghostEl && ghostMatrix && ghostMatrix.a, scaleY = ghostEl && ghostMatrix && ghostMatrix.d, relativeScrollOffset = PositionGhostAbsolutely && ghostRelativeParent && getRelativeScrollOffset(ghostRelativeParent), dx = (touch.clientX - tapEvt.clientX + fallbackOffset.x) / (scaleX || 1) + (relativeScrollOffset ? relativeScrollOffset[0] - ghostRelativeParentInitialScroll[0] : 0) / (scaleX || 1), dy = (touch.clientY - tapEvt.clientY + fallbackOffset.y) / (scaleY || 1) + (relativeScrollOffset ? relativeScrollOffset[1] - ghostRelativeParentInitialScroll[1] : 0) / (scaleY || 1);
+        if (!Sortable.active && !awaitingDragStarted) {
+          if (fallbackTolerance && Math.max(Math.abs(touch.clientX - this._lastX), Math.abs(touch.clientY - this._lastY)) < fallbackTolerance) {
+            return;
+          }
+          this._onDragStart(evt, true);
+        }
+        if (ghostEl) {
+          if (ghostMatrix) {
+            ghostMatrix.e += dx - (lastDx || 0);
+            ghostMatrix.f += dy - (lastDy || 0);
+          } else {
+            ghostMatrix = {
+              a: 1,
+              b: 0,
+              c: 0,
+              d: 1,
+              e: dx,
+              f: dy
+            };
+          }
+          var cssMatrix = "matrix(".concat(ghostMatrix.a, ",").concat(ghostMatrix.b, ",").concat(ghostMatrix.c, ",").concat(ghostMatrix.d, ",").concat(ghostMatrix.e, ",").concat(ghostMatrix.f, ")");
+          css(ghostEl, "webkitTransform", cssMatrix);
+          css(ghostEl, "mozTransform", cssMatrix);
+          css(ghostEl, "msTransform", cssMatrix);
+          css(ghostEl, "transform", cssMatrix);
+          lastDx = dx;
+          lastDy = dy;
+          touchEvt = touch;
+        }
+        evt.cancelable && evt.preventDefault();
+      }
+    },
+    _appendGhost: function _appendGhost() {
+      if (!ghostEl) {
+        var container = this.options.fallbackOnBody ? document.body : rootEl, rect = getRect(dragEl, true, PositionGhostAbsolutely, true, container), options = this.options;
+        if (PositionGhostAbsolutely) {
+          ghostRelativeParent = container;
+          while (css(ghostRelativeParent, "position") === "static" && css(ghostRelativeParent, "transform") === "none" && ghostRelativeParent !== document) {
+            ghostRelativeParent = ghostRelativeParent.parentNode;
+          }
+          if (ghostRelativeParent !== document.body && ghostRelativeParent !== document.documentElement) {
+            if (ghostRelativeParent === document) ghostRelativeParent = getWindowScrollingElement();
+            rect.top += ghostRelativeParent.scrollTop;
+            rect.left += ghostRelativeParent.scrollLeft;
+          } else {
+            ghostRelativeParent = getWindowScrollingElement();
+          }
+          ghostRelativeParentInitialScroll = getRelativeScrollOffset(ghostRelativeParent);
+        }
+        ghostEl = dragEl.cloneNode(true);
+        toggleClass(ghostEl, options.ghostClass, false);
+        toggleClass(ghostEl, options.fallbackClass, true);
+        toggleClass(ghostEl, options.dragClass, true);
+        css(ghostEl, "transition", "");
+        css(ghostEl, "transform", "");
+        css(ghostEl, "box-sizing", "border-box");
+        css(ghostEl, "margin", 0);
+        css(ghostEl, "top", rect.top);
+        css(ghostEl, "left", rect.left);
+        css(ghostEl, "width", rect.width);
+        css(ghostEl, "height", rect.height);
+        css(ghostEl, "opacity", "0.8");
+        css(ghostEl, "position", PositionGhostAbsolutely ? "absolute" : "fixed");
+        css(ghostEl, "zIndex", "100000");
+        css(ghostEl, "pointerEvents", "none");
+        Sortable.ghost = ghostEl;
+        container.appendChild(ghostEl);
+        css(ghostEl, "transform-origin", tapDistanceLeft / parseInt(ghostEl.style.width) * 100 + "% " + tapDistanceTop / parseInt(ghostEl.style.height) * 100 + "%");
+      }
+    },
+    _onDragStart: function _onDragStart(evt, fallback) {
+      var _this = this;
+      var dataTransfer = evt.dataTransfer;
+      var options = _this.options;
+      pluginEvent2("dragStart", this, {
+        evt
+      });
+      if (Sortable.eventCanceled) {
+        this._onDrop();
+        return;
+      }
+      pluginEvent2("setupClone", this);
+      if (!Sortable.eventCanceled) {
+        cloneEl = clone(dragEl);
+        cloneEl.removeAttribute("id");
+        cloneEl.draggable = false;
+        cloneEl.style["will-change"] = "";
+        this._hideClone();
+        toggleClass(cloneEl, this.options.chosenClass, false);
+        Sortable.clone = cloneEl;
+      }
+      _this.cloneId = _nextTick(function() {
+        pluginEvent2("clone", _this);
+        if (Sortable.eventCanceled) return;
+        if (!_this.options.removeCloneOnHide) {
+          rootEl.insertBefore(cloneEl, dragEl);
+        }
+        _this._hideClone();
+        _dispatchEvent({
+          sortable: _this,
+          name: "clone"
+        });
+      });
+      !fallback && toggleClass(dragEl, options.dragClass, true);
+      if (fallback) {
+        ignoreNextClick = true;
+        _this._loopId = setInterval(_this._emulateDragOver, 50);
+      } else {
+        off(document, "mouseup", _this._onDrop);
+        off(document, "touchend", _this._onDrop);
+        off(document, "touchcancel", _this._onDrop);
+        if (dataTransfer) {
+          dataTransfer.effectAllowed = "move";
+          options.setData && options.setData.call(_this, dataTransfer, dragEl);
+        }
+        on(document, "drop", _this);
+        css(dragEl, "transform", "translateZ(0)");
+      }
+      awaitingDragStarted = true;
+      _this._dragStartId = _nextTick(_this._dragStarted.bind(_this, fallback, evt));
+      on(document, "selectstart", _this);
+      moved = true;
+      window.getSelection().removeAllRanges();
+      if (Safari) {
+        css(document.body, "user-select", "none");
+      }
+    },
+    // Returns true - if no further action is needed (either inserted or another condition)
+    _onDragOver: function _onDragOver(evt) {
+      var el = this.el, target = evt.target, dragRect, targetRect, revert, options = this.options, group = options.group, activeSortable = Sortable.active, isOwner = activeGroup === group, canSort = options.sort, fromSortable = putSortable || activeSortable, vertical, _this = this, completedFired = false;
+      if (_silent) return;
+      function dragOverEvent(name, extra) {
+        pluginEvent2(name, _this, _objectSpread2({
+          evt,
+          isOwner,
+          axis: vertical ? "vertical" : "horizontal",
+          revert,
+          dragRect,
+          targetRect,
+          canSort,
+          fromSortable,
+          target,
+          completed,
+          onMove: function onMove(target2, after2) {
+            return _onMove(rootEl, el, dragEl, dragRect, target2, getRect(target2), evt, after2);
+          },
+          changed
+        }, extra));
+      }
+      function capture() {
+        dragOverEvent("dragOverAnimationCapture");
+        _this.captureAnimationState();
+        if (_this !== fromSortable) {
+          fromSortable.captureAnimationState();
+        }
+      }
+      function completed(insertion) {
+        dragOverEvent("dragOverCompleted", {
+          insertion
+        });
+        if (insertion) {
+          if (isOwner) {
+            activeSortable._hideClone();
+          } else {
+            activeSortable._showClone(_this);
+          }
+          if (_this !== fromSortable) {
+            toggleClass(dragEl, putSortable ? putSortable.options.ghostClass : activeSortable.options.ghostClass, false);
+            toggleClass(dragEl, options.ghostClass, true);
+          }
+          if (putSortable !== _this && _this !== Sortable.active) {
+            putSortable = _this;
+          } else if (_this === Sortable.active && putSortable) {
+            putSortable = null;
+          }
+          if (fromSortable === _this) {
+            _this._ignoreWhileAnimating = target;
+          }
+          _this.animateAll(function() {
+            dragOverEvent("dragOverAnimationComplete");
+            _this._ignoreWhileAnimating = null;
+          });
+          if (_this !== fromSortable) {
+            fromSortable.animateAll();
+            fromSortable._ignoreWhileAnimating = null;
+          }
+        }
+        if (target === dragEl && !dragEl.animated || target === el && !target.animated) {
+          lastTarget = null;
+        }
+        if (!options.dragoverBubble && !evt.rootEl && target !== document) {
+          dragEl.parentNode[expando]._isOutsideThisEl(evt.target);
+          !insertion && nearestEmptyInsertDetectEvent(evt);
+        }
+        !options.dragoverBubble && evt.stopPropagation && evt.stopPropagation();
+        return completedFired = true;
+      }
+      function changed() {
+        newIndex = index(dragEl);
+        newDraggableIndex = index(dragEl, options.draggable);
+        _dispatchEvent({
+          sortable: _this,
+          name: "change",
+          toEl: el,
+          newIndex,
+          newDraggableIndex,
+          originalEvent: evt
+        });
+      }
+      if (evt.preventDefault !== void 0) {
+        evt.cancelable && evt.preventDefault();
+      }
+      target = closest(target, options.draggable, el, true);
+      dragOverEvent("dragOver");
+      if (Sortable.eventCanceled) return completedFired;
+      if (dragEl.contains(evt.target) || target.animated && target.animatingX && target.animatingY || _this._ignoreWhileAnimating === target) {
+        return completed(false);
+      }
+      ignoreNextClick = false;
+      if (activeSortable && !options.disabled && (isOwner ? canSort || (revert = parentEl !== rootEl) : putSortable === this || (this.lastPutMode = activeGroup.checkPull(this, activeSortable, dragEl, evt)) && group.checkPut(this, activeSortable, dragEl, evt))) {
+        vertical = this._getDirection(evt, target) === "vertical";
+        dragRect = getRect(dragEl);
+        dragOverEvent("dragOverValid");
+        if (Sortable.eventCanceled) return completedFired;
+        if (revert) {
+          parentEl = rootEl;
+          capture();
+          this._hideClone();
+          dragOverEvent("revert");
+          if (!Sortable.eventCanceled) {
+            if (nextEl) {
+              rootEl.insertBefore(dragEl, nextEl);
+            } else {
+              rootEl.appendChild(dragEl);
+            }
+          }
+          return completed(true);
+        }
+        var elLastChild = lastChild(el, options.draggable);
+        if (!elLastChild || _ghostIsLast(evt, vertical, this) && !elLastChild.animated) {
+          if (elLastChild === dragEl) {
+            return completed(false);
+          }
+          if (elLastChild && el === evt.target) {
+            target = elLastChild;
+          }
+          if (target) {
+            targetRect = getRect(target);
+          }
+          if (_onMove(rootEl, el, dragEl, dragRect, target, targetRect, evt, !!target) !== false) {
+            capture();
+            if (elLastChild && elLastChild.nextSibling) {
+              el.insertBefore(dragEl, elLastChild.nextSibling);
+            } else {
+              el.appendChild(dragEl);
+            }
+            parentEl = el;
+            changed();
+            return completed(true);
+          }
+        } else if (elLastChild && _ghostIsFirst(evt, vertical, this)) {
+          var firstChild = getChild(el, 0, options, true);
+          if (firstChild === dragEl) {
+            return completed(false);
+          }
+          target = firstChild;
+          targetRect = getRect(target);
+          if (_onMove(rootEl, el, dragEl, dragRect, target, targetRect, evt, false) !== false) {
+            capture();
+            el.insertBefore(dragEl, firstChild);
+            parentEl = el;
+            changed();
+            return completed(true);
+          }
+        } else if (target.parentNode === el) {
+          targetRect = getRect(target);
+          var direction = 0, targetBeforeFirstSwap, differentLevel = dragEl.parentNode !== el, differentRowCol = !_dragElInRowColumn(dragEl.animated && dragEl.toRect || dragRect, target.animated && target.toRect || targetRect, vertical), side1 = vertical ? "top" : "left", scrolledPastTop = isScrolledPast(target, "top", "top") || isScrolledPast(dragEl, "top", "top"), scrollBefore = scrolledPastTop ? scrolledPastTop.scrollTop : void 0;
+          if (lastTarget !== target) {
+            targetBeforeFirstSwap = targetRect[side1];
+            pastFirstInvertThresh = false;
+            isCircumstantialInvert = !differentRowCol && options.invertSwap || differentLevel;
+          }
+          direction = _getSwapDirection(evt, target, targetRect, vertical, differentRowCol ? 1 : options.swapThreshold, options.invertedSwapThreshold == null ? options.swapThreshold : options.invertedSwapThreshold, isCircumstantialInvert, lastTarget === target);
+          var sibling;
+          if (direction !== 0) {
+            var dragIndex = index(dragEl);
+            do {
+              dragIndex -= direction;
+              sibling = parentEl.children[dragIndex];
+            } while (sibling && (css(sibling, "display") === "none" || sibling === ghostEl));
+          }
+          if (direction === 0 || sibling === target) {
+            return completed(false);
+          }
+          lastTarget = target;
+          lastDirection = direction;
+          var nextSibling = target.nextElementSibling, after = false;
+          after = direction === 1;
+          var moveVector = _onMove(rootEl, el, dragEl, dragRect, target, targetRect, evt, after);
+          if (moveVector !== false) {
+            if (moveVector === 1 || moveVector === -1) {
+              after = moveVector === 1;
+            }
+            _silent = true;
+            setTimeout(_unsilent, 30);
+            capture();
+            if (after && !nextSibling) {
+              el.appendChild(dragEl);
+            } else {
+              target.parentNode.insertBefore(dragEl, after ? nextSibling : target);
+            }
+            if (scrolledPastTop) {
+              scrollBy(scrolledPastTop, 0, scrollBefore - scrolledPastTop.scrollTop);
+            }
+            parentEl = dragEl.parentNode;
+            if (targetBeforeFirstSwap !== void 0 && !isCircumstantialInvert) {
+              targetMoveDistance = Math.abs(targetBeforeFirstSwap - getRect(target)[side1]);
+            }
+            changed();
+            return completed(true);
+          }
+        }
+        if (el.contains(dragEl)) {
+          return completed(false);
+        }
+      }
+      return false;
+    },
+    _ignoreWhileAnimating: null,
+    _offMoveEvents: function _offMoveEvents() {
+      off(document, "mousemove", this._onTouchMove);
+      off(document, "touchmove", this._onTouchMove);
+      off(document, "pointermove", this._onTouchMove);
+      off(document, "dragover", nearestEmptyInsertDetectEvent);
+      off(document, "mousemove", nearestEmptyInsertDetectEvent);
+      off(document, "touchmove", nearestEmptyInsertDetectEvent);
+    },
+    _offUpEvents: function _offUpEvents() {
+      var ownerDocument = this.el.ownerDocument;
+      off(ownerDocument, "mouseup", this._onDrop);
+      off(ownerDocument, "touchend", this._onDrop);
+      off(ownerDocument, "pointerup", this._onDrop);
+      off(ownerDocument, "pointercancel", this._onDrop);
+      off(ownerDocument, "touchcancel", this._onDrop);
+      off(document, "selectstart", this);
+    },
+    _onDrop: function _onDrop(evt) {
+      var el = this.el, options = this.options;
+      newIndex = index(dragEl);
+      newDraggableIndex = index(dragEl, options.draggable);
+      pluginEvent2("drop", this, {
+        evt
+      });
+      parentEl = dragEl && dragEl.parentNode;
+      newIndex = index(dragEl);
+      newDraggableIndex = index(dragEl, options.draggable);
+      if (Sortable.eventCanceled) {
+        this._nulling();
+        return;
+      }
+      awaitingDragStarted = false;
+      isCircumstantialInvert = false;
+      pastFirstInvertThresh = false;
+      clearInterval(this._loopId);
+      clearTimeout(this._dragStartTimer);
+      _cancelNextTick(this.cloneId);
+      _cancelNextTick(this._dragStartId);
+      if (this.nativeDraggable) {
+        off(document, "drop", this);
+        off(el, "dragstart", this._onDragStart);
+      }
+      this._offMoveEvents();
+      this._offUpEvents();
+      if (Safari) {
+        css(document.body, "user-select", "");
+      }
+      css(dragEl, "transform", "");
+      if (evt) {
+        if (moved) {
+          evt.cancelable && evt.preventDefault();
+          !options.dropBubble && evt.stopPropagation();
+        }
+        ghostEl && ghostEl.parentNode && ghostEl.parentNode.removeChild(ghostEl);
+        if (rootEl === parentEl || putSortable && putSortable.lastPutMode !== "clone") {
+          cloneEl && cloneEl.parentNode && cloneEl.parentNode.removeChild(cloneEl);
+        }
+        if (dragEl) {
+          if (this.nativeDraggable) {
+            off(dragEl, "dragend", this);
+          }
+          _disableDraggable(dragEl);
+          dragEl.style["will-change"] = "";
+          if (moved && !awaitingDragStarted) {
+            toggleClass(dragEl, putSortable ? putSortable.options.ghostClass : this.options.ghostClass, false);
+          }
+          toggleClass(dragEl, this.options.chosenClass, false);
+          _dispatchEvent({
+            sortable: this,
+            name: "unchoose",
+            toEl: parentEl,
+            newIndex: null,
+            newDraggableIndex: null,
+            originalEvent: evt
+          });
+          if (rootEl !== parentEl) {
+            if (newIndex >= 0) {
+              _dispatchEvent({
+                rootEl: parentEl,
+                name: "add",
+                toEl: parentEl,
+                fromEl: rootEl,
+                originalEvent: evt
+              });
+              _dispatchEvent({
+                sortable: this,
+                name: "remove",
+                toEl: parentEl,
+                originalEvent: evt
+              });
+              _dispatchEvent({
+                rootEl: parentEl,
+                name: "sort",
+                toEl: parentEl,
+                fromEl: rootEl,
+                originalEvent: evt
+              });
+              _dispatchEvent({
+                sortable: this,
+                name: "sort",
+                toEl: parentEl,
+                originalEvent: evt
+              });
+            }
+            putSortable && putSortable.save();
+          } else {
+            if (newIndex !== oldIndex) {
+              if (newIndex >= 0) {
+                _dispatchEvent({
+                  sortable: this,
+                  name: "update",
+                  toEl: parentEl,
+                  originalEvent: evt
+                });
+                _dispatchEvent({
+                  sortable: this,
+                  name: "sort",
+                  toEl: parentEl,
+                  originalEvent: evt
+                });
+              }
+            }
+          }
+          if (Sortable.active) {
+            if (newIndex == null || newIndex === -1) {
+              newIndex = oldIndex;
+              newDraggableIndex = oldDraggableIndex;
+            }
+            _dispatchEvent({
+              sortable: this,
+              name: "end",
+              toEl: parentEl,
+              originalEvent: evt
+            });
+            this.save();
+          }
+        }
+      }
+      this._nulling();
+    },
+    _nulling: function _nulling() {
+      pluginEvent2("nulling", this);
+      rootEl = dragEl = parentEl = ghostEl = nextEl = cloneEl = lastDownEl = cloneHidden = tapEvt = touchEvt = moved = newIndex = newDraggableIndex = oldIndex = oldDraggableIndex = lastTarget = lastDirection = putSortable = activeGroup = Sortable.dragged = Sortable.ghost = Sortable.clone = Sortable.active = null;
+      savedInputChecked.forEach(function(el) {
+        el.checked = true;
+      });
+      savedInputChecked.length = lastDx = lastDy = 0;
+    },
+    handleEvent: function handleEvent(evt) {
+      switch (evt.type) {
+        case "drop":
+        case "dragend":
+          this._onDrop(evt);
+          break;
+        case "dragenter":
+        case "dragover":
+          if (dragEl) {
+            this._onDragOver(evt);
+            _globalDragOver(evt);
+          }
+          break;
+        case "selectstart":
+          evt.preventDefault();
+          break;
+      }
+    },
+    /**
+     * Serializes the item into an array of string.
+     * @returns {String[]}
+     */
+    toArray: function toArray() {
+      var order = [], el, children = this.el.children, i = 0, n = children.length, options = this.options;
+      for (; i < n; i++) {
+        el = children[i];
+        if (closest(el, options.draggable, this.el, false)) {
+          order.push(el.getAttribute(options.dataIdAttr) || _generateId(el));
+        }
+      }
+      return order;
+    },
+    /**
+     * Sorts the elements according to the array.
+     * @param  {String[]}  order  order of the items
+     */
+    sort: function sort(order, useAnimation) {
+      var items = {}, rootEl2 = this.el;
+      this.toArray().forEach(function(id, i) {
+        var el = rootEl2.children[i];
+        if (closest(el, this.options.draggable, rootEl2, false)) {
+          items[id] = el;
+        }
+      }, this);
+      useAnimation && this.captureAnimationState();
+      order.forEach(function(id) {
+        if (items[id]) {
+          rootEl2.removeChild(items[id]);
+          rootEl2.appendChild(items[id]);
+        }
+      });
+      useAnimation && this.animateAll();
+    },
+    /**
+     * Save the current sorting
+     */
+    save: function save() {
+      var store = this.options.store;
+      store && store.set && store.set(this);
+    },
+    /**
+     * For each element in the set, get the first element that matches the selector by testing the element itself and traversing up through its ancestors in the DOM tree.
+     * @param   {HTMLElement}  el
+     * @param   {String}       [selector]  default: `options.draggable`
+     * @returns {HTMLElement|null}
+     */
+    closest: function closest$1(el, selector) {
+      return closest(el, selector || this.options.draggable, this.el, false);
+    },
+    /**
+     * Set/get option
+     * @param   {string} name
+     * @param   {*}      [value]
+     * @returns {*}
+     */
+    option: function option(name, value) {
+      var options = this.options;
+      if (value === void 0) {
+        return options[name];
+      } else {
+        var modifiedValue = PluginManager.modifyOption(this, name, value);
+        if (typeof modifiedValue !== "undefined") {
+          options[name] = modifiedValue;
+        } else {
+          options[name] = value;
+        }
+        if (name === "group") {
+          _prepareGroup(options);
+        }
+      }
+    },
+    /**
+     * Destroy
+     */
+    destroy: function destroy() {
+      pluginEvent2("destroy", this);
+      var el = this.el;
+      el[expando] = null;
+      off(el, "mousedown", this._onTapStart);
+      off(el, "touchstart", this._onTapStart);
+      off(el, "pointerdown", this._onTapStart);
+      if (this.nativeDraggable) {
+        off(el, "dragover", this);
+        off(el, "dragenter", this);
+      }
+      Array.prototype.forEach.call(el.querySelectorAll("[draggable]"), function(el2) {
+        el2.removeAttribute("draggable");
+      });
+      this._onDrop();
+      this._disableDelayedDragEvents();
+      sortables.splice(sortables.indexOf(this.el), 1);
+      this.el = el = null;
+    },
+    _hideClone: function _hideClone() {
+      if (!cloneHidden) {
+        pluginEvent2("hideClone", this);
+        if (Sortable.eventCanceled) return;
+        css(cloneEl, "display", "none");
+        if (this.options.removeCloneOnHide && cloneEl.parentNode) {
+          cloneEl.parentNode.removeChild(cloneEl);
+        }
+        cloneHidden = true;
+      }
+    },
+    _showClone: function _showClone(putSortable2) {
+      if (putSortable2.lastPutMode !== "clone") {
+        this._hideClone();
+        return;
+      }
+      if (cloneHidden) {
+        pluginEvent2("showClone", this);
+        if (Sortable.eventCanceled) return;
+        if (dragEl.parentNode == rootEl && !this.options.group.revertClone) {
+          rootEl.insertBefore(cloneEl, dragEl);
+        } else if (nextEl) {
+          rootEl.insertBefore(cloneEl, nextEl);
+        } else {
+          rootEl.appendChild(cloneEl);
+        }
+        if (this.options.group.revertClone) {
+          this.animate(dragEl, cloneEl);
+        }
+        css(cloneEl, "display", "");
+        cloneHidden = false;
+      }
+    }
+  };
+  function _globalDragOver(evt) {
+    if (evt.dataTransfer) {
+      evt.dataTransfer.dropEffect = "move";
+    }
+    evt.cancelable && evt.preventDefault();
+  }
+  function _onMove(fromEl, toEl, dragEl2, dragRect, targetEl, targetRect, originalEvent, willInsertAfter) {
+    var evt, sortable = fromEl[expando], onMoveFn = sortable.options.onMove, retVal;
+    if (window.CustomEvent && !IE11OrLess && !Edge) {
+      evt = new CustomEvent("move", {
+        bubbles: true,
+        cancelable: true
+      });
+    } else {
+      evt = document.createEvent("Event");
+      evt.initEvent("move", true, true);
+    }
+    evt.to = toEl;
+    evt.from = fromEl;
+    evt.dragged = dragEl2;
+    evt.draggedRect = dragRect;
+    evt.related = targetEl || toEl;
+    evt.relatedRect = targetRect || getRect(toEl);
+    evt.willInsertAfter = willInsertAfter;
+    evt.originalEvent = originalEvent;
+    fromEl.dispatchEvent(evt);
+    if (onMoveFn) {
+      retVal = onMoveFn.call(sortable, evt, originalEvent);
+    }
+    return retVal;
+  }
+  function _disableDraggable(el) {
+    el.draggable = false;
+  }
+  function _unsilent() {
+    _silent = false;
+  }
+  function _ghostIsFirst(evt, vertical, sortable) {
+    var firstElRect = getRect(getChild(sortable.el, 0, sortable.options, true));
+    var childContainingRect = getChildContainingRectFromElement(sortable.el, sortable.options, ghostEl);
+    var spacer = 10;
+    return vertical ? evt.clientX < childContainingRect.left - spacer || evt.clientY < firstElRect.top && evt.clientX < firstElRect.right : evt.clientY < childContainingRect.top - spacer || evt.clientY < firstElRect.bottom && evt.clientX < firstElRect.left;
+  }
+  function _ghostIsLast(evt, vertical, sortable) {
+    var lastElRect = getRect(lastChild(sortable.el, sortable.options.draggable));
+    var childContainingRect = getChildContainingRectFromElement(sortable.el, sortable.options, ghostEl);
+    var spacer = 10;
+    return vertical ? evt.clientX > childContainingRect.right + spacer || evt.clientY > lastElRect.bottom && evt.clientX > lastElRect.left : evt.clientY > childContainingRect.bottom + spacer || evt.clientX > lastElRect.right && evt.clientY > lastElRect.top;
+  }
+  function _getSwapDirection(evt, target, targetRect, vertical, swapThreshold, invertedSwapThreshold, invertSwap, isLastTarget) {
+    var mouseOnAxis = vertical ? evt.clientY : evt.clientX, targetLength = vertical ? targetRect.height : targetRect.width, targetS1 = vertical ? targetRect.top : targetRect.left, targetS2 = vertical ? targetRect.bottom : targetRect.right, invert = false;
+    if (!invertSwap) {
+      if (isLastTarget && targetMoveDistance < targetLength * swapThreshold) {
+        if (!pastFirstInvertThresh && (lastDirection === 1 ? mouseOnAxis > targetS1 + targetLength * invertedSwapThreshold / 2 : mouseOnAxis < targetS2 - targetLength * invertedSwapThreshold / 2)) {
+          pastFirstInvertThresh = true;
+        }
+        if (!pastFirstInvertThresh) {
+          if (lastDirection === 1 ? mouseOnAxis < targetS1 + targetMoveDistance : mouseOnAxis > targetS2 - targetMoveDistance) {
+            return -lastDirection;
+          }
+        } else {
+          invert = true;
+        }
+      } else {
+        if (mouseOnAxis > targetS1 + targetLength * (1 - swapThreshold) / 2 && mouseOnAxis < targetS2 - targetLength * (1 - swapThreshold) / 2) {
+          return _getInsertDirection(target);
+        }
+      }
+    }
+    invert = invert || invertSwap;
+    if (invert) {
+      if (mouseOnAxis < targetS1 + targetLength * invertedSwapThreshold / 2 || mouseOnAxis > targetS2 - targetLength * invertedSwapThreshold / 2) {
+        return mouseOnAxis > targetS1 + targetLength / 2 ? 1 : -1;
+      }
+    }
+    return 0;
+  }
+  function _getInsertDirection(target) {
+    if (index(dragEl) < index(target)) {
+      return 1;
+    } else {
+      return -1;
+    }
+  }
+  function _generateId(el) {
+    var str = el.tagName + el.className + el.src + el.href + el.textContent, i = str.length, sum = 0;
+    while (i--) {
+      sum += str.charCodeAt(i);
+    }
+    return sum.toString(36);
+  }
+  function _saveInputCheckedState(root) {
+    savedInputChecked.length = 0;
+    var inputs = root.getElementsByTagName("input");
+    var idx = inputs.length;
+    while (idx--) {
+      var el = inputs[idx];
+      el.checked && savedInputChecked.push(el);
+    }
+  }
+  function _nextTick(fn) {
+    return setTimeout(fn, 0);
+  }
+  function _cancelNextTick(id) {
+    return clearTimeout(id);
+  }
+  if (documentExists) {
+    on(document, "touchmove", function(evt) {
+      if ((Sortable.active || awaitingDragStarted) && evt.cancelable) {
+        evt.preventDefault();
+      }
+    });
+  }
+  Sortable.utils = {
+    on,
+    off,
+    css,
+    find,
+    is: function is(el, selector) {
+      return !!closest(el, selector, el, false);
+    },
+    extend,
+    throttle,
+    closest,
+    toggleClass,
+    clone,
+    index,
+    nextTick: _nextTick,
+    cancelNextTick: _cancelNextTick,
+    detectDirection: _detectDirection,
+    getChild,
+    expando
+  };
+  Sortable.get = function(element) {
+    return element[expando];
+  };
+  Sortable.mount = function() {
+    for (var _len = arguments.length, plugins2 = new Array(_len), _key = 0; _key < _len; _key++) {
+      plugins2[_key] = arguments[_key];
+    }
+    if (plugins2[0].constructor === Array) plugins2 = plugins2[0];
+    plugins2.forEach(function(plugin) {
+      if (!plugin.prototype || !plugin.prototype.constructor) {
+        throw "Sortable: Mounted plugin must be a constructor function, not ".concat({}.toString.call(plugin));
+      }
+      if (plugin.utils) Sortable.utils = _objectSpread2(_objectSpread2({}, Sortable.utils), plugin.utils);
+      PluginManager.mount(plugin);
+    });
+  };
+  Sortable.create = function(el, options) {
+    return new Sortable(el, options);
+  };
+  Sortable.version = version;
+  var autoScrolls = [];
+  var scrollEl;
+  var scrollRootEl;
+  var scrolling = false;
+  var lastAutoScrollX;
+  var lastAutoScrollY;
+  var touchEvt$1;
+  var pointerElemChangedInterval;
+  function AutoScrollPlugin() {
+    function AutoScroll() {
+      this.defaults = {
+        scroll: true,
+        forceAutoScrollFallback: false,
+        scrollSensitivity: 30,
+        scrollSpeed: 10,
+        bubbleScroll: true
+      };
+      for (var fn in this) {
+        if (fn.charAt(0) === "_" && typeof this[fn] === "function") {
+          this[fn] = this[fn].bind(this);
+        }
+      }
+    }
+    AutoScroll.prototype = {
+      dragStarted: function dragStarted(_ref) {
+        var originalEvent = _ref.originalEvent;
+        if (this.sortable.nativeDraggable) {
+          on(document, "dragover", this._handleAutoScroll);
+        } else {
+          if (this.options.supportPointer) {
+            on(document, "pointermove", this._handleFallbackAutoScroll);
+          } else if (originalEvent.touches) {
+            on(document, "touchmove", this._handleFallbackAutoScroll);
+          } else {
+            on(document, "mousemove", this._handleFallbackAutoScroll);
+          }
+        }
+      },
+      dragOverCompleted: function dragOverCompleted(_ref2) {
+        var originalEvent = _ref2.originalEvent;
+        if (!this.options.dragOverBubble && !originalEvent.rootEl) {
+          this._handleAutoScroll(originalEvent);
+        }
+      },
+      drop: function drop3() {
+        if (this.sortable.nativeDraggable) {
+          off(document, "dragover", this._handleAutoScroll);
+        } else {
+          off(document, "pointermove", this._handleFallbackAutoScroll);
+          off(document, "touchmove", this._handleFallbackAutoScroll);
+          off(document, "mousemove", this._handleFallbackAutoScroll);
+        }
+        clearPointerElemChangedInterval();
+        clearAutoScrolls();
+        cancelThrottle();
+      },
+      nulling: function nulling() {
+        touchEvt$1 = scrollRootEl = scrollEl = scrolling = pointerElemChangedInterval = lastAutoScrollX = lastAutoScrollY = null;
+        autoScrolls.length = 0;
+      },
+      _handleFallbackAutoScroll: function _handleFallbackAutoScroll(evt) {
+        this._handleAutoScroll(evt, true);
+      },
+      _handleAutoScroll: function _handleAutoScroll(evt, fallback) {
+        var _this = this;
+        var x = (evt.touches ? evt.touches[0] : evt).clientX, y = (evt.touches ? evt.touches[0] : evt).clientY, elem = document.elementFromPoint(x, y);
+        touchEvt$1 = evt;
+        if (fallback || this.options.forceAutoScrollFallback || Edge || IE11OrLess || Safari) {
+          autoScroll(evt, this.options, elem, fallback);
+          var ogElemScroller = getParentAutoScrollElement(elem, true);
+          if (scrolling && (!pointerElemChangedInterval || x !== lastAutoScrollX || y !== lastAutoScrollY)) {
+            pointerElemChangedInterval && clearPointerElemChangedInterval();
+            pointerElemChangedInterval = setInterval(function() {
+              var newElem = getParentAutoScrollElement(document.elementFromPoint(x, y), true);
+              if (newElem !== ogElemScroller) {
+                ogElemScroller = newElem;
+                clearAutoScrolls();
+              }
+              autoScroll(evt, _this.options, newElem, fallback);
+            }, 10);
+            lastAutoScrollX = x;
+            lastAutoScrollY = y;
+          }
+        } else {
+          if (!this.options.bubbleScroll || getParentAutoScrollElement(elem, true) === getWindowScrollingElement()) {
+            clearAutoScrolls();
+            return;
+          }
+          autoScroll(evt, this.options, getParentAutoScrollElement(elem, false), false);
+        }
+      }
+    };
+    return _extends(AutoScroll, {
+      pluginName: "scroll",
+      initializeByDefault: true
+    });
+  }
+  function clearAutoScrolls() {
+    autoScrolls.forEach(function(autoScroll2) {
+      clearInterval(autoScroll2.pid);
+    });
+    autoScrolls = [];
+  }
+  function clearPointerElemChangedInterval() {
+    clearInterval(pointerElemChangedInterval);
+  }
+  var autoScroll = throttle(function(evt, options, rootEl2, isFallback) {
+    if (!options.scroll) return;
+    var x = (evt.touches ? evt.touches[0] : evt).clientX, y = (evt.touches ? evt.touches[0] : evt).clientY, sens = options.scrollSensitivity, speed = options.scrollSpeed, winScroller = getWindowScrollingElement();
+    var scrollThisInstance = false, scrollCustomFn;
+    if (scrollRootEl !== rootEl2) {
+      scrollRootEl = rootEl2;
+      clearAutoScrolls();
+      scrollEl = options.scroll;
+      scrollCustomFn = options.scrollFn;
+      if (scrollEl === true) {
+        scrollEl = getParentAutoScrollElement(rootEl2, true);
+      }
+    }
+    var layersOut = 0;
+    var currentParent = scrollEl;
+    do {
+      var el = currentParent, rect = getRect(el), top = rect.top, bottom = rect.bottom, left = rect.left, right = rect.right, width = rect.width, height = rect.height, canScrollX = void 0, canScrollY = void 0, scrollWidth = el.scrollWidth, scrollHeight = el.scrollHeight, elCSS = css(el), scrollPosX = el.scrollLeft, scrollPosY = el.scrollTop;
+      if (el === winScroller) {
+        canScrollX = width < scrollWidth && (elCSS.overflowX === "auto" || elCSS.overflowX === "scroll" || elCSS.overflowX === "visible");
+        canScrollY = height < scrollHeight && (elCSS.overflowY === "auto" || elCSS.overflowY === "scroll" || elCSS.overflowY === "visible");
+      } else {
+        canScrollX = width < scrollWidth && (elCSS.overflowX === "auto" || elCSS.overflowX === "scroll");
+        canScrollY = height < scrollHeight && (elCSS.overflowY === "auto" || elCSS.overflowY === "scroll");
+      }
+      var vx = canScrollX && (Math.abs(right - x) <= sens && scrollPosX + width < scrollWidth) - (Math.abs(left - x) <= sens && !!scrollPosX);
+      var vy = canScrollY && (Math.abs(bottom - y) <= sens && scrollPosY + height < scrollHeight) - (Math.abs(top - y) <= sens && !!scrollPosY);
+      if (!autoScrolls[layersOut]) {
+        for (var i = 0; i <= layersOut; i++) {
+          if (!autoScrolls[i]) {
+            autoScrolls[i] = {};
+          }
+        }
+      }
+      if (autoScrolls[layersOut].vx != vx || autoScrolls[layersOut].vy != vy || autoScrolls[layersOut].el !== el) {
+        autoScrolls[layersOut].el = el;
+        autoScrolls[layersOut].vx = vx;
+        autoScrolls[layersOut].vy = vy;
+        clearInterval(autoScrolls[layersOut].pid);
+        if (vx != 0 || vy != 0) {
+          scrollThisInstance = true;
+          autoScrolls[layersOut].pid = setInterval(function() {
+            if (isFallback && this.layer === 0) {
+              Sortable.active._onTouchMove(touchEvt$1);
+            }
+            var scrollOffsetY = autoScrolls[this.layer].vy ? autoScrolls[this.layer].vy * speed : 0;
+            var scrollOffsetX = autoScrolls[this.layer].vx ? autoScrolls[this.layer].vx * speed : 0;
+            if (typeof scrollCustomFn === "function") {
+              if (scrollCustomFn.call(Sortable.dragged.parentNode[expando], scrollOffsetX, scrollOffsetY, evt, touchEvt$1, autoScrolls[this.layer].el) !== "continue") {
+                return;
+              }
+            }
+            scrollBy(autoScrolls[this.layer].el, scrollOffsetX, scrollOffsetY);
+          }.bind({
+            layer: layersOut
+          }), 24);
+        }
+      }
+      layersOut++;
+    } while (options.bubbleScroll && currentParent !== winScroller && (currentParent = getParentAutoScrollElement(currentParent, false)));
+    scrolling = scrollThisInstance;
+  }, 30);
+  var drop = function drop2(_ref) {
+    var originalEvent = _ref.originalEvent, putSortable2 = _ref.putSortable, dragEl2 = _ref.dragEl, activeSortable = _ref.activeSortable, dispatchSortableEvent = _ref.dispatchSortableEvent, hideGhostForTarget = _ref.hideGhostForTarget, unhideGhostForTarget = _ref.unhideGhostForTarget;
+    if (!originalEvent) return;
+    var toSortable = putSortable2 || activeSortable;
+    hideGhostForTarget();
+    var touch = originalEvent.changedTouches && originalEvent.changedTouches.length ? originalEvent.changedTouches[0] : originalEvent;
+    var target = document.elementFromPoint(touch.clientX, touch.clientY);
+    unhideGhostForTarget();
+    if (toSortable && !toSortable.el.contains(target)) {
+      dispatchSortableEvent("spill");
+      this.onSpill({
+        dragEl: dragEl2,
+        putSortable: putSortable2
+      });
+    }
+  };
+  function Revert() {
+  }
+  Revert.prototype = {
+    startIndex: null,
+    dragStart: function dragStart(_ref2) {
+      var oldDraggableIndex2 = _ref2.oldDraggableIndex;
+      this.startIndex = oldDraggableIndex2;
+    },
+    onSpill: function onSpill(_ref3) {
+      var dragEl2 = _ref3.dragEl, putSortable2 = _ref3.putSortable;
+      this.sortable.captureAnimationState();
+      if (putSortable2) {
+        putSortable2.captureAnimationState();
+      }
+      var nextSibling = getChild(this.sortable.el, this.startIndex, this.options);
+      if (nextSibling) {
+        this.sortable.el.insertBefore(dragEl2, nextSibling);
+      } else {
+        this.sortable.el.appendChild(dragEl2);
+      }
+      this.sortable.animateAll();
+      if (putSortable2) {
+        putSortable2.animateAll();
+      }
+    },
+    drop
+  };
+  _extends(Revert, {
+    pluginName: "revertOnSpill"
+  });
+  function Remove() {
+  }
+  Remove.prototype = {
+    onSpill: function onSpill2(_ref4) {
+      var dragEl2 = _ref4.dragEl, putSortable2 = _ref4.putSortable;
+      var parentSortable = putSortable2 || this.sortable;
+      parentSortable.captureAnimationState();
+      dragEl2.parentNode && dragEl2.parentNode.removeChild(dragEl2);
+      parentSortable.animateAll();
+    },
+    drop
+  };
+  _extends(Remove, {
+    pluginName: "removeOnSpill"
+  });
+  Sortable.mount(new AutoScrollPlugin());
+  Sortable.mount(Remove, Revert);
+  var sortable_esm_default = Sortable;
+
+  // inline-css:/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-official-only-20260919/gpt/src/prompts/panel.css
+  var panel_default = '/* Modal adapted from GPT Conversation Toolkit. Copyright (c) 2026 bujue3709.\n * MIT; see THIRD_PARTY_NOTICES.md. Compact copy-only UI is a Yada adapter. */\n:host { font:13px/1.5 system-ui; color-scheme:light; }\n:host([hidden]), [hidden] { display:none !important; }\n* { box-sizing:border-box; }\n.yada-prompt-modal { position:fixed; inset:0; z-index:2147483647; --bg:#fff; --text:#303030; --muted:#666; --border:#8884; --hover:#8881; color:var(--text); overscroll-behavior:contain; }\n.yada-prompt-modal[data-toolkit-theme="dark"] { --bg:#272727; --text:#eee; --muted:#bbb; --hover:#fff1; color-scheme:dark; }\n.yada-prompt-backdrop { position:absolute; inset:0; background:#0006; touch-action:none; }\n.yada-prompt-panel { position:absolute; right:20px; bottom:20px; width:min(620px, calc(100vw - 24px)); min-height:0; height:auto; max-height:min(72vh, 680px); display:flex; flex-direction:column; gap:12px; padding:16px; overflow:hidden; background:var(--bg); border:1px solid var(--border); border-radius:16px; box-shadow:0 12px 40px #0003; }\n.yada-prompt-header, .yada-prompt-item-header { display:flex; align-items:center; justify-content:space-between; gap:12px; }\n.yada-prompt-header { flex-shrink:0; }\n.yada-prompt-header strong { font-size:16px; }\n.yada-prompt-header-actions, .yada-prompt-item-actions { display:flex; gap:4px; flex-shrink:0; }\nbutton { font:inherit; color:inherit; background:transparent; border:1px solid var(--border); border-radius:8px; padding:5px 9px; cursor:pointer; }\nbutton:hover { background:var(--hover); }\nbutton:focus-visible, input:focus-visible, textarea:focus-visible { outline:2px solid #10a37f; outline-offset:2px; }\n[data-prompt-action="add"], .yada-prompt-add { color:#fff; background:#10a37f; border-color:#10a37f; }\n[data-prompt-action="add"]:hover, .yada-prompt-add:hover { background:#0c8567; }\n.yada-prompt-list { min-height:0; overflow-y:auto; overscroll-behavior:contain; display:flex; flex-direction:column; gap:10px; scrollbar-width:thin; }\n.yada-prompt-item { border:1px solid var(--border); border-radius:10px; padding:10px 12px; flex-shrink:0; cursor:default; }\n.yada-prompt-item-title { flex:1; margin:0; font-size:13px; overflow-wrap:anywhere; min-width:0; }\n.yada-prompt-icon { width:30px; height:30px; padding:6px; border-color:transparent; display:grid; place-items:center; }\n.yada-prompt-icon[data-prompt-action="delete"] { color:#c86464; }\n.yada-prompt-item-content { margin:6px 0 0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }\n.yada-prompt-empty { margin:0; padding:12px; text-align:center; color:var(--muted); }\n.yada-prompt-editor { display:grid; grid-template-columns:1fr 1fr; gap:10px; min-height:0; flex-shrink:0; }\n.yada-prompt-editor input, .yada-prompt-editor textarea { grid-column:1 / -1; width:100%; background:var(--bg); color:inherit; border:1px solid var(--border); border-radius:8px; padding:8px; font:inherit; }\n.yada-prompt-editor textarea { height:clamp(50px, 20vh, 180px); min-height:0; resize:none; overscroll-behavior:contain; }\n[role="alert"] { margin:0; color:#c86464; }\n.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }\n@media (max-width:640px) { .yada-prompt-panel { right:12px; bottom:12px; } .yada-prompt-header { gap:6px; } }\n\n.yada-prompt-grip { width:18px; height:18px; flex:0 0 18px; display:grid; place-items:center; color:var(--muted); cursor:grab; touch-action:none; }\n.yada-prompt-chosen .yada-prompt-grip { cursor:grabbing; }\n.yada-prompt-ghost { opacity:0.45; }\n';
+
+  // src/export/clipboard.ts
+  async function writeTextToClipboard(text) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      fallbackCopy(text);
+    }
+  }
+  function fallbackCopy(text) {
+    const textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.setAttribute("readonly", "true");
+    textarea.style.position = "fixed";
+    textarea.style.top = "-1000px";
+    textarea.style.left = "-1000px";
+    document.documentElement.append(textarea);
+    textarea.select();
+    const ok = document.execCommand("copy");
+    textarea.remove();
+    if (!ok) throw new Error("Clipboard fallback failed");
+  }
+
+  // src/prompts/storage.ts
+  var PROMPT_KEY = "chatgpt-yada:prompt-library:v1";
+  function parseLibrary(value) {
+    if (value === void 0) return { version: 2, prompts: [] };
+    if (!value || typeof value !== "object") throw new Error("提示词数据无效");
+    const data = value;
+    if (data.version !== 1 && data.version !== 2 || !Array.isArray(data.prompts)) throw new Error("提示词版本不支持");
+    const ids = /* @__PURE__ */ new Set();
+    for (const p of data.prompts) {
+      if (!p || typeof p.id !== "string" || !p.id || ids.has(p.id) || typeof p.title !== "string" || typeof p.content !== "string" || !Number.isFinite(p.createdAt) || !Number.isFinite(p.updatedAt)) throw new Error("提示词数据无效");
+      ids.add(p.id);
+    }
+    return { version: 2, prompts: data.version === 1 ? [...data.prompts].sort((a, b) => b.updatedAt - a.updatedAt) : [...data.prompts] };
+  }
+  async function readLibrary() {
+    const raw = (await chrome.storage.local.get(PROMPT_KEY))[PROMPT_KEY];
+    const library = parseLibrary(raw);
+    if (raw?.version === 1) await saveLibrary(library);
+    return library;
+  }
+  async function saveLibrary(library) {
+    await chrome.storage.local.set({ [PROMPT_KEY]: parseLibrary(library) });
+  }
+
+  // src/ui/theme.ts
+  function detectYadaTheme() {
+    const html = document.documentElement;
+    const themeAttr = safeGetAttribute(html, "data-theme") ?? safeGetAttribute(document.body, "data-theme");
+    if (themeAttr?.toLowerCase().includes("dark")) return "dark";
+    if (themeAttr?.toLowerCase().includes("light")) return "light";
+    if (html.classList.contains("dark")) return "dark";
+    if (html.classList.contains("light")) return "light";
+    const colorScheme = getComputedStyle(html).colorScheme;
+    if (colorScheme.includes("dark")) return "dark";
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  function safeGetAttribute(node, name) {
+    return node instanceof Element ? node.getAttribute(name) : null;
+  }
+  function observeYadaTheme(onChange) {
+    const applyTheme = () => onChange(detectYadaTheme());
+    const observer = new MutationObserver(applyTheme);
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    observer.observe(document.body, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme"]
+    });
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    media.addEventListener("change", applyTheme);
+    applyTheme();
+    return () => {
+      observer.disconnect();
+      media.removeEventListener("change", applyTheme);
+    };
+  }
+
+  // src/prompts/panel.ts
+  var svg = (body) => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  var ICONS = {
+    grip: svg('<circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/>'),
+    copy: svg('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),
+    edit: svg('<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>'),
+    delete: svg('<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>'),
+    check: svg('<path d="m5 12 4 4L19 6"/>')
+  };
+  var PROMPT_HOST_ID = "chatgpt-yada-prompt-host";
+  var PromptPanel = class {
+    constructor(button) {
+      this.button = button;
+      document.getElementById(PROMPT_HOST_ID)?.remove();
+      this.host.id = PROMPT_HOST_ID;
+      this.host.dataset.yadaRoot = "true";
+      this.host.hidden = true;
+      this.root = this.host.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = panel_default;
+      this.modal = document.createElement("section");
+      this.modal.className = "yada-prompt-modal is-visible";
+      this.modal.innerHTML = `
       <div class="yada-prompt-backdrop" data-prompt-action="close"></div>
       <div class="yada-prompt-panel" role="dialog" aria-modal="true" aria-label="提示词收藏库">
         <div class="yada-prompt-header"><strong>提示词收藏库</strong>
@@ -14,41 +4507,836 @@ var Ke=Object.defineProperty;var Xe=(y,v,E)=>v in y?Ke(y,v,{enumerable:!0,config
         </form>
         <p class="sr-only" role="status" aria-live="polite"></p>
         <p role="alert" hidden></p>
-      </div>`,this.root.append(e,this.modal),document.body.append(this.host),this.modal.dataset.toolkitTheme=_(),this.disposeTheme=F(n=>{this.modal.dataset.toolkitTheme=n}),t.addEventListener("click",this.toggle),this.modal.addEventListener("click",this.handleClick),this.query("form").addEventListener("submit",n=>{n.preventDefault(),this.saveEditor()}),document.addEventListener("pointerdown",this.outside,!0),document.addEventListener("keydown",this.keydown,!0),this.modal.addEventListener("wheel",this.stopPageScroll,{passive:!1}),this.modal.addEventListener("touchmove",this.stopPageScroll,{passive:!1})}query(t){return this.root.querySelector(t)}dispose(){this.disposed=!0,this.close(),this.disposeTheme(),this.host.remove(),this.button.removeEventListener("click",this.toggle),document.removeEventListener("pointerdown",this.outside,!0),document.removeEventListener("keydown",this.keydown,!0)}renderList(){const t=[...this.library.prompts].sort((n,s)=>s.updatedAt-n.updatedAt),e=this.query(".yada-prompt-list");e.replaceChildren(),e.hidden=!1,this.query(".yada-prompt-empty").hidden=t.length>0;const i=document.createDocumentFragment();for(const n of t){const s=document.createElement("article");s.className="yada-prompt-item",s.dataset.promptId=n.id;const o=document.createElement("div");o.className="yada-prompt-item-header";const c=document.createElement("h4");c.className="yada-prompt-item-title",c.textContent=n.title;const d=document.createElement("p");d.className="yada-prompt-item-content",d.textContent=n.content;const u=document.createElement("div");u.className="yada-prompt-item-actions",u.append(this.action("复制提示词","copy",n.id),this.action("编辑提示词","edit",n.id),this.action("删除提示词","delete",n.id)),o.append(c,u),s.append(o,d),i.append(s)}e.append(i)}action(t,e,i){const n=document.createElement("button");return n.type="button",n.className="yada-prompt-icon",n.setAttribute("aria-label",t),n.title=t,n.innerHTML=D[e],n.dataset.promptAction=e,n.dataset.promptId=i,n}edit(t){this.editing=t??null,this.query("form").hidden=!1,this.query(".yada-prompt-list").hidden=!0,this.query(".yada-prompt-empty").hidden=!0,this.query('[name="title"]').value=(t==null?void 0:t.title)??"",this.query('[name="content"]').value=(t==null?void 0:t.content)??"",this.query('[name="title"]').focus()}async saveEditor(){const t=this.query('[name="title"]').value.trim(),e=this.query('[name="content"]').value;if(!t||!e.trim()||this.busy)return;const i=this.editing,n=Date.now(),s={id:(i==null?void 0:i.id)??crypto.randomUUID(),title:t,content:e,createdAt:(i==null?void 0:i.createdAt)??n,updatedAt:n};await this.persist({version:1,prompts:i?this.library.prompts.map(o=>o.id===i.id?s:o):[...this.library.prompts,s]})}async persist(t){if(this.busy)return;this.busy=!0;const e=this.generation;try{await _t(t),this.library=t,!this.disposed&&e===this.generation&&(this.renderList(),this.query("form").hidden=!0)}catch{e===this.generation&&this.error("保存失败，内容仍保留，请重试。")}finally{this.busy=!1}}async copy(t,e){const i=this.generation;try{if(await J(t.content),this.disposed||i!==this.generation||!e.isConnected)return;clearTimeout(this.copyTimers.get(e)),e.innerHTML=D.check,this.query('[role="status"]').textContent="提示词已复制",this.copyTimers.set(e,window.setTimeout(()=>{e.innerHTML=D.copy,this.copyTimers.delete(e),this.query('[role="status"]').textContent=""},1300))}catch{i===this.generation&&this.error("复制失败，请重试。")}}error(t){const e=this.query('[role="alert"]');e.textContent=t,e.hidden=!1}}const Z=["textarea","input","form","#prompt-textarea",'[id*="prompt-textarea" i]','[data-testid*="composer" i]','[data-testid*="prompt-textarea" i]','[data-testid*="send-button" i]','[role="textbox"]','[contenteditable="true"]','[class*="composer" i]','[class*="prompt-textarea" i]'].join(", "),tt=["textarea","input","#prompt-textarea",'[id*="prompt-textarea" i]','[data-testid*="prompt-textarea" i]','[role="textbox"]','[contenteditable="true"]',".ProseMirror"].join(", ");function Dt(r){if(!(r instanceof Element))return!1;if(r.matches(Z))return!0;const t=String(r.getAttribute("class")??"");return!!(/\bProseMirror\b/i.test(t)&&et(r)||/prompt/i.test(t)&&Nt(r)||it(r))}function zt(r){if(!(r instanceof Element))return!1;if(r.closest(Z))return!0;let t=r;for(;t&&t!==document.documentElement;){if(Dt(t))return!0;t=t.parentElement}return!1}function et(r){return!!r.closest(["form","#prompt-textarea",'[id*="prompt-textarea" i]','[data-testid*="composer" i]','[data-testid*="prompt-textarea" i]','[class*="composer" i]','[class*="prompt-textarea" i]'].join(", "))}function Nt(r){return et(r)||!!r.querySelector(tt)||it(r)}function it(r){if(!(r instanceof HTMLElement)||!r.querySelector(tt))return!1;const t=window.getComputedStyle(r),e=r.getBoundingClientRect(),i=e.bottom>=window.innerHeight-180&&e.top>=window.innerHeight*.35,n=e.height>0&&e.height<=Math.max(460,window.innerHeight*.55);return(t.position==="fixed"||t.position==="sticky"||i)&&n}const Ot=[[/\.pdf$/i,"PDF 文件"],[/\.(?:md|markdown)$/i,"Markdown 文件"],[/\.csv$/i,"CSV 文件"],[/\.txt$/i,"文本文件"],[/\.json$/i,"JSON 文件"],[/\.(?:xlsx|xls)$/i,"Excel 文件"],[/\.(?:docx|doc)$/i,"Word 文件"],[/\.(?:zip|rar|7z)$/i,"压缩文件"]],Ht=/\.(?:png|jpe?g|webp|gif|bmp|heic|heif|avif)$/i;function qt(r){return r.map(Wt).filter(Boolean).join(" ")}function Ft(r,t){const e=Yt(r),i=qt(t);return e&&i?`${i}
-${e}`:e||i||""}function Bt(){return"[无文字消息]"}function Ut(r){const t=[],e=L(r.content),i=L(r.metadata);if(Array.isArray(e==null?void 0:e.parts))for(const o of e.parts)rt(o,t);const n=t.some(o=>o.kind==="image");for(const o of["attachments","files","uploaded_files"]){const c=(i==null?void 0:i[o])??r[o];if(Array.isArray(c))for(const d of c){const u=[];rt(d,u),t.push(...u.filter(l=>!(n&&l.kind==="image")))}}const s=L(i==null?void 0:i.aggregate_result);if(Array.isArray(s==null?void 0:s.messages))for(const o of s.messages){const c=L(o);if(c&&m(c,"message_type")==="image"){const d=m(c,"image_url")??m(c,"url")??void 0;t.push({kind:"image",label:"图片",key:nt("image",d??"aggregate")})}}return Gt(t)}function jt(r,t){if(t!=null&&t.includes("pdf"))return"PDF 文件";if(t!=null&&t.includes("markdown"))return"Markdown 文件";if(t!=null&&t.includes("json"))return"JSON 文件";if(t!=null&&t.includes("csv"))return"CSV 文件";if(t!=null&&t.includes("text"))return"文本文件";if(t!=null&&t.includes("spreadsheet")||t!=null&&t.includes("excel"))return"Excel 文件";if(t!=null&&t.includes("word"))return"Word 文件";if(r){const e=Ot.find(([i])=>i.test(r));if(e)return e[1]}return"文件"}function Wt(r){return r.kind==="image"?"[图片]":r.kind==="pasted"?"[粘贴内容]":r.kind==="file"?r.filename?`[${r.label}] ${r.filename}`:`[${r.label}]`:""}function rt(r,t){const e=L(r);if(!e)return;const i=(m(e,"content_type")??m(e,"type")??"").toLowerCase(),n=m(e,"file_name")??m(e,"filename")??m(e,"name")??m(e,"title")??void 0,s=m(e,"mime_type")??m(e,"mimetype")??m(e,"mime")??void 0,o=m(e,"asset_pointer")??m(e,"image_asset_pointer")??m(e,"url")??m(e,"href")??void 0,c=nt("api",o??n??s??i);if(Vt(i,n,s,o)){t.push({kind:"image",label:"图片",key:c});return}if(i.includes("paste")||i.includes("pasted")||e.pasted===!0){t.push({kind:"pasted",label:"粘贴内容",key:c??"pasted"});return}if(n||i.includes("file")||s){t.push({kind:"file",label:jt(n,s),filename:n,mimeType:s,key:c});return}}function Gt(r){const t=new Set,e=[];let i=0;for(const n of r){const s=Kt(n,i);n.kind==="image"&&!n.key&&(i+=1),!t.has(s)&&(t.add(s),e.push({kind:n.kind,label:n.label,filename:n.filename,mimeType:n.mimeType}))}return e}function Yt(r){return r.replace(/\u00a0/g," ").replace(/[ \t]+\n/g,`
-`).replace(/\n{3,}/g,`
+      </div>`;
+      this.root.append(style, this.modal);
+      document.body.append(this.host);
+      this.modal.dataset.toolkitTheme = detectYadaTheme();
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.modal.dataset.toolkitTheme = theme;
+      });
+      button.addEventListener("click", this.toggle);
+      this.modal.addEventListener("click", this.handleClick);
+      this.query("form").addEventListener("submit", (event) => {
+        event.preventDefault();
+        void this.saveEditor();
+      });
+      document.addEventListener("pointerdown", this.outside, true);
+      document.addEventListener("keydown", this.keydown, true);
+      this.modal.addEventListener("wheel", this.stopPageScroll, { passive: false });
+      this.modal.addEventListener("touchmove", this.stopPageScroll, { passive: false });
+    }
+    host = document.createElement("div");
+    root;
+    modal;
+    library = { version: 2, prompts: [] };
+    copyTimers = /* @__PURE__ */ new Map();
+    generation = 0;
+    busy = false;
+    sortable = null;
+    disposed = false;
+    editing = null;
+    disposeTheme;
+    stopPageScroll = (event) => {
+      const node = event.target instanceof Element ? event.target : null;
+      const scrollable = node?.closest(".yada-prompt-list, textarea");
+      if (!scrollable || scrollable.scrollHeight <= scrollable.clientHeight) {
+        event.preventDefault();
+        return;
+      }
+      if (event instanceof WheelEvent && (event.deltaY < 0 && scrollable.scrollTop <= 0 || event.deltaY > 0 && scrollable.scrollTop + scrollable.clientHeight >= scrollable.scrollHeight)) event.preventDefault();
+    };
+    query(selector) {
+      return this.root.querySelector(selector);
+    }
+    close = () => {
+      this.destroySortable();
+      this.generation++;
+      for (const [button, timer] of this.copyTimers) {
+        clearTimeout(timer);
+        button.innerHTML = ICONS.copy;
+      }
+      this.copyTimers.clear();
+      this.host.hidden = true;
+      this.button.setAttribute("aria-expanded", "false");
+    };
+    dispose() {
+      this.disposed = true;
+      this.close();
+      this.disposeTheme();
+      this.host.remove();
+      this.button.removeEventListener("click", this.toggle);
+      document.removeEventListener("pointerdown", this.outside, true);
+      document.removeEventListener("keydown", this.keydown, true);
+    }
+    toggle = async () => {
+      if (!this.host.hidden) {
+        this.close();
+        return;
+      }
+      if (this.busy) return;
+      const generation = ++this.generation;
+      if (!this.host.isConnected) document.body.append(this.host);
+      this.host.hidden = false;
+      this.button.setAttribute("aria-expanded", "true");
+      this.query('[role="alert"]').hidden = true;
+      this.query("form").hidden = true;
+      try {
+        const library = await readLibrary();
+        if (this.disposed || generation !== this.generation) return;
+        this.library = library;
+        this.renderList();
+        this.query('[data-prompt-action="add"]').focus();
+      } catch {
+        if (generation === this.generation) this.error("无法读取提示词，请重新打开重试。");
+      }
+    };
+    outside = (event) => {
+      if (!this.host.hidden && !event.composedPath().includes(this.host) && !event.composedPath().includes(this.button)) this.close();
+    };
+    keydown = (event) => {
+      if (this.host.hidden) return;
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        this.close();
+        this.button.focus();
+      }
+      if (event.key === "Tab") {
+        const items = [...this.modal.querySelectorAll("button, input, textarea")].filter((e) => e.getClientRects().length && !e.disabled);
+        const first = items[0], last = items.at(-1), active = this.root.activeElement;
+        if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }
+    };
+    handleClick = (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const action = target?.closest("[data-prompt-action]");
+      if (!action || this.host.hidden) return;
+      const kind = action.dataset.promptAction;
+      if (kind === "close") {
+        this.close();
+        this.button.focus();
+        return;
+      }
+      if (this.busy) return;
+      const prompt = this.library.prompts.find((item) => item.id === action.dataset.promptId);
+      if (kind === "add") this.edit();
+      if (kind === "cancel") {
+        this.query("form").hidden = true;
+        this.renderList();
+      }
+      if (kind === "edit" && prompt) this.edit(prompt);
+      if (kind === "delete" && prompt) void this.persist({ version: 2, prompts: this.library.prompts.filter((item) => item.id !== prompt.id) });
+      if (kind === "copy" && prompt) void this.copy(prompt, action);
+    };
+    renderList() {
+      this.destroySortable();
+      const items = this.library.prompts;
+      const list = this.query(".yada-prompt-list");
+      list.replaceChildren();
+      list.hidden = false;
+      this.query(".yada-prompt-empty").hidden = items.length > 0;
+      const fragment = document.createDocumentFragment();
+      for (const item of items) {
+        const article = document.createElement("article");
+        article.className = "yada-prompt-item";
+        article.dataset.promptId = item.id;
+        const header = document.createElement("div");
+        header.className = "yada-prompt-item-header";
+        const title = document.createElement("h4");
+        title.className = "yada-prompt-item-title";
+        title.textContent = item.title;
+        const content = document.createElement("p");
+        content.className = "yada-prompt-item-content";
+        content.textContent = item.content;
+        const actions = document.createElement("div");
+        actions.className = "yada-prompt-item-actions";
+        actions.append(this.action("复制提示词", "copy", item.id), this.action("编辑提示词", "edit", item.id), this.action("删除提示词", "delete", item.id));
+        const grip = document.createElement("span");
+        grip.className = "yada-prompt-grip";
+        grip.title = "拖拽排序";
+        grip.setAttribute("aria-label", "拖拽排序");
+        grip.innerHTML = ICONS.grip;
+        header.append(grip, title, actions);
+        article.append(header, content);
+        fragment.append(article);
+      }
+      list.append(fragment);
+      if (this.disposed || this.host.hidden) return;
+      this.sortable = new sortable_esm_default(list, {
+        handle: ".yada-prompt-grip",
+        draggable: ".yada-prompt-item",
+        dataIdAttr: "data-prompt-id",
+        animation: 150,
+        ghostClass: "yada-prompt-ghost",
+        chosenClass: "yada-prompt-chosen",
+        scroll: list,
+        bubbleScroll: false,
+        onEnd: () => {
+          void this.saveOrder();
+        }
+      });
+    }
+    destroySortable() {
+      this.sortable?.destroy();
+      this.sortable = null;
+    }
+    async saveOrder() {
+      if (!this.sortable || this.busy) return;
+      const ids = this.sortable.toArray();
+      if (ids.every((id, index2) => id === this.library.prompts[index2]?.id)) return;
+      const byId = new Map(this.library.prompts.map((item) => [item.id, item]));
+      if (ids.length !== byId.size || new Set(ids).size !== byId.size || ids.some((id) => !byId.has(id))) {
+        this.renderList();
+        return;
+      }
+      await this.persist({ version: 2, prompts: ids.map((id) => byId.get(id)) }, true);
+    }
+    action(text, action, id) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "yada-prompt-icon";
+      button.setAttribute("aria-label", text);
+      button.title = text;
+      button.innerHTML = ICONS[action];
+      button.dataset.promptAction = action;
+      button.dataset.promptId = id;
+      return button;
+    }
+    edit(prompt) {
+      this.destroySortable();
+      this.editing = prompt ?? null;
+      this.query("form").hidden = false;
+      this.query(".yada-prompt-list").hidden = true;
+      this.query(".yada-prompt-empty").hidden = true;
+      this.query('[name="title"]').value = prompt?.title ?? "";
+      this.query('[name="content"]').value = prompt?.content ?? "";
+      this.query('[name="title"]').focus();
+    }
+    async saveEditor() {
+      const title = this.query('[name="title"]').value.trim();
+      const content = this.query('[name="content"]').value;
+      if (!title || !content.trim() || this.busy) return;
+      const previous = this.editing, now = Date.now();
+      const item = { id: previous?.id ?? crypto.randomUUID(), title, content, createdAt: previous?.createdAt ?? now, updatedAt: now };
+      await this.persist({ version: 2, prompts: previous ? this.library.prompts.map((p) => p.id === previous.id ? item : p) : [item, ...this.library.prompts] });
+    }
+    async persist(next, sorting = false) {
+      if (this.busy) return;
+      this.busy = true;
+      this.sortable?.option("disabled", true);
+      const generation = this.generation;
+      try {
+        await saveLibrary(next);
+        this.library = next;
+        if (!this.disposed && generation === this.generation) {
+          this.renderList();
+          this.query("form").hidden = true;
+        }
+      } catch {
+        if (generation === this.generation) {
+          if (sorting) this.renderList();
+          this.error(sorting ? "排序保存失败，请重试" : "保存失败，内容仍保留，请重试。");
+        }
+      } finally {
+        this.busy = false;
+        this.sortable?.option("disabled", false);
+      }
+    }
+    async copy(prompt, button) {
+      const generation = this.generation;
+      try {
+        await writeTextToClipboard(prompt.content);
+        if (this.disposed || generation !== this.generation || !button.isConnected) return;
+        clearTimeout(this.copyTimers.get(button));
+        button.innerHTML = ICONS.check;
+        this.query('[role="status"]').textContent = "提示词已复制";
+        this.copyTimers.set(button, window.setTimeout(() => {
+          button.innerHTML = ICONS.copy;
+          this.copyTimers.delete(button);
+          this.query('[role="status"]').textContent = "";
+        }, 1300));
+      } catch {
+        if (generation === this.generation) this.error("复制失败，请重试。");
+      }
+    }
+    error(message) {
+      const alert = this.query('[role="alert"]');
+      alert.textContent = message;
+      alert.hidden = false;
+    }
+  };
 
-`).trim()}function L(r){return r&&typeof r=="object"?r:null}function m(r,t){const e=r[t];return typeof e=="string"&&e.trim()?e.trim():null}function Vt(r,t,e,i){return r.includes("image")||(e==null?void 0:e.toLowerCase().startsWith("image/"))===!0||Jt(t)||(i==null?void 0:i.startsWith("sediment://"))===!0||(i==null?void 0:i.startsWith("data:image/"))===!0}function Jt(r){return!!(r&&Ht.test(r))}function Kt(r,t){return r.key?`${r.kind}:${r.key}`:r.kind==="image"?`image:${r.filename??`anonymous-${t}`}`:r.kind==="pasted"?"pasted":`file:${r.filename??""}:${r.mimeType??""}:${r.label}`}function nt(r,t){const e=t.replace(/\s+/g," ").trim().toLowerCase();return e?`${r}:${e}`:void 0}const Xt=100,Qt=500;function T(r){return r.conversation??r}function Zt(r){const t=T(r),e=t.mapping;let i=t.current_node??t.current_node_id??"";if(!e||!i||!e[i])return!1;const n=new Set;for(;i;){if(n.has(i)||!e[i])return!1;n.add(i),i=e[i].parent??""}return!0}function st(r,t=""){const e=encodeURIComponent(r),i=t?`/backend-api/conversations/${e}/messages`:`/backend-api/conversations/${e}`,n=new URLSearchParams;return t&&n.set("before",t),n.set("include_has_versions","true"),n.set("num_turns",String(Xt)),`${i}?${n}`}function ot(r){const t=r.page_info??r.pageInfo;if(!t||typeof(t.has_previous_page??t.hasPreviousPage)!="boolean")throw new Error("Missing pagination completeness metadata");const e=t.has_previous_page===!0||t.hasPreviousPage===!0,i=t.start_cursor??t.startCursor??"";if(e&&!i)throw new Error("Pagination requested an older page without a cursor");return e?i:""}function at(r,t){const e=new Set;return[...r,...t].filter(i=>{if(!(i!=null&&i.id))throw new Error("Conversation message has no stable ID");return e.has(i.id)?!1:(e.add(i.id),!0)})}function te(r,t,e){const i=`paginated-root:${t}`,n={[i]:{id:i,parent:"",children:[]}};let s=i;for(const o of r)n[s].children=[o.id],n[o.id]={id:o.id,parent:s,children:[],message:o},s=o.id;if(e&&!n[e])throw new Error("Active branch tip missing after pagination");return{id:t,mapping:n,current_node:e||s}}async function ee(r,t,e){const i=async d=>{const u=new AbortController,l=()=>u.abort();e==null||e.addEventListener("abort",l,{once:!0}),e!=null&&e.aborted&&u.abort();const h=setTimeout(l,1e4);try{const p=await fetch(d,{credentials:"include",cache:"no-store",headers:t,signal:u.signal});if(!p.ok)throw new Error(`ChatGPT conversation API failed: ${p.status}`);const f=await p.json();if(!f||typeof f!="object")throw new Error("Conversation API returned an empty response");return f}finally{clearTimeout(h),e==null||e.removeEventListener("abort",l)}},n=d=>{const u=T(d);if(!Zt(d))throw new Error("Incomplete active conversation path");return{...u,id:u.id??u.conversation_id??r,current_node:u.current_node??u.current_node_id}},s=`/backend-api/conversation/${encodeURIComponent(r)}`;let o="",c;try{const d=await i(`${s}?include_full_conversation=true`);return o=T(d).current_node??T(d).current_node_id??"",n(d)}catch(d){if(c=d,e!=null&&e.aborted)throw d}try{const d=T(await i(st(r)));if(!Array.isArray(d.messages))throw new Error("Paginated conversation API returned no messages");let u=at([],d.messages),l=ot(d);const h=new Set;let p=1;for(;l;){if(e!=null&&e.aborted)throw new DOMException("Aborted","AbortError");if(h.has(l)||p>=Qt)throw new Error("Conversation pagination stalled");h.add(l);const b=T(await i(st(r,l)));if(!Array.isArray(b.messages))throw new Error("Conversation message page returned no messages");u=at(b.messages,u),l=ot(b),p++}if(!u.length)throw new Error("Paginated conversation is empty");const f=d.current_node??d.current_node_id??o,M=te(u,r,f);return{...d,...M}}catch(d){if(c=d,e!=null&&e.aborted)throw d}for(const d of[s,`${s}?offset=0&limit=100000`])try{return n(await i(d))}catch(u){if(c=u,e!=null&&e.aborted)throw u}throw c}let ct=null;async function ie(r=v(),t){return r?re(r,t):null}async function re(r,t){const e={Accept:"application/json"},i=await ne();i&&(e.Authorization=`Bearer ${i}`,e["X-Authorization"]=`Bearer ${i}`);const n=oe();return n&&(e["Chatgpt-Account-Id"]=n),ee(r,e,t)}async function ne(){return ct??(ct=se()),ct}async function se(){try{const r=await fetch("/api/auth/session",{credentials:"include",headers:{Accept:"application/json"}});if(!r.ok)return null;const t=await r.json();return typeof t.accessToken=="string"?t.accessToken:null}catch{return null}}function oe(){try{const r=window.localStorage.getItem("_account");if(!r)return null;if(/^account-[a-z0-9_-]+$/i.test(r))return r;const t=JSON.parse(r);return dt(t)}catch{return null}}function dt(r){if(!r||typeof r!="object")return null;const t=r;for(const e of["accountId","account_id","currentAccountId","current_account_id","id"]){const i=t[e];if(typeof i=="string"&&/^account-[a-z0-9_-]+$/i.test(i))return i}for(const e of Object.values(t)){const i=dt(e);if(i)return i}return null}async function ut(r={}){const t=r.conversationId??v();if(!t)throw new Error("No active ChatGPT conversation");const e=await ie(t,r.signal);if(!e)throw new Error("ChatGPT conversation was not returned");const i=ae(e);return{conversationId:e.id??t,source:"api-full",turns:i,capturedAt:Date.now(),apiTurnsLength:i.length,domTurnsLength:0,usingCachedApiTurns:!1,lastStableTurnsLength:i.length}}function ae(r){const t=ce(r),e=[];let i=null;for(const n of t){const s=n.message;if(!s||de(s))continue;const o=lt(s);if(o!=="user"&&o!=="assistant")continue;const c=ue(s);if(c.markdown){if(o==="user"){i&&e.push(B(e.length,i,null)),i=c;continue}i&&(e.push(B(e.length,i,c)),i=null)}}return i&&e.push(B(e.length,i,null)),e}function ce(r){var o;const t=r.mapping??{},e=r.current_node??((o=Object.values(t).find(c=>!c.children||c.children.length===0))==null?void 0:o.id),i=[],n=new Set;let s=e;for(;s&&!n.has(s);){n.add(s);const c=t[s];if(!c||c.parent===void 0&&!c.message)break;i.unshift(c),s=c.parent}return i}function B(r,t,e){return{id:t.messageId??(e==null?void 0:e.messageId)??`api-turn-${r+1}`,index:r,globalIndex:r,displayNumber:r+1,renderedLocalIndex:null,userMessageId:t.messageId,assistantMessageId:e==null?void 0:e.messageId,userCreatedAt:t.createdAt,assistantCreatedAt:e==null?void 0:e.createdAt,userMarkdown:t.markdown,assistantMarkdown:(e==null?void 0:e.markdown)??"",userPreview:t.preview,assistantPreview:(e==null?void 0:e.preview)??"",attachments:[...t.attachments,...(e==null?void 0:e.attachments)??[]]}}function de(r){if(!r.content)return!0;const t=lt(r);if(t==="system"||t==="tool")return!0;const e=r.recipient;if(e&&e!=="all")return!0;const i=r.channel;if(i&&i!=="final")return!0;const n=r.metadata??{};if(n.is_visually_hidden_from_conversation===!0||n.is_hidden===!0||n.hidden===!0)return!0;const s=g(r.content,"content_type");return s==="thoughts"||s==="reasoning_recap"||s==="model_editable_context"||s==="user_editable_context"}function ue(r){const t=Ut(r),e=Ft(le(r),t)||Bt();return{messageId:r.id,createdAt:r.create_time,markdown:e,preview:fe(e),attachments:t}}function le(r){const t=r.content;if(!t)return"";const e=g(t,"content_type");if(e==="text")return z(pe(t.parts));if(e==="multimodal_text")return z(he(t.parts));if(e==="code"){const i=g(t,"language")??"",n=g(t,"text")??"";return n?`\`\`\`${i}
-${n}
-\`\`\``:""}if(e==="execution_output"){const i=g(t,"text")??"";return i?`Result:
-\`\`\`
-${i}
-\`\`\``:""}if(e==="tether_quote"){const i=g(t,"title")??"",n=g(t,"text")??"";return z(`> ${i||n}`)}if(e==="tether_browsing_display"){const i=g(t,"result")??g(t,"summary")??"";return z(i)}return""}function he(r){return Array.isArray(r)?r.map(t=>{if(typeof t=="string")return t;if(!t||typeof t!="object")return"";const e=t,i=g(e,"content_type")??g(e,"type")??"";return i.includes("image")||i.includes("file")?"":g(e,"text")??g(e,"content")??g(e,"markdown")??""}).filter(Boolean).join(`
+  // src/export/markdownFormatter.ts
+  function formatTurnsAsMarkdown(turns) {
+    const markdown = turns.map(formatTurn).filter(Boolean).join("\n\n").replace(/\n{4,}/g, "\n\n\n").trim();
+    return markdown ? `${markdown}
+` : "";
+  }
+  function formatTurn(turn) {
+    const sections = [
+      formatSection("User", turn.userMarkdown, turn.userCreatedAt),
+      formatSection("ChatGPT", turn.assistantMarkdown, turn.assistantCreatedAt)
+    ].filter(Boolean);
+    return sections.join("\n\n");
+  }
+  function formatSection(role, markdown, createdAt) {
+    const content = markdown.trim();
+    if (!content) return "";
+    const timestamp = formatTimestamp(createdAt);
+    return `# ${role}
 
-`):""}function pe(r){return Array.isArray(r)?r.map(t=>typeof t=="string"?t:"").filter(Boolean).join(`
+${timestamp ? `${timestamp}
 
-`):""}function lt(r){var t;return(t=r.author)==null?void 0:t.role}function g(r,t){const e=r[t];return typeof e=="string"&&e.trim()?e.trim():null}function z(r){return r.replace(/\u00a0/g," ").replace(/[ \t]+\n/g,`
-`).replace(/\n{3,}/g,`
+` : ""}${content}`;
+  }
+  function formatTimestamp(seconds) {
+    if (typeof seconds !== "number" || !Number.isFinite(seconds)) return "";
+    const date = new Date(seconds * 1e3);
+    if (!Number.isFinite(date.getTime())) return "";
+    const pad = (value) => String(value).padStart(2, "0");
+    return `${String(date.getFullYear()).padStart(4, "0")}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`;
+  }
 
-`).trim()}function fe(r){const t=r.replace(/```[\s\S]*?```/g,"[代码块]").replace(/[#*_>`~-]/g,"").replace(/[ \t]+/g," ").replace(/\n{3,}/g,`
+  // src/styles.ts
+  var YADA_ACCENT = "#10A37F";
+  var YADA_ACCENT_SOFT = "rgba(16, 163, 127, 0.14)";
+  var YADA_TOOLBAR_HOST_ID = "chatgpt-yada-toolbar-host";
 
-`).trim();return t.length>180?`${t.slice(0,179)}…`:t}function me(r){const t=r.map(ge).filter(Boolean).join(`
+  // src/quota/iconRenderer.ts
+  var COLORS = {
+    outer: "#ff375f",
+    middle: "#9cd326",
+    inner: "#1ad6d0",
+    track: "rgba(255,255,255,0.18)"
+  };
+  var DARK_ICON_PALETTE = {
+    track: COLORS.track,
+    center: "#f5f5f7"
+  };
+  var LIGHT_ICON_PALETTE = {
+    track: "rgba(32, 33, 35, 0.18)",
+    center: "#202123"
+  };
+  function remainingToRatio(remaining, limit) {
+    if (limit <= 0) return 0;
+    return Math.max(0, Math.min(1, remaining / limit));
+  }
+  function ringGeometry(size) {
+    const padding = Math.max(1, size * 0.045);
+    const outerWidth = Math.max(1.5, size * 0.11);
+    const gap = Math.max(0.75, size * 0.045);
+    const cx = size / 2;
+    const outerRadius = cx - padding - outerWidth / 2;
+    const middleWidth = outerWidth * 0.92;
+    const innerWidth2 = outerWidth * 0.84;
+    const middleRadius = outerRadius - outerWidth / 2 - gap - middleWidth / 2;
+    const innerRadius = middleRadius - middleWidth / 2 - gap - innerWidth2 / 2;
+    return [
+      { radius: outerRadius, width: outerWidth },
+      { radius: middleRadius, width: middleWidth },
+      { radius: innerRadius, width: innerWidth2 }
+    ];
+  }
+  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
+    const canvas = new OffscreenCanvas(size, size);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+    ctx.clearRect(0, 0, size, size);
+    const cx = size / 2;
+    const cy = size / 2;
+    const geometry = ringGeometry(size);
+    const values = [rings.outer, rings.middle, rings.inner];
+    const colors = [COLORS.outer, COLORS.middle, COLORS.inner];
+    geometry.forEach((ring, index2) => {
+      drawTrack(ctx, cx, cy, ring.radius, ring.width, palette.track);
+      drawArc(ctx, cx, cy, ring.radius, ring.width, colors[index2], values[index2]);
+    });
+    if (size >= 32 && rings.center) {
+      ctx.fillStyle = palette.center;
+      const symbolic = rings.center === "…" || rings.center === "—" || rings.center === "!";
+      ctx.font = `600 ${Math.round(size * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(rings.center, cx, cy + size * 0.02);
+    }
+    return ctx.getImageData(0, 0, size, size);
+  }
+  function paintQuotaCanvas(canvas, rings, palette = DARK_ICON_PALETTE) {
+    const image = renderQuotaIcon(32, rings, palette);
+    canvas.width = 32;
+    canvas.height = 32;
+    let ctx = null;
+    try {
+      ctx = canvas.getContext("2d");
+    } catch {
+      return;
+    }
+    if (!ctx) return;
+    try {
+      ctx.putImageData(image, 0, 0);
+    } catch {
+    }
+  }
+  function drawTrack(ctx, cx, cy, radius, width, color) {
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  function drawArc(ctx, cx, cy, radius, width, color, ratio) {
+    const filled = Math.max(0, Math.min(0.999, ratio));
+    if (filled <= 0) return;
+    const start = -Math.PI / 2;
+    const end = start + filled * Math.PI * 2;
+    ctx.beginPath();
+    ctx.strokeStyle = color;
+    ctx.lineWidth = width;
+    ctx.lineCap = "round";
+    ctx.arc(cx, cy, radius, start, end);
+    ctx.stroke();
+  }
 
-`).replace(/\n{4,}/g,`
+  // src/quota/presentation.ts
+  function metricRemainingLabel(metric) {
+    if (!metric) return "当前套餐无此桶";
+    if (metric.estimatedRemaining == null) return `已记录 ${metric.used} / ${metric.limit}`;
+    return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  }
+  function metricPercentLabel(metric) {
+    if (!metric || metric.remainingRatio == null) return "—";
+    return `${Math.round(metric.remainingRatio * 100)}%`;
+  }
+  function historySyncLabel(snapshot) {
+    if (snapshot.historyComplete) return "历史同步完整";
+    switch (snapshot.syncStatus) {
+      case "loading":
+        return "正在读取额度";
+      case "backfill":
+        return `正在首次同步最近 7 天 ChatGPT 历史… · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
+      case "ready":
+        return "历史同步完整";
+      case "error":
+        return `额度读取失败${snapshot.historyError ? ` · ${snapshot.historyError}` : ""}`;
+      default:
+        return `历史暂未补齐 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次，暂不猜剩余次数`;
+    }
+  }
+  function planStatusNote(snapshot) {
+    if (!snapshot.plan) return "未确认 ChatGPT 套餐，不猜测额度桶。";
+    return null;
+  }
+  function workspaceStatusNote(snapshot) {
+    return snapshot.personalProEligible ? null : "当前工作区不计入个人 Pro Chat 额度";
+  }
+  function snapshotBucketViews(snapshot) {
+    if (!snapshot.plan) return [];
+    if (snapshot.plan === "prolite") {
+      return [{ title: "两个 Pro", metric: snapshot.combinedDaily }];
+    }
+    return [
+      { title: "GPT-6 Pro", metric: snapshot.gpt6ProWeekly },
+      { title: "GPT-5.6 Sol Pro", metric: snapshot.solProDaily },
+      { title: "两个 Pro", metric: snapshot.combinedDaily }
+    ];
+  }
 
+  // src/quota/iconState.ts
+  function snapshotToRings(snapshot) {
+    const center = snapshot.syncStatus === "loading" || snapshot.syncStatus === "backfill" ? "…" : snapshot.syncStatus === "error" ? "!" : snapshot.syncStatus === "partial" || snapshot.tightestRemainingPercent == null ? "—" : String(snapshot.tightestRemainingPercent);
+    return {
+      outer: remainingToRatio(snapshot.gpt6ProWeekly?.estimatedRemaining ?? 0, snapshot.gpt6ProWeekly?.limit ?? 1),
+      middle: remainingToRatio(snapshot.solProDaily?.estimatedRemaining ?? 0, snapshot.solProDaily?.limit ?? 1),
+      inner: remainingToRatio(snapshot.combinedDaily?.estimatedRemaining ?? 0, snapshot.combinedDaily?.limit ?? 1),
+      center
+    };
+  }
+  function snapshotTitle(snapshot) {
+    const workspace = snapshot.personalProEligible ? "" : "\n当前工作区不计入个人 Pro Chat 额度";
+    return [
+      "ChatGPT Yada Pro 额度",
+      "",
+      metricLine("GPT-6 Pro", snapshot.gpt6ProWeekly),
+      metricLine("GPT-5.6 Sol Pro", snapshot.solProDaily),
+      metricLine("两个 Pro", snapshot.combinedDaily),
+      "",
+      `历史同步：${historySyncLabel(snapshot)}`,
+      `未分类轮次：${snapshot.unclassifiedTurns}`,
+      snapshot.updatedLabel,
+      workspace
+    ].join("\n").trim();
+  }
+  function metricLine(label, metric) {
+    if (!metric) return `${label}：当前套餐无此桶`;
+    if (metric.estimatedRemaining == null) return `${label}：已记录 ${metric.used}，历史同步不完整`;
+    return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  }
 
-`).trim();return t?`${t}
-`:""}function ge(r){return[ht("User",r.userMarkdown,r.userCreatedAt),ht("ChatGPT",r.assistantMarkdown,r.assistantCreatedAt)].filter(Boolean).join(`
+  // src/quota/types.ts
+  var LEDGER_KEY = "chatgpt-yada:quota-ledger:v2";
+  var STATE_KEY = "chatgpt-yada:quota-state:v2";
+  var EVENT_TTL_MS = 14 * 24 * 60 * 60 * 1e3;
 
-`)}function ht(r,t,e){const i=t.trim();if(!i)return"";const n=ve(e);return`# ${r}
+  // src/ui/quotaIndicator.ts
+  var QUOTA_INDICATOR_DEBOUNCE_MS = 80;
+  var QUOTA_POPOVER_HOST_ID = "chatgpt-yada-quota-popover-host";
+  var UNKNOWN_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "…" };
+  var ERROR_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "!" };
+  var POPOVER_WIDTH = 312;
+  var VIEWPORT_GUTTER = 8;
+  var POPOVER_CSS = `
+  :host {
+    --yada-text: #202123;
+    --yada-muted: rgba(32, 33, 35, 0.64);
+    --yada-border: rgba(32, 33, 35, 0.16);
+    color-scheme: light;
+    pointer-events: none;
+  }
+  :host([data-yada-theme="dark"]) {
+    --yada-text: #ececec;
+    --yada-muted: rgba(236, 236, 236, 0.66);
+    --yada-border: rgba(236, 236, 236, 0.16);
+    color-scheme: dark;
+  }
+  [data-quota-popover] {
+    position: fixed;
+    z-index: 2147483646;
+    box-sizing: border-box;
+    width: min(${POPOVER_WIDTH}px, calc(100vw - ${VIEWPORT_GUTTER * 2}px));
+    max-height: calc(100vh - ${VIEWPORT_GUTTER * 2}px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 14px;
+    border: 1px solid var(--yada-border);
+    border-radius: 12px;
+    background: #fff;
+    color: var(--yada-text);
+    box-shadow: 0 12px 32px rgba(15, 15, 15, 0.18);
+    font: 12px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    text-align: left;
+    white-space: normal;
+    pointer-events: auto;
+  }
+  [data-quota-popover][hidden] { display: none !important; }
+  :host([data-yada-theme="dark"]) [data-quota-popover] {
+    background: #2a2a2a;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
+  }
+  [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+  [data-quota-popover] h3 { margin: 10px 0 2px; font-size: 12px; font-weight: 700; }
+  [data-quota-popover] p { margin: 0; }
+  [data-quota-popover] [data-quota-note],
+  [data-quota-popover] [data-quota-warn],
+  [data-quota-popover] [data-quota-error] {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--yada-muted);
+  }
+  [data-quota-popover] [data-quota-warn],
+  [data-quota-popover] [data-quota-error] { color: var(--yada-text); }
+`;
+  var QuotaIndicator = class {
+    constructor(button, options = {}) {
+      this.button = button;
+      this.send = options.send ?? ((message, timeoutMs) => sendRuntimeMessage(message, timeoutMs));
+      this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
+      this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
+      this.canvas.setAttribute("aria-hidden", "true");
+      document.getElementById(QUOTA_POPOVER_HOST_ID)?.remove();
+      this.portalHost = document.createElement("div");
+      this.portalHost.id = QUOTA_POPOVER_HOST_ID;
+      this.portalHost.dataset.yadaRoot = "true";
+      this.themeValue = detectYadaTheme();
+      this.portalHost.dataset.yadaTheme = this.themeValue;
+      const portal = this.portalHost.attachShadow({ mode: "open" });
+      const style = document.createElement("style");
+      style.textContent = POPOVER_CSS;
+      this.popover = document.createElement("div");
+      this.popover.hidden = true;
+      this.popover.dataset.quotaPopover = "true";
+      this.popover.setAttribute("role", "dialog");
+      this.popover.setAttribute("aria-label", "Pro 模型额度");
+      portal.append(style, this.popover);
+      (document.body ?? document.documentElement).append(this.portalHost);
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.themeValue = theme;
+        this.portalHost.dataset.yadaTheme = theme;
+        this.paint(this.rings);
+      });
+      this.button.setAttribute("aria-haspopup", "dialog");
+      this.button.addEventListener("click", this.onClick);
+      document.addEventListener("pointerdown", this.onPointerDown, true);
+      document.addEventListener("keydown", this.onKeyDown, true);
+      window.addEventListener("resize", this.onViewportChange, { passive: true });
+      window.addEventListener("scroll", this.onViewportChange, { passive: true, capture: true });
+      chrome.storage?.onChanged?.addListener(this.onStorageChanged);
+      this.apply(null, "loading");
+      void this.loadState();
+    }
+    send;
+    debounceMs;
+    canvas;
+    portalHost;
+    popover;
+    disposeTheme;
+    disposed = false;
+    generation = 0;
+    refreshTimer = 0;
+    status = "loading";
+    snapshot = null;
+    rings = UNKNOWN_QUOTA_RINGS;
+    themeValue;
+    close = () => {
+      this.popover.hidden = true;
+      this.button.setAttribute("aria-expanded", "false");
+    };
+    dispose() {
+      if (this.disposed) return;
+      this.disposed = true;
+      this.close();
+      this.generation += 1;
+      window.clearTimeout(this.refreshTimer);
+      this.refreshTimer = 0;
+      this.disposeTheme();
+      this.button.removeEventListener("click", this.onClick);
+      document.removeEventListener("pointerdown", this.onPointerDown, true);
+      document.removeEventListener("keydown", this.onKeyDown, true);
+      window.removeEventListener("resize", this.onViewportChange);
+      window.removeEventListener("scroll", this.onViewportChange, true);
+      chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
+      this.portalHost.remove();
+    }
+    onClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (this.popover.hidden) this.open();
+      else this.close();
+    };
+    onPointerDown = (event) => {
+      if (this.popover.hidden) return;
+      const path = event.composedPath();
+      if (path.includes(this.button) || path.includes(this.popover) || path.includes(this.portalHost)) return;
+      this.close();
+    };
+    onKeyDown = (event) => {
+      if (this.popover.hidden || event.key !== "Escape") return;
+      event.stopPropagation();
+      this.close();
+      this.button.focus();
+    };
+    onViewportChange = () => {
+      if (!this.popover.hidden) this.positionPopover();
+    };
+    onStorageChanged = (changes, area) => {
+      if (this.disposed || area !== "local") return;
+      if (!changes[LEDGER_KEY] && !changes[STATE_KEY]) return;
+      window.clearTimeout(this.refreshTimer);
+      this.refreshTimer = window.setTimeout(() => {
+        this.refreshTimer = 0;
+        void this.loadState();
+      }, this.debounceMs);
+    };
+    async loadState() {
+      const generation = ++this.generation;
+      try {
+        const response = await this.send({ type: "quota/get-state" });
+        if (this.disposed || generation !== this.generation) return;
+        if (response?.error) throw new Error(response.error);
+        if (!response?.snapshot) throw new Error("无法读取额度账本");
+        this.apply(response.snapshot, "ready");
+      } catch {
+        if (this.disposed || generation !== this.generation) return;
+        this.apply(null, "error");
+      }
+    }
+    apply(snapshot, status) {
+      this.snapshot = snapshot;
+      this.status = status;
+      const rings = status === "error" ? ERROR_QUOTA_RINGS : snapshot ? snapshotToRings(snapshot) : UNKNOWN_QUOTA_RINGS;
+      this.paint(rings);
+      this.setTitle(
+        status === "error" ? "Pro 额度暂不可用" : snapshot ? snapshotTitle(snapshot) : "Pro 额度：读取中"
+      );
+      if (!this.popover.hidden) {
+        this.renderPopover();
+        this.positionPopover();
+      }
+    }
+    paint(rings) {
+      this.rings = rings;
+      this.canvas.dataset.quotaCenter = rings.center ?? "";
+      this.canvas.dataset.quotaOuter = String(rings.outer);
+      this.canvas.dataset.quotaMiddle = String(rings.middle);
+      this.canvas.dataset.quotaInner = String(rings.inner);
+      paintQuotaCanvas(
+        this.canvas,
+        rings,
+        this.themeValue === "light" ? LIGHT_ICON_PALETTE : DARK_ICON_PALETTE
+      );
+    }
+    setTitle(title) {
+      this.button.title = title;
+      this.button.setAttribute("aria-label", title);
+    }
+    open() {
+      this.renderPopover();
+      this.popover.hidden = false;
+      this.button.setAttribute("aria-expanded", "true");
+      this.positionPopover();
+    }
+    renderPopover() {
+      this.popover.replaceChildren();
+      const heading = document.createElement("h2");
+      heading.textContent = "Pro 模型额度";
+      this.popover.append(heading);
+      if (this.status === "error" || this.status === "ready" && !this.snapshot) {
+        this.popover.append(note("无法读取额度账本", "quota-error"));
+        return;
+      }
+      if (!this.snapshot) {
+        this.popover.append(note("正在读取额度", "quota-note"));
+        return;
+      }
+      this.popover.append(note(historySyncLabel(this.snapshot), this.snapshot.syncStatus === "error" ? "quota-error" : "quota-note"));
+      if (this.snapshot.syncStatus === "error") return;
+      const planNote = planStatusNote(this.snapshot);
+      if (planNote) this.popover.append(note(planNote, "quota-warn"));
+      else if (this.snapshot.syncStatus === "ready") {
+        for (const bucket of snapshotBucketViews(this.snapshot)) {
+          const section = document.createElement("section");
+          const title = document.createElement("h3");
+          title.textContent = bucket.title;
+          const remaining = document.createElement("p");
+          remaining.textContent = metricRemainingLabel(bucket.metric);
+          const percent = document.createElement("p");
+          percent.textContent = metricPercentLabel(bucket.metric);
+          section.append(title, remaining, percent);
+          this.popover.append(section);
+        }
+      }
+      this.popover.append(note("本地估算，不是 ChatGPT 官方余额", "quota-note"));
+      this.popover.append(note("只统计个人 Chat，不统计 Work 和 Codex", "quota-note"));
+      this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
+      const workspace = workspaceStatusNote(this.snapshot);
+      if (workspace) this.popover.append(note(workspace, "quota-warn"));
+    }
+    positionPopover() {
+      const buttonRect = this.button.getBoundingClientRect();
+      const width = Math.min(POPOVER_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_GUTTER * 2));
+      const left = clamp(
+        buttonRect.right - width,
+        VIEWPORT_GUTTER,
+        Math.max(VIEWPORT_GUTTER, window.innerWidth - VIEWPORT_GUTTER - width)
+      );
+      this.popover.style.width = `${width}px`;
+      this.popover.style.left = `${left}px`;
+      this.popover.style.right = "auto";
+      this.popover.style.top = `${VIEWPORT_GUTTER}px`;
+      const rect = this.popover.getBoundingClientRect();
+      const height = Math.min(rect.height, Math.max(0, window.innerHeight - VIEWPORT_GUTTER * 2));
+      const below = buttonRect.bottom + 6;
+      const above = buttonRect.top - height - 6;
+      const top = below + height <= window.innerHeight - VIEWPORT_GUTTER ? below : above >= VIEWPORT_GUTTER ? above : VIEWPORT_GUTTER;
+      this.popover.style.top = `${top}px`;
+    }
+  };
+  function clamp(value, minimum, maximum) {
+    return Math.min(Math.max(value, minimum), maximum);
+  }
+  function note(text, kind) {
+    const node = document.createElement("p");
+    node.dataset[kind === "quota-note" ? "quotaNote" : kind === "quota-warn" ? "quotaWarn" : "quotaError"] = "true";
+    node.textContent = text;
+    return node;
+  }
 
-${n?`${n}
-
-`:""}${i}`}function ve(r){if(typeof r!="number"||!Number.isFinite(r))return"";const t=new Date(r*1e3);if(!Number.isFinite(t.getTime()))return"";const e=i=>String(i).padStart(2,"0");return`${String(t.getFullYear()).padStart(4,"0")}-${e(t.getMonth()+1)}-${e(t.getDate())} ${e(t.getHours())}:${e(t.getMinutes())}:${e(t.getSeconds())}`}const be="#10A37F",we="rgba(16, 163, 127, 0.14)",pt="chatgpt-yada-toolbar-host";class ye{constructor(t=()=>{}){a(this,"host",null);a(this,"shadow",null);a(this,"disposeTheme",null);a(this,"copyResetTimer",0);a(this,"copyBusy",!1);a(this,"placementObserver",null);a(this,"placementTimer",0);a(this,"prompts",null);a(this,"previewAssistant",!1);a(this,"handleViewportChange",()=>{this.ensurePlacement()});this.onPreviewMode=t}closePanels(){var t;(t=this.prompts)==null||t.close()}mount(){var n,s,o;if((n=this.host)!=null&&n.isConnected)return;(s=document.getElementById(pt))==null||s.remove(),this.host=document.createElement("div"),this.host.id=pt,this.host.dataset.yadaRoot="true",this.host.dataset.placement="fixed",this.host.dataset.visible="false",this.host.setAttribute("data-yada-theme",_()),this.shadow=this.host.attachShadow({mode:"open"}),document.documentElement.append(this.host),this.render(),(o=this.query("[data-copy-all]"))==null||o.addEventListener("click",()=>{this.copyAll()}),this.prompts=new $t(this.query("[data-prompts]"));const t=this.query("[data-preview-mode]"),e=()=>{t.setAttribute("aria-pressed",String(this.previewAssistant)),t.title=this.previewAssistant?"预览：User + ChatGPT":"预览：User",t.setAttribute("aria-label",t.title),this.onPreviewMode(this.previewAssistant)};let i=!1;chrome.storage.local.get(q).then(c=>{!this.host||i||(this.previewAssistant=c[q]===!0,e())}).catch(()=>e()),t.addEventListener("click",()=>{i=!0,this.previewAssistant=!this.previewAssistant,e(),chrome.storage.local.set({[q]:this.previewAssistant}).catch(()=>{t.title="预览模式保存失败，下次打开将恢复旧设置"})}),this.disposeTheme=F(c=>{var d;(d=this.host)==null||d.setAttribute("data-yada-theme",c)}),this.placementObserver=new MutationObserver(()=>this.schedulePlacement()),this.placementObserver.observe(document.body,{childList:!0,subtree:!0}),window.addEventListener("resize",this.handleViewportChange,{passive:!0}),this.ensurePlacement()}setVisible(t){var e;(e=this.host)==null||e.setAttribute("data-visible",t?"true":"false")}ensurePlacement(){if(!this.host)return;const t=xe();if(t){this.host.parentElement!==t&&t.insertBefore(this.host,t.firstElementChild),this.host.dataset.placement="inline";return}this.host.parentElement!==document.documentElement&&document.documentElement.append(this.host),this.host.dataset.placement="fixed"}dispose(){var t,e,i,n;(t=this.prompts)==null||t.dispose(),window.clearTimeout(this.copyResetTimer),window.clearTimeout(this.placementTimer),(e=this.placementObserver)==null||e.disconnect(),(i=this.disposeTheme)==null||i.call(this),window.removeEventListener("resize",this.handleViewportChange),(n=this.host)==null||n.remove(),this.host=null,this.shadow=null}render(){this.shadow&&(this.shadow.innerHTML=`
+  // src/ui/toolbar.ts
+  var YadaToolbar = class {
+    constructor(sync = null) {
+      this.sync = sync;
+    }
+    host = null;
+    shadow = null;
+    disposeTheme = null;
+    copyResetTimer = 0;
+    copyBusy = false;
+    placementObserver = null;
+    placementTimer = 0;
+    prompts = null;
+    quota = null;
+    closePanels() {
+      this.prompts?.close();
+      this.quota?.close();
+    }
+    mount() {
+      if (this.host?.isConnected) return;
+      document.getElementById(YADA_TOOLBAR_HOST_ID)?.remove();
+      this.host = document.createElement("div");
+      this.host.id = YADA_TOOLBAR_HOST_ID;
+      this.host.dataset.yadaRoot = "true";
+      this.host.dataset.placement = "fixed";
+      this.host.dataset.visible = "false";
+      this.host.setAttribute("data-yada-theme", detectYadaTheme());
+      this.shadow = this.host.attachShadow({ mode: "open" });
+      document.documentElement.append(this.host);
+      this.render();
+      this.query("[data-copy-all]")?.addEventListener("click", () => {
+        void this.copyAll();
+      });
+      this.quota = new QuotaIndicator(this.query("[data-quota]"));
+      this.prompts = new PromptPanel(this.query("[data-prompts]"));
+      this.disposeTheme = observeYadaTheme((theme) => {
+        this.host?.setAttribute("data-yada-theme", theme);
+      });
+      this.placementObserver = new MutationObserver(() => this.schedulePlacement());
+      this.placementObserver.observe(document.body, { childList: true, subtree: true });
+      window.addEventListener("resize", this.handleViewportChange, { passive: true });
+      this.ensurePlacement();
+    }
+    setVisible(visible) {
+      this.host?.setAttribute("data-visible", visible ? "true" : "false");
+    }
+    ensurePlacement() {
+      if (!this.host) return;
+      const target = findHeaderActions();
+      if (target) {
+        if (this.host.parentElement !== target) {
+          target.insertBefore(this.host, target.firstElementChild);
+        }
+        this.host.dataset.placement = "inline";
+        return;
+      }
+      if (this.host.parentElement !== document.documentElement) {
+        document.documentElement.append(this.host);
+      }
+      this.host.dataset.placement = "fixed";
+    }
+    dispose() {
+      this.quota?.dispose();
+      this.quota = null;
+      this.prompts?.dispose();
+      window.clearTimeout(this.copyResetTimer);
+      window.clearTimeout(this.placementTimer);
+      this.placementObserver?.disconnect();
+      this.disposeTheme?.();
+      window.removeEventListener("resize", this.handleViewportChange);
+      this.host?.remove();
+      this.host = null;
+      this.shadow = null;
+    }
+    render() {
+      if (!this.shadow) return;
+      this.shadow.innerHTML = `
       <style>
         :host {
-          --yada-primary: ${be};
-          --yada-primary-soft: ${we};
+          --yada-primary: ${YADA_ACCENT};
+          --yada-primary-soft: ${YADA_ACCENT_SOFT};
           --yada-text: #202123;
           --yada-muted: rgba(32, 33, 35, 0.64);
           --yada-button-bg: rgba(255, 255, 255, 0.68);
@@ -128,36 +5416,228 @@ ${n?`${n}
           cursor: default;
           opacity: 0.66;
         }
-        [data-preview-mode] { padding: 0; width: 20px; height: 20px; font-size: 16px; color: var(--yada-muted); border: 0; background: transparent; }
-        [data-preview-mode][aria-pressed="true"] { color: var(--yada-primary); }
+        button[data-quota] {
+          padding: 0;
+          width: 20px;
+          height: 20px;
+          border: 0;
+          background: transparent;
+          border-radius: 50%;
+          flex-shrink: 0;
+          line-height: 0;
+        }
+        button[data-quota] canvas {
+          display: block;
+          width: 20px;
+          height: 20px;
+        }
       </style>
-      <button type="button" data-preview-mode aria-pressed="false" aria-label="预览：User" title="预览：User">●</button>
+      <button type="button" data-quota aria-haspopup="dialog" aria-expanded="false" aria-label="Pro 额度：读取中" title="Pro 额度：读取中"><canvas width="32" height="32" aria-hidden="true"></canvas></button>
       <button type="button" data-copy-all data-state="idle">复制全部</button>
       <button type="button" data-prompts aria-expanded="false">提示词</button>
-    `)}async copyAll(){if(!this.copyBusy){this.copyBusy=!0,this.setCopyState("pending","复制中...",0);try{const t=await ut(),e=me(t.turns);if(!e){this.setCopyState("empty","没有可复制内容");return}await J(e),this.setCopyState("success",`已复制 ${t.turns.length} 轮`)}catch(t){console.error("ChatGPT Yada: copy all failed",t),this.setCopyState("error","复制失败")}finally{this.copyBusy=!1;const t=this.query("[data-copy-all]");(t==null?void 0:t.dataset.state)!=="pending"&&(t==null||t.removeAttribute("disabled"))}}}setCopyState(t,e="复制全部",i=1800){window.clearTimeout(this.copyResetTimer);const n=this.query("[data-copy-all]");n&&(n.dataset.state=t,n.textContent=e,n.disabled=t==="pending",i>0&&t!=="idle"&&(this.copyResetTimer=window.setTimeout(()=>{n.isConnected&&(n.dataset.state="idle",n.textContent="复制全部",n.disabled=!1)},i)))}schedulePlacement(){window.clearTimeout(this.placementTimer),this.placementTimer=window.setTimeout(()=>this.ensurePlacement(),180)}query(t){var e;return((e=this.shadow)==null?void 0:e.querySelector(t))??null}}function xe(){const r=document.querySelector("#page-header #conversation-header-actions");if(r)return r;const t=["#conversation-header-actions",'[data-testid="conversation-header-actions"]','header [aria-label*="Share" i]','header [data-testid*="share" i]',"main ~ div header button"];for(const n of t){const s=document.querySelector(n),o=s==null?void 0:s.parentElement;if(o&&ft(o))return o}const e=document.querySelector("header"),i=e==null?void 0:e.querySelector('button, [role="button"]');return i!=null&&i.parentElement&&ft(i.parentElement)?i.parentElement:null}function ft(r){const t=r.getBoundingClientRect();return t.width>0&&t.height>0&&t.top<120&&t.right>window.innerWidth*.45}const I="button[data-toc-item-index], button[data-toc-active]";function ke(){return!!document.querySelector(I)}function U(r){if(!r.isConnected)return!1;for(let t=r;t;t=t.parentElement){const e=getComputedStyle(t);if(t.hidden||t.getAttribute("aria-hidden")==="true"||e.display==="none"||e.visibility==="hidden"||e.visibility==="collapse"||Number(e.opacity)===0)return!1;if(t===r||e.position==="fixed"){const i=t.getBoundingClientRect();if(i.width<=0||i.height<=0||i.bottom<=0||i.top>=innerHeight||i.right<=0||i.left>=innerWidth)return!1}}return!0}function mt(){return[...document.querySelectorAll(I)].filter(U)}function gt(){for(const r of document.querySelectorAll(I))if(U(r))return{ready:!0};return{ready:!1}}function Ee(r){for(const t of r){if(t.type==="attributes"&&t.target instanceof Element&&t.target.matches(I))return!0;for(const e of t.addedNodes)if(e instanceof Element&&(e.matches(I)||e.querySelector(I)))return!0}return!1}function Te(r){let t=0;const e=()=>{r("confirm")},i=s=>{r(s),cancelAnimationFrame(t),t=requestAnimationFrame(e)},n=new MutationObserver(s=>{s.every(o=>o.target instanceof Element&&o.target.closest("[data-yada-root]"))||i(Ee(s)?"immediate":"confirm")});return n.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["data-toc-item-index","data-toc-active","class","style","hidden","aria-hidden"]}),window.addEventListener("resize",e,{passive:!0}),window.addEventListener("scroll",e,{capture:!0,passive:!0}),i("confirm"),()=>{n.disconnect(),cancelAnimationFrame(t),window.removeEventListener("resize",e),window.removeEventListener("scroll",e,!0)}}function A(r){if(r===document.scrollingElement||r===document.documentElement)return{top:0,height:innerHeight};const t=r.getBoundingClientRect(),e=Math.max(0,t.top+r.clientTop);return{top:e,height:Math.max(0,Math.min(innerHeight,t.bottom)-e)}}function P(){return document.querySelector('[class*="convSearchResultHighlightRoot"]')}function C(r=P()){for(let t=r;t&&t!==document.body;t=t.parentElement)if(t.scrollHeight>t.clientHeight+50&&/^(auto|scroll|overlay)$/.test(getComputedStyle(t).overflowY))return t;return document.scrollingElement??document.documentElement}function R(r){const t=P();return(t==null?void 0:t.querySelector(`:scope > [data-turn-id-container="${CSS.escape(r)}"]`))??null}function Ie(r){return r.map(t=>t.turnContainerId).join(`
-`)}function Ae(r){return r.map((t,e)=>({index:e,userMessageId:t.turnContainerId,turn:null,turnContainerId:t.turnContainerId,skeletonIndex:t.skeletonIndex,materialized:!0}))}function Ce(r,t){var d;const e=r.map((u,l)=>({index:l,userMessageId:u.userMessageId||u.id,assistantMessageId:u.assistantMessageId,turn:u,turnContainerId:null,skeletonIndex:null,materialized:!1}));if(!t.length)return e;const i=new Map(e.map(u=>[u.userMessageId,u])),n=new Map;for(const u of e){const l=(d=u.turn)==null?void 0:d.turnDomId;l&&n.set(l,u)}const s=new Set,o=[];t.forEach((u,l)=>{const h=i.get(u.turnContainerId)??n.get(u.turnContainerId);!h||s.has(h)||(vt(h,u),s.add(h),o.push({windowIndex:l,apiIndex:h.index}))});const c=new Set(o.map(u=>u.apiIndex-u.windowIndex));if(o.length&&c.size===1){const u=[...c][0];t.forEach((l,h)=>{const p=e[h+u];!p||s.has(p)||(vt(p,l),s.add(p))})}return e}function vt(r,t){r.turnContainerId=t.turnContainerId,r.skeletonIndex=t.skeletonIndex,r.materialized=!0}class Se{constructor(){a(this,"userParity",null)}reset(){this.userParity=null}collect(){var o;const t=P();if(!(t!=null&&t.isConnected))return[];const e=[...t.children].filter(c=>c.hasAttribute("data-turn-id-container")),i=e.map(c=>c.getAttribute("data-turn-id-container"));for(const c of t.querySelectorAll('section[data-turn="user"][data-turn-id]')){const d=c.getAttribute("data-turn-id"),u=c.closest("[data-turn-id-container]"),l=i.indexOf(d)>=0?i.indexOf(d):e.indexOf(u);if(l>=0&&!i[l].startsWith("client-created-")){this.userParity=l%2;break}}const n=this.userParity??((o=i[0])!=null&&o.startsWith("client-created-")?1:0),s=[];for(let c=0;c<i.length;c++)c%2!==n||!i[c]||i[c].startsWith("client-created-")||s.push({turnContainerId:i[c],skeletonIndex:c});return s}scan(t=[]){const e=this.collect();return t.length?Ce(t,e):Ae(e)}}function bt(r,t){var o,c;if(!r.length)return-1;const e=new Map(r.filter(d=>d.turnContainerId).map(d=>[d.turnContainerId,d.index])),i=A(t),n=i.top+i.height*.35;let s=((o=r.find(d=>d.materialized))==null?void 0:o.index)??0;for(const d of((c=P())==null?void 0:c.children)??[]){const u=e.get(d.getAttribute("data-turn-id-container")??"");u!==void 0&&d.getBoundingClientRect().top<=n&&(s=u)}return s}function wt(r){let t=location.href,e=0;const i=()=>{const s=location.href;if(s!==t){const o=t;t=s,r(s,o)}},n=()=>{i(),e=requestAnimationFrame(n)};return e=requestAnimationFrame(n),window.addEventListener("popstate",i),window.addEventListener("hashchange",i),()=>{cancelAnimationFrame(e),window.removeEventListener("popstate",i),window.removeEventListener("hashchange",i)}}function Me(r,t,e){const n=[document.querySelector("main"),t===document.scrollingElement?null:t].filter(l=>!!l).map(l=>l.getBoundingClientRect()).filter(l=>l.width>100&&l.height>100);let s=60;if(n.length)s=Math.max(44,innerWidth-Math.min(...n.map(l=>l.right))+24);else for(const l of document.querySelectorAll('aside, [role="complementary"], [data-testid*="panel"]')){const h=l.getBoundingClientRect();["fixed","sticky"].includes(getComputedStyle(l).position)&&h.width>100&&h.height>150&&h.left>innerWidth/2&&h.right>innerWidth-80&&(s=Math.max(s,innerWidth-h.left+24))}const o=A(t),c=Math.max(90,o.top+50),d=Math.max(30,Math.min(o.top+o.height-100,innerHeight-140)-c),u=Math.min(d,e*17);r.style.right=`${Math.min(Math.max(8,innerWidth-70),s)}px`,r.style.top=`${c+Math.max(0,(d-u)/2)}px`,r.style.height=`${u}px`}function Le(r){const t=A(r);let e=0;for(const n of document.querySelectorAll('header, [role="banner"], #page-header, #conversation-header, [data-testid="conversation-header"]')){if(n.closest("[data-yada-root]")||!U(n))continue;const s=n.getBoundingClientRect(),o=r.getBoundingClientRect();s.right>o.left&&s.left<o.right&&s.top<=t.top+24&&s.bottom>t.top&&s.height<t.height/2&&(e=Math.max(e,s.bottom-t.top))}if(e)return e;const i=parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--header-height"));return Number.isFinite(i)&&i>0?i:64}function yt(r,t){return Math.max(0,Math.min(t.scrollHeight-t.clientHeight,r.getBoundingClientRect().top-A(t).top+t.scrollTop-Le(t)-16))}function j(r){return!!r&&!r.disabled&&r.getAttribute("aria-disabled")!=="true"}function xt(r){const t=mt();if(!t.length)return!1;const i=t.find(n=>n.dataset.tocItemIndex===String(r))??t[r];return j(i)?(i.click(),!0):!1}function W(r,t){const e=mt();if(!e.length)return!1;if(e.length===t.length){const i=e.every((o,c)=>o.dataset.tocItemIndex===String(c))&&e.some((o,c)=>{var d;return Number(o.dataset.tocItemIndex)!==((d=t[c])==null?void 0:d.skeletonIndex)}),n=r.skeletonIndex==null?void 0:e.find(o=>o.dataset.tocItemIndex===String(r.skeletonIndex)),s=i?e[r.index]:n??e[r.index];if(j(s))return s.click(),!0}if(r.skeletonIndex!=null){const i=e.find(n=>n.dataset.tocItemIndex===String(r.skeletonIndex));if(j(i))return i.click(),!0}return!1}async function kt(r,t){if(t.aborted||!r.turnContainerId)return!1;const e=R(r.turnContainerId);if(!e)return!1;let i=C(e),n=0,s=!1;const o=location.pathname,c=[],d=()=>{s||(s=!0,cancelAnimationFrame(n),c.forEach(clearTimeout),t.removeEventListener("abort",d),window.removeEventListener("wheel",d,!0),window.removeEventListener("touchstart",d,!0),window.removeEventListener("keydown",u,!0),window.removeEventListener("popstate",d))},u=k=>{["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "].includes(k.key)&&d()};t.addEventListener("abort",d,{once:!0}),window.addEventListener("wheel",d,{capture:!0,passive:!0}),window.addEventListener("touchstart",d,{capture:!0,passive:!0}),window.addEventListener("keydown",u,!0),window.addEventListener("popstate",d);const l=yt(e,i),h=i.scrollTop,p=l-h,f=Math.abs(p)<2||Math.abs(p)>600?0:280,M=performance.now();let b=!f;f||(i.scrollTop=l);const Mt=k=>{if(!s){if(t.aborted||location.pathname!==o){d();return}if(i.isConnected||(i=C(),b=!0),!b){const w=Math.min(1,(k-M)/f);i.scrollTop=h+p*(1-Math.pow(1-w,3)),w===1&&(b=!0)}n=requestAnimationFrame(Mt)}};n=requestAnimationFrame(Mt);for(const k of[200,600,1200,2e3])c.push(window.setTimeout(()=>{if(s||t.aborted||location.pathname!==o){d();return}const w=r.turnContainerId?R(r.turnContainerId):null;if(w){i=C(w);const O=yt(w,i);Math.abs(i.scrollTop-O)>40&&(b=!0,i.scrollTop=O)}k===2e3&&d()},k));return f?new Promise(k=>{const w=()=>{clearTimeout(O),t.removeEventListener("abort",w),k(!s&&!t.aborted&&location.pathname===o)},O=window.setTimeout(w,f+40);t.addEventListener("abort",w,{once:!0})}):!0}async function Pe(r,t,e,i){var n;if(e.aborted)return!1;if(W(r,t))return!0;if(r.materialized&&r.turnContainerId&&R(r.turnContainerId))return kt(r,e);if(i!=null&&i.materialize&&!r.materialized){const s=await i.materialize(r.userMessageId,e);if(e.aborted)return!1;if(s){if(W(s,t))return!0;if(s.turnContainerId&&R(s.turnContainerId))return kt(s,e)}}return(n=i==null?void 0:i.fallbackRefresh)!=null&&n.call(i),!1}function Re(r){if(r===void 0||!Number.isFinite(r))return"";const t=new Date(r*1e3);if(!Number.isFinite(t.getTime()))return"";const e=i=>String(i).padStart(2,"0");return`${e(t.getMonth()+1)}月${e(t.getDate())}日 ${["周日","周一","周二","周三","周四","周五","周六"][t.getDay()]} ${e(t.getHours())}:${e(t.getMinutes())}:${e(t.getSeconds())}`}const Et="chatgpt-yada-rail-host";class _e{constructor(t){a(this,"host",document.createElement("div"));a(this,"marks",document.createElement("div"));a(this,"preview",document.createElement("div"));a(this,"turns",[]);a(this,"buttons",[]);a(this,"suppressed",!1);a(this,"active",-1);a(this,"hovered",-1);a(this,"assistant",!1);a(this,"timer",0);a(this,"statusTimer",0);a(this,"themeDispose");a(this,"hydrateTitle","");a(this,"jumpMessage","");document.querySelectorAll(`[id="${Et}"]`).forEach(n=>n.remove()),this.host.id=Et,this.host.dataset.yadaRoot="true",this.host.setAttribute("data-yada-theme",_());const e=this.host.attachShadow({mode:"open"}),i=document.createElement("style");i.textContent=`
-      :host { position: fixed; width: 58px; z-index: 2147483400; font: 12px/1.5 system-ui; --text:#303030; --bg:#fff; --bar:#aaa8; color:var(--text); }
-      :host([hidden]) { display:none; }
-      :host([data-yada-theme="dark"]) { --text:#eee; --bg:#272727; --bar:#aaa7; color-scheme:dark; }
-      .marks { height:100%; display:flex; flex-direction:column; }
-      .mark { position:relative; flex:1 1 0; min-height:0; padding:0; border:0; width:58px; background:transparent; display:flex; align-items:center; justify-content:flex-end; cursor:pointer; outline-offset:2px; }
-      .mark-bar { display:block; height:1px; width:16px; border-radius:2px; background:var(--bar); transition:width .12s, background .12s; }
-      .number { position:absolute; right:37px; color:var(--text); opacity:0; font:10px/1 system-ui; }
-      .mark[data-active="true"] .mark-bar { width:24px; background:#10a37f; height:2px; }
-      .mark[data-active="true"] .number, .mark[data-distance="0"] .number, .mark:focus-visible .number { opacity:1; }
-      .mark[data-distance="3"] .mark-bar { width:19px; background:#10a37f66; }
-      .mark[data-distance="2"] .mark-bar { width:23px; background:#10a37f99; }
-      .mark[data-distance="1"] .mark-bar { width:28px; background:#10a37fcc; }
-      .mark[data-distance="0"] .mark-bar { width:33px; background:#10a37f; height:2px; }
-      .preview { position:fixed; box-sizing:border-box; width:min(340px, calc(100vw - 24px)); background:var(--bg); color:var(--text); border:1px solid #8884; box-shadow:0 5px 20px #0002; padding:10px 12px; border-radius:10px; pointer-events:none; overflow:hidden; }
-      .preview[hidden] { display:none; }
-      .preview strong { display:block; margin-bottom:4px; font-size:11px; }
-      .preview section strong { color:#10a37f; font-weight:700; }
-      .preview-header { display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:6px; font-size:10px; }
-      .preview-header strong { margin:0; white-space:nowrap; }
-      .preview time { white-space:nowrap; opacity:.7; }
-      .preview section + section { margin-top:8px; }
-      .preview p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:2; overflow:hidden; }
-      .preview[data-expanded="true"] p { -webkit-line-clamp:5; }
-      @media (prefers-reduced-motion:reduce) { .mark-bar { transition:none; } }
-    `,this.marks.className="marks",this.marks.dataset.marks="true",this.marks.setAttribute("role","navigation"),this.marks.setAttribute("aria-label","对话轮次"),this.preview.className="preview",this.preview.hidden=!0,e.append(i,this.marks,this.preview),document.documentElement.append(this.host),this.host.hidden=!0,this.marks.addEventListener("pointermove",n=>{const s=this.marks.getBoundingClientRect();this.hover(Math.max(0,Math.min(this.turns.length-1,Math.floor((n.clientY-s.top)/s.height*this.turns.length))))}),this.marks.addEventListener("pointerleave",()=>this.clearHover()),this.marks.addEventListener("click",n=>{const s=n.target.closest("button"),o=s&&this.turns[Number(s.dataset.index)];o&&t(o.userMessageId)}),this.marks.addEventListener("focusin",n=>{const s=n.target.closest("button");s&&this.hover(Number(s.dataset.index))}),this.marks.addEventListener("focusout",()=>this.clearHover()),this.themeDispose=F(n=>this.host.setAttribute("data-yada-theme",n))}setEntries(t){const e=t.length!==this.turns.length||t.some((i,n)=>{var s;return i.userMessageId!==((s=this.turns[n])==null?void 0:s.userMessageId)});if(this.turns=t,!e){this.hovered>=0&&this.showPreview();return}this.clearHover(),this.active=-1,this.buttons=t.map(i=>{const n=document.createElement("button");n.type="button",n.className="mark",n.dataset.index=String(i.index),n.setAttribute("aria-label",`跳到第 ${i.index+1} 轮`);const s=document.createElement("span");s.className="number",s.textContent=String(i.index+1);const o=document.createElement("span");return o.className="mark-bar",n.append(s,o),n}),this.marks.replaceChildren(...this.buttons),this.host.hidden=this.suppressed||!t.length}setSuppressed(t){this.suppressed=t,this.host.hidden=t||!this.turns.length,t&&this.clearHover()}setHydrateTitle(t){this.hydrateTitle=t,this.jumpMessage||(this.host.title=t)}setStatus(t){clearTimeout(this.statusTimer),this.jumpMessage=t,this.host.title=t||this.hydrateTitle;let e=this.host.shadowRoot.querySelector('[role="status"]');e||(e=document.createElement("div"),e.setAttribute("role","status"),e.style.cssText="position:absolute;right:64px;top:0;white-space:nowrap;background:var(--bg);padding:4px 8px;border-radius:6px",this.host.shadowRoot.append(e)),e.textContent=t,e.hidden=!t,t&&t!=="定位中"&&(this.statusTimer=window.setTimeout(()=>this.setStatus(""),1800))}setActive(t){if(this.active===t)return;const e=this.buttons[this.active];e&&(delete e.dataset.active,e.removeAttribute("aria-current")),this.active=t;const i=this.buttons[t];i&&(i.dataset.active="true",i.setAttribute("aria-current","step"))}setPreviewMode(t){this.assistant=t,this.hovered>=0&&this.showPreview()}clearHover(){clearTimeout(this.timer),this.timer=0;for(const t of this.buttons.slice(Math.max(0,this.hovered-3),this.hovered+4))delete t.dataset.distance;this.hovered=-1,this.preview.hidden=!0}dispose(){clearTimeout(this.statusTimer),this.clearHover(),this.themeDispose(),this.host.remove()}hover(t){if(!(this.suppressed||t===this.hovered||!this.turns[t])){this.clearHover(),this.hovered=t;for(let e=Math.max(0,t-3);e<=Math.min(this.buttons.length-1,t+3);e++)this.buttons[e].dataset.distance=String(Math.abs(e-t));this.preview.dataset.expanded="false",this.showPreview(),this.timer=window.setTimeout(()=>{this.preview.dataset.expanded="true",this.showPreview()},1e3)}}showPreview(){var l;const t=this.turns[this.hovered],e=this.buttons[this.hovered];if(!t||!e)return;const i=document.createElement("strong");i.textContent=`第 ${t.index+1} 轮`;const n=(h,p)=>{const f=document.createElement("section");f.dataset.previewRole=h;const M=document.createElement("strong");M.textContent=h;const b=document.createElement("p");return b.textContent=p,f.append(M,b),f},s=document.createElement("div");s.className="preview-header",s.append(i);const o=Re((l=t.turn)==null?void 0:l.userCreatedAt);if(o){const h=document.createElement("time");h.textContent=o,s.append(h)}this.preview.replaceChildren(s),t.turn&&(this.preview.append(n("Harson",t.turn.userPreview)),this.assistant&&this.preview.append(n("ChatGPT",t.turn.assistantPreview||"该轮暂无 ChatGPT 回复"))),this.preview.hidden=!1;const c=e.getBoundingClientRect(),d=this.preview.getBoundingClientRect().width;this.preview.style.left=`${Math.max(8,Math.min(innerWidth-d-8,c.left-d-12))}px`,this.preview.style.maxHeight=`${innerHeight-16}px`;const u=this.preview.getBoundingClientRect().height;this.preview.style.top=`${Math.max(8,Math.min(innerHeight-u-8,c.top-u/2))}px`}}const Tt={maxPages:20,maxMs:6e4,maxResumes:3,idleMs:2500,pageTimeoutMs:1e4,stallRounds:2};function It(){return!!document.querySelector('button[data-testid="stop-button"], button[aria-label="Stop streaming"], button[aria-label="Stop generating"], button[aria-label="停止生成"], button[aria-label="Stop"]')}function $e(r,t,e){return t?e==="HISTORY_HYDRATING"?`正在加载更早记录 ${r}/${t}`:e==="API_LOADING"?"正在读取完整会话":e==="PARTIAL_STOPPED"?`部分记录 ${r}/${t}`:"":""}const G="chatgpt-yada-history";function Y(r,t){return new Promise((e,i)=>{const n=c=>{if(c.source!==window||c.origin!==location.origin)return;const d=c.data;!d||d.source!==G||!r(d)||(o(),e(d))},s=()=>{o(),i(new DOMException("Aborted","AbortError"))},o=()=>{window.removeEventListener("message",n),t==null||t.removeEventListener("abort",s)};window.addEventListener("message",n),t==null||t.addEventListener("abort",s,{once:!0}),t!=null&&t.aborted&&s()})}function At(r){window.postMessage({source:G,...r},location.origin)}class De{subscribe(t){const e=i=>{if(i.source!==window||i.origin!==location.origin)return;const n=i.data;!n||n.source!==G||t(n)};return window.addEventListener("message",e),()=>window.removeEventListener("message",e)}async query(){const t=new AbortController,e=setTimeout(()=>t.abort(),200);At({type:"query"});try{return await Y(i=>i.type==="status"||i.type==="ready",t.signal)}catch{return{generation:0,hasSentinel:!1,conversationId:null}}finally{clearTimeout(e)}}async loadPage(t,e){const i=Date.now()+Math.random(),n={ok:!1,status:0,triggered:!1,generation:0,hasSentinel:!1,nonce:i,conversationId:t},s=new AbortController,o=()=>s.abort();if(e==null||e.addEventListener("abort",o,{once:!0}),e!=null&&e.aborted)throw e.removeEventListener("abort",o),new DOMException("Aborted","AbortError");const c=setTimeout(()=>s.abort(),Tt.pageTimeoutMs);At({type:"load-page",conversationId:t,nonce:i});let d=!1;try{const u=await Y(h=>h.type==="load-result"&&h.nonce===i,s.signal);if(!u.triggered)return{...n,...u,nonce:i,triggered:!1,conversationId:t};d=!0;const l=await Y(h=>h.type==="page-settled"&&h.nonce===i,s.signal);return{ok:l.ok!==!1,status:l.status??0,triggered:!0,generation:l.generation??0,hasSentinel:l.hasSentinel===!0,nonce:i,conversationId:l.conversationId??t,sentinelGeneration:l.sentinelGeneration,hasPreviousPage:l.hasPreviousPage,cursor:l.cursor}}catch(u){if(e!=null&&e.aborted)throw u;return{...n,triggered:d}}finally{clearTimeout(c),e==null||e.removeEventListener("abort",o)}}}function ze(){var i;const r=C(),t=A(r);let e="";for(const n of((i=P())==null?void 0:i.children)??[]){if(!(n instanceof HTMLElement)||!n.hasAttribute("data-turn-id-container"))continue;const s=n.getAttribute("data-turn-id-container")??"";if(!s||s.startsWith("client-created-"))continue;const o=n.getBoundingClientRect();if(o.bottom>t.top&&o.top<t.top+t.height)return e=s,{visibleTurnContainerId:e,offsetFromScrollRootTop:o.top-t.top,scrollHeight:r.scrollHeight}}return{visibleTurnContainerId:e,offsetFromScrollRootTop:0,scrollHeight:r.scrollHeight}}function Ne(r){if(!r)return;const t=C(),e=A(t),i=r.visibleTurnContainerId?R(r.visibleTurnContainerId):null;if(i){t.scrollTop+=i.getBoundingClientRect().top-e.top-r.offsetFromScrollRootTop;return}t.scrollTop+=Math.max(0,t.scrollHeight-r.scrollHeight)}const Oe=(r,t)=>new Promise((e,i)=>{const n=setTimeout(()=>{t==null||t.removeEventListener("abort",s),e()},r),s=()=>{clearTimeout(n),i(new DOMException("Aborted","AbortError"))};t==null||t.addEventListener("abort",s,{once:!0}),t!=null&&t.aborted&&s()});class He{constructor(t){a(this,"limits");a(this,"bridge");a(this,"conversationId",null);a(this,"paused",!1);a(this,"terminal",!1);a(this,"skipIdleResume",!1);a(this,"inflight",null);a(this,"epoch",0);a(this,"sessionStartedAt",0);a(this,"sessionPages",0);a(this,"sessionLastCursor");a(this,"sessionStalls",0);a(this,"sessionResumes",0);a(this,"runAbort",null);a(this,"activeTargetId",null);a(this,"waiters",[]);a(this,"idleTimer",0);a(this,"status","API_LOADING");this.opts=t,this.limits={...Tt,...t.limits},this.bridge=t.bridge??new De}get sessionPageCount(){return this.sessionPages}get sessionResumeCount(){return this.sessionResumes}get sessionAgeMs(){return this.sessionStartedAt?Date.now()-this.sessionStartedAt:0}reset(t){var e;this.epoch++,(e=this.runAbort)==null||e.abort(),this.runAbort=null,this.conversationId=t,this.paused=!1,this.terminal=!1,this.skipIdleResume=!1,this.inflight=null,this.sessionStartedAt=0,this.sessionPages=0,this.sessionLastCursor=void 0,this.sessionStalls=0,this.sessionResumes=0,this.failWaiters(),this.activeTargetId=null,clearTimeout(this.idleTimer),this.status=t?"API_LOADING":"PARTIAL_STOPPED",this.emit()}dispose(){var t;this.epoch++,this.terminal=!0,this.paused=!0,(t=this.runAbort)==null||t.abort(),this.runAbort=null,this.inflight=null,this.failWaiters(),clearTimeout(this.idleTimer)}pause(){var t;this.paused=!0,this.failWaiters(),this.activeTargetId=null,(t=this.runAbort)==null||t.abort(),clearTimeout(this.idleTimer),!this.skipIdleResume&&!this.terminal&&(this.idleTimer=window.setTimeout(()=>this.resumeFromIdle(),this.limits.idleMs))}haltBackground(){var t;this.paused=!0,this.skipIdleResume=!0,this.terminal=!0,this.activeTargetId=null,clearTimeout(this.idleTimer),(t=this.runAbort)==null||t.abort()}markTargetReached(t){this.resolveWaiters(t,!0),this.activeTargetId===t&&(this.activeTargetId=null)}resumeFromIdle(){this.idleTimer=0,!(!this.paused||this.terminal||this.skipIdleResume||document.visibilityState==="hidden")&&(this.sessionResumes>=this.limits.maxResumes||(this.sessionResumes++,this.paused=!1,this.startAuto()))}async startAuto(){if(this.paused||this.terminal||this.inflight||!this.conversationId||document.visibilityState==="hidden"||It())return;if(this.opts.totalCount()<=this.opts.materializedCount()){this.completeIfDone();return}(await this.bridge.query()).hasSentinel&&(this.ensureLoop(),await this.inflight)}async materialize(t,e){if(this.opts.isMaterialized(t))return!0;if(this.terminal&&this.sessionPages>=this.limits.maxPages)return!1;this.failWaiters(),this.activeTargetId=t,this.paused=!1,this.skipIdleResume=!1,(!this.terminal||this.opts.materializedCount()<this.opts.totalCount())&&(this.terminal=!1);const i=this.addWaiter(t,e);return this.ensureLoop(),i}addWaiter(t,e){return new Promise(i=>{const n={id:t,resolve:i,signal:e},s=()=>{this.waiters=this.waiters.filter(o=>o!==n),this.activeTargetId===t&&(this.activeTargetId=null),i(!1)};if(n.onAbort=s,e!=null&&e.aborted){s();return}e==null||e.addEventListener("abort",s,{once:!0}),this.waiters.push(n),this.flushWaiters()})}ensureLoop(){var t;if(this.conversationId){if(this.inflight){const e=this.inflight;(t=this.runAbort)!=null&&t.signal.aborted&&e.finally(()=>{!this.inflight&&this.conversationId&&(!this.paused||this.activeTargetId)&&!this.terminal&&this.startLoop()});return}this.startLoop()}}startLoop(){if(this.inflight||!this.conversationId)return;this.runAbort=new AbortController;const t=this.runAbort.signal,e=this.loop(t).finally(()=>{var i;((i=this.runAbort)==null?void 0:i.signal)===t&&(this.runAbort=null),this.inflight===e&&(this.inflight=null)});this.inflight=e}async loop(t){const e=this.epoch;this.sessionStartedAt||(this.sessionStartedAt=Date.now()),this.status="HISTORY_HYDRATING",this.emit();try{for(;e===this.epoch&&!this.terminal&&!t.aborted;){if(this.flushWaiters(),this.activeTargetId&&this.opts.isMaterialized(this.activeTargetId)&&(this.markTargetReached(this.activeTargetId),!this.activeTargetId&&this.paused))return!1;if(!this.activeTargetId&&this.opts.totalCount()>0&&this.opts.materializedCount()>=this.opts.totalCount())return this.status="COMPLETE",this.terminal=!0,this.emit(),!0;if(this.paused&&!this.activeTargetId)return!1;if(document.visibilityState==="hidden"&&!this.activeTargetId)return this.pause(),!1;if(It()&&!this.activeTargetId)return this.pause(),!1;if(Date.now()-this.sessionStartedAt>this.limits.maxMs)return this.stop(),!1;if(this.sessionPages>=this.limits.maxPages)return this.stop(),!1;const i=this.opts.getConversationId();if(!i||i!==this.conversationId)return!1;const n=this.opts.skeletonSignature(),s=this.opts.materializedCount(),o=ze();this.sessionPages++;const c=await this.bridge.loadPage(i,t);if(e!==this.epoch||t.aborted)return!1;const d=Date.now()+Math.min(400,this.limits.pageTimeoutMs);for(;Date.now()<d&&e===this.epoch&&!t.aborted&&(this.opts.applyBindings(),this.flushWaiters(),!(this.activeTargetId&&this.opts.isMaterialized(this.activeTargetId)||this.opts.skeletonSignature()!==n||this.opts.materializedCount()!==s));)await Oe(40,t);if(e!==this.epoch||t.aborted)return!1;if(this.opts.applyBindings(),Ne(o),this.flushWaiters(),this.emit(),c.status===429||c.status>=400&&!c.ok)return this.stop(),!1;if(!c.triggered&&!(this.activeTargetId&&this.opts.isMaterialized(this.activeTargetId)))return this.stop(),!1;if(c.hasPreviousPage===!1)return this.opts.applyBindings(),this.flushWaiters(),this.opts.materializedCount()>=this.opts.totalCount()?(this.status="COMPLETE",this.terminal=!0):this.stop(),this.emit(),this.activeTargetId?this.opts.isMaterialized(this.activeTargetId):this.status==="COMPLETE";if(c.cursor&&c.cursor===this.sessionLastCursor)return this.stop(),!1;if(c.cursor&&(this.sessionLastCursor=c.cursor),this.opts.skeletonSignature()===n&&this.opts.materializedCount()===s){if(this.sessionStalls++,this.sessionStalls>=this.limits.stallRounds)return this.stop(),!1}else this.sessionStalls=0}return this.activeTargetId?this.opts.isMaterialized(this.activeTargetId):this.opts.materializedCount()>=this.opts.totalCount()}catch(i){return t.aborted||i instanceof DOMException&&i.name==="AbortError"||this.stop(),!1}finally{this.emit()}}flushWaiters(){for(const t of[...this.waiters])this.opts.isMaterialized(t.id)&&this.resolveWaiters(t.id,!0)}resolveWaiters(t,e){var n;const i=this.waiters.filter(s=>s.id===t);this.waiters=this.waiters.filter(s=>s.id!==t);for(const s of i)s.onAbort&&((n=s.signal)==null||n.removeEventListener("abort",s.onAbort)),s.resolve(e)}failWaiters(){var e;const t=this.waiters;this.waiters=[];for(const i of t)i.onAbort&&((e=i.signal)==null||e.removeEventListener("abort",i.onAbort)),i.resolve(!1)}completeIfDone(){this.opts.totalCount()>0&&this.opts.materializedCount()>=this.opts.totalCount()&&(this.status="COMPLETE",this.terminal=!0,this.emit())}stop(){this.terminal=!0,this.status=this.opts.materializedCount()>=this.opts.totalCount()&&this.opts.totalCount()>0?"COMPLETE":"PARTIAL_STOPPED",this.failWaiters(),this.activeTargetId=null,this.emit()}emit(){this.opts.onStatus(this.status,$e(this.opts.materializedCount(),this.opts.totalCount(),this.status))}}const N="chatgpt-yada:pending-jump:v1",Ct="chatgpt-yada:message-fallback:",V=6e4,qe=45e3;function S(){try{return sessionStorage}catch{return null}}function Fe(){var t,e;const r=(t=S())==null?void 0:t.getItem(N);if(!r)return null;try{const i=JSON.parse(r);if(!(i!=null&&i.conversationId)||!i.userMessageId||i.attempted!==!0)return null;const n=Number(i.createdAt)||0;return!n||Date.now()-n>V?((e=S())==null||e.removeItem(N),null):{...i,createdAt:n}}catch{return null}}function Be(r){var t;(t=S())==null||t.setItem(N,JSON.stringify({...r,createdAt:r.createdAt??Date.now()}))}function x(){var r;(r=S())==null||r.removeItem(N)}function Ue(r){var t;return((t=S())==null?void 0:t.getItem(`${Ct}${r}`))==="1"}function je(r){var t;(t=S())==null||t.setItem(`${Ct}${r}`,"1")}function We(r=location.href){const t=new URL(r);return t.searchParams.has("message")?null:(t.searchParams.set("message",""),t.toString())}function Ge(){const r=We();return r?(location.replace(r),!0):!1}function Ye(r){return!Ue(r)&&!new URL(location.href).searchParams.has("message")}class Ve{constructor(){a(this,"view",new _e(t=>{this.jump(t)}));a(this,"apiTurns",[]);a(this,"entries",[]);a(this,"skeleton",new Se);a(this,"hydrator");a(this,"official",!1);a(this,"officialDispose");a(this,"routeDispose");a(this,"root",null);a(this,"route",null);a(this,"epoch",0);a(this,"disposed",!1);a(this,"mutation");a(this,"resize");a(this,"resizeTargets",[]);a(this,"refreshTimer",0);a(this,"apiTimer",0);a(this,"raf",0);a(this,"lastFetch",0);a(this,"fetching",!1);a(this,"pendingFetch",!1);a(this,"failures",0);a(this,"request",null);a(this,"jumping",null);a(this,"restoringPending",!1);a(this,"restoreNotify",null);a(this,"activeTargetUserMessageId",null);a(this,"activeTargetIndex",null);a(this,"cancelJump",()=>{var t;(t=this.jumping)==null||t.abort(),this.jumping=null,this.activeTargetUserMessageId=null,this.activeTargetIndex=null,this.view.setStatus("")});a(this,"onUserInterrupt",()=>{this.cancelJump(),this.hydrator.pause()});a(this,"onUserKey",t=>{["ArrowUp","ArrowDown","PageUp","PageDown","Home","End","Escape"," "].includes(t.key)&&this.onUserInterrupt()});a(this,"onVisibility",()=>{document.visibilityState==="hidden"&&this.hydrator.pause()});a(this,"scheduleRefresh",()=>{this.disposed||this.refreshTimer||(this.refreshTimer=window.setTimeout(()=>{this.refreshTimer=0,this.refreshAnchors()},160))});a(this,"refreshAnchors",()=>this.disposed||!this.route?[]:(this.entries=this.skeleton.scan(this.apiTurns),this.view.setEntries(this.entries),this.bindRoot(C()),this.view.host.isConnected||document.documentElement.append(this.view.host),Me(this.view.host,this.root,this.entries.length),this.syncOfficialNavigation(),this.view.setActive(bt(this.entries,this.root)),this.apiTurns.length&&this.hydrator.startAuto(),this.entries));a(this,"onScroll",()=>{this.raf||(this.raf=requestAnimationFrame(()=>{this.raf=0,this.root&&!this.disposed&&this.view.setActive(bt(this.entries,this.root))}))});this.hydrator=new He({getConversationId:()=>this.route,skeletonSignature:()=>Ie(this.skeleton.collect()),materializedCount:()=>this.entries.filter(t=>t.materialized).length,totalCount:()=>this.apiTurns.length,isMaterialized:t=>this.entries.some(e=>e.userMessageId===t&&e.materialized),applyBindings:()=>{this.refreshAnchors()},onStatus:(t,e)=>{this.view.host.dataset.yadaHistoryStatus=t,this.view.setHydrateTitle(e)}}),this.resize=new ResizeObserver(()=>this.scheduleRefresh()),this.mutation=new MutationObserver(t=>{const e=t.filter(i=>{const n=i.target instanceof Element?i.target:i.target.parentElement;return n&&!n.closest("[data-yada-root]")&&!zt(n)&&!(i.type==="childList"&&[...i.addedNodes,...i.removedNodes].every(s=>s instanceof Element&&s.matches("[data-yada-root]")))});e.length&&(this.syncRoute(),this.scheduleRefresh(),e.some(i=>{const n=i.target instanceof Element?i.target:i.target.parentElement;return i.type!=="attributes"&&!!(n!=null&&n.closest("main, #thread"))})&&this.scheduleApi())}),this.mutation.observe(document.body,{childList:!0,subtree:!0,characterData:!0,attributes:!0,attributeFilter:["data-turn-id-container","data-turn","data-turn-id","class","style","hidden","aria-hidden"]}),this.officialDispose=Te(t=>this.syncOfficialNavigation(t)),this.routeDispose=wt(()=>this.syncRoute()),window.addEventListener("resize",this.scheduleRefresh,{passive:!0}),window.addEventListener("wheel",this.onUserInterrupt,{passive:!0}),window.addEventListener("touchstart",this.onUserInterrupt,{passive:!0}),window.addEventListener("pointerdown",this.onUserInterrupt,{passive:!0}),window.addEventListener("keydown",this.onUserKey),document.addEventListener("visibilitychange",this.onVisibility)}setPreviewMode(t){this.view.setPreviewMode(t)}syncRoute(){var e;const t=v();if(this.route===t){this.scheduleRefresh();return}this.epoch++,this.route=t,(e=this.request)==null||e.abort(),this.cancelJump(),clearTimeout(this.apiTimer),clearTimeout(this.refreshTimer),cancelAnimationFrame(this.raf),this.apiTimer=this.refreshTimer=this.raf=0,this.fetching=this.pendingFetch=!1,this.failures=0,this.lastFetch=0,this.apiTurns=[],this.entries=[],this.skeleton.reset(),this.hydrator.reset(t),this.view.clearHover(),this.view.setHydrateTitle(""),this.view.setEntries([]),this.bindRoot(null),t&&(this.refreshAnchors(),this.fetchTurns(),this.restorePending(t))}dispose(){var t;this.disposed=!0,this.epoch++,(t=this.request)==null||t.abort(),this.cancelJump(),this.hydrator.dispose(),clearTimeout(this.apiTimer),clearTimeout(this.refreshTimer),cancelAnimationFrame(this.raf),this.officialDispose(),this.routeDispose(),this.mutation.disconnect(),this.resize.disconnect(),this.bindRoot(null),window.removeEventListener("resize",this.scheduleRefresh),window.removeEventListener("wheel",this.onUserInterrupt),window.removeEventListener("touchstart",this.onUserInterrupt),window.removeEventListener("pointerdown",this.onUserInterrupt),window.removeEventListener("keydown",this.onUserKey),document.removeEventListener("visibilitychange",this.onVisibility),this.view.dispose()}async jump(t){this.cancelJump(),this.view.clearHover();const e=this.entries.find(n=>n.userMessageId===t);if(!e)return!1;this.activeTargetUserMessageId=e.userMessageId,this.activeTargetIndex=e.index;const i=new AbortController;this.jumping=i,this.view.setStatus("定位中");try{const n=await Pe(e,this.entries,i.signal,{materialize:async(s,o)=>{const c=await this.hydrator.materialize(s,o);return this.refreshAnchors(),c?this.entries.find(d=>d.userMessageId===s)??null:null},fallbackRefresh:()=>this.useMessageFallback(e)});return this.jumping!==i?!1:n?(x(),this.activeTargetUserMessageId=null,this.activeTargetIndex=null,i.signal.aborted||this.view.setStatus("定位成功"),!i.signal.aborted):(i.signal.aborted?this.view.setStatus(""):this.view.setStatus("该轮暂时无法定位"),!1)}catch{return i.signal.aborted||this.view.setStatus("该轮暂时无法定位"),!1}}useMessageFallback(t){const e=this.route;return!e||this.restoringPending||!Ye(e)?!1:(Be({conversationId:e,userMessageId:t.userMessageId,index:t.index,attempted:!0}),je(e),Ge())}async restorePending(t){const e=Fe();if(!e||e.conversationId!==t)return;const i=Math.min(qe,V-(Date.now()-e.createdAt));if(i<=0){x();return}this.restoringPending=!0;const n=this.epoch;await new Promise(s=>{let o=!1,c=!1;const d=()=>{c||(c=!0,this.restoreNotify=null,l.disconnect(),clearTimeout(h),clearInterval(p),this.restoringPending=!1,s())},u=()=>{if(!c){if(n!==this.epoch||this.disposed){x(),d();return}o||(o=!0,this.attemptRestore(e,n).then(f=>{o=!1,(f||n!==this.epoch||this.disposed)&&d()},()=>{o=!1}))}};this.restoreNotify=u;const l=new MutationObserver(u);l.observe(document.documentElement,{childList:!0,subtree:!0,attributes:!0,attributeFilter:["data-toc-item-index","data-toc-active","data-turn-id-container","hidden","aria-hidden"]});const h=window.setTimeout(()=>{x(),d()},i),p=window.setInterval(u,500);u()})}async attemptRestore(t,e){if(e!==this.epoch||this.disposed)return!0;if(Date.now()-t.createdAt>V)return x(),!0;this.refreshAnchors();const i=this.entries.find(s=>s.userMessageId===t.userMessageId),n=gt().ready;return!i&&n&&xt(t.index)?(x(),this.view.setStatus("定位成功"),!0):i&&(i.materialized||n||this.apiTurns.length)&&await this.jump(t.userMessageId)?(x(),!0):!1}tryOfficialTakeover(){const t=this.activeTargetUserMessageId,e=this.activeTargetIndex;if(t==null||e==null)return!1;const i=this.entries.find(s=>s.userMessageId===t);return(i?W(i,this.entries):!1)||xt(e)?(this.hydrator.markTargetReached(t),this.hydrator.haltBackground(),x(),this.activeTargetUserMessageId=null,this.activeTargetIndex=null,this.view.setStatus("定位成功"),!0):!1}syncOfficialNavigation(t="confirm"){var i,n,s;if(t==="immediate")return ke()&&this.view.setSuppressed(!0),(i=this.restoreNotify)==null||i.call(this),this.official;const e=gt().ready;return this.view.setSuppressed(e),e===this.official?(e&&this.activeTargetUserMessageId&&this.tryOfficialTakeover(),(n=this.restoreNotify)==null||n.call(this),e):(this.official=e,e?(this.view.clearHover(),this.activeTargetUserMessageId!=null?this.tryOfficialTakeover():this.cancelJump()):this.refreshAnchors(),(s=this.restoreNotify)==null||s.call(this),e)}scheduleApi(){if(!(!this.route||this.disposed||this.apiTimer)){if(this.fetching){this.pendingFetch=!0;return}this.apiTimer=window.setTimeout(()=>{this.apiTimer=0,this.fetchTurns()},Math.max(600,5e3-(Date.now()-this.lastFetch)))}}async fetchTurns(){var n;const t=this.route,e=this.epoch;if(!t||this.disposed||this.fetching)return;this.fetching=!0,this.lastFetch=Date.now();const i=new AbortController;this.request=i;try{const s=await ut({conversationId:t,signal:i.signal});if(e!==this.epoch||this.disposed)return;this.failures=0,this.apiTurns=s.turns,this.refreshAnchors()}catch{if(e!==this.epoch||this.disposed)return;this.failures++,this.view.setHydrateTitle("会话读取失败，等待重新读取完整会话"),this.view.host.title="会话读取失败，等待重新读取完整会话",this.failures<=3&&(this.pendingFetch=!0)}finally{e===this.epoch&&!this.disposed&&(this.fetching=!1,this.pendingFetch&&(this.pendingFetch=!1,this.scheduleApi()),(n=this.restoreNotify)==null||n.call(this))}}bindRoot(t){var i;this.root!==t&&((i=this.root)==null||i.removeEventListener("scroll",this.onScroll),document.removeEventListener("scroll",this.onScroll),this.root=t,t===document.scrollingElement?document.addEventListener("scroll",this.onScroll,{passive:!0}):t==null||t.addEventListener("scroll",this.onScroll,{passive:!0}));const e=(t?[t,document.querySelector("main")]:[]).filter(n=>n instanceof HTMLElement);(e.length!==this.resizeTargets.length||e.some((n,s)=>this.resizeTargets[s]!==n))&&(this.resize.disconnect(),e.forEach(n=>this.resize.observe(n)),this.resizeTargets=e)}}class Je{constructor(){a(this,"rail",null);a(this,"toolbar",null);a(this,"routeDispose",null);a(this,"dispose",()=>{var t,e,i;(t=this.routeDispose)==null||t.call(this),this.routeDispose=null,(e=this.rail)==null||e.dispose(),this.rail=null,(i=this.toolbar)==null||i.dispose(),this.toolbar=null})}mount(){this.rail=new Ve,this.toolbar=new ye(t=>{var e;return(e=this.rail)==null?void 0:e.setPreviewMode(t)}),this.toolbar.mount(),this.syncPageState(),this.routeDispose=wt(()=>{var t;(t=this.toolbar)==null||t.closePanels(),this.syncPageState()})}syncPageState(){var e,i,n,s,o;(e=this.toolbar)==null||e.ensurePlacement(),(i=this.toolbar)==null||i.setVisible(y());const t=(s=(n=document.getElementById("chatgpt-yada-toolbar-host"))==null?void 0:n.shadowRoot)==null?void 0:s.querySelector("[data-copy-all]");t&&(t.hidden=!E()),(o=this.rail)==null||o.syncRoute()}}if(y()){const r="__chatgptYadaDispose",t=globalThis;(St=t[r])==null||St.call(t);const e=new Je;e.mount();const i=()=>e.dispose(),n=s=>{s.persisted&&(e.dispose(),e.mount())};window.addEventListener("pagehide",i),window.addEventListener("pageshow",n),t[r]=()=>{e.dispose(),window.removeEventListener("pagehide",i),window.removeEventListener("pageshow",n)}}})();
+    `;
+    }
+    async copyAll() {
+      if (this.copyBusy) return;
+      this.copyBusy = true;
+      this.setCopyState("pending", "复制中...", 0);
+      try {
+        const id = getConversationIdFromUrl();
+        if (id && this.sync && this.sync.getActiveConversationId() !== id) this.sync.setActiveConversation(id);
+        let snapshot = this.sync?.getSnapshot() ?? null;
+        if (!snapshot && this.sync) {
+          await this.sync.requestSync("copy");
+          snapshot = this.sync.getSnapshot();
+        }
+        if (!snapshot) throw new Error("No conversation snapshot");
+        const turns = snapshot.activeTurns;
+        const markdown = formatTurnsAsMarkdown(turns);
+        if (!markdown) {
+          this.setCopyState("empty", "没有可复制内容");
+          return;
+        }
+        await writeTextToClipboard(markdown);
+        this.setCopyState("success", `已复制 ${turns.length} 轮`);
+      } catch (error) {
+        console.error("ChatGPT Yada: copy all failed", error);
+        this.setCopyState("error", "复制失败");
+      } finally {
+        this.copyBusy = false;
+        const button = this.query("[data-copy-all]");
+        if (button?.dataset.state !== "pending") button?.removeAttribute("disabled");
+      }
+    }
+    setCopyState(state, label = "复制全部", resetAfterMs = 1800) {
+      window.clearTimeout(this.copyResetTimer);
+      const button = this.query("[data-copy-all]");
+      if (!button) return;
+      button.dataset.state = state;
+      button.textContent = label;
+      button.disabled = state === "pending";
+      if (resetAfterMs > 0 && state !== "idle") {
+        this.copyResetTimer = window.setTimeout(() => {
+          if (!button.isConnected) return;
+          button.dataset.state = "idle";
+          button.textContent = "复制全部";
+          button.disabled = false;
+        }, resetAfterMs);
+      }
+    }
+    schedulePlacement() {
+      window.clearTimeout(this.placementTimer);
+      this.placementTimer = window.setTimeout(() => this.ensurePlacement(), 180);
+    }
+    handleViewportChange = () => {
+      this.ensurePlacement();
+    };
+    query(selector) {
+      return this.shadow?.querySelector(selector) ?? null;
+    }
+  };
+  function findHeaderActions() {
+    const direct = document.querySelector("#page-header #conversation-header-actions");
+    if (direct) return direct;
+    const candidates = [
+      "#conversation-header-actions",
+      '[data-testid="conversation-header-actions"]',
+      'header [aria-label*="Share" i]',
+      'header [data-testid*="share" i]',
+      "main ~ div header button"
+    ];
+    for (const selector of candidates) {
+      const element = document.querySelector(selector);
+      const parent = element?.parentElement;
+      if (parent && isUsableHeaderTarget(parent)) return parent;
+    }
+    const header = document.querySelector("header");
+    const button = header?.querySelector('button, [role="button"]');
+    return button?.parentElement && isUsableHeaderTarget(button.parentElement) ? button.parentElement : null;
+  }
+  function isUsableHeaderTarget(element) {
+    const rect = element.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0 && rect.top < 120 && rect.right > window.innerWidth * 0.45;
+  }
+
+  // src/utils/route.ts
+  function observeRouteChange(onChange) {
+    let previousUrl = location.href, raf = 0;
+    const check = () => {
+      const currentUrl = location.href;
+      if (currentUrl !== previousUrl) {
+        const old = previousUrl;
+        previousUrl = currentUrl;
+        onChange(currentUrl, old);
+      }
+    };
+    const frame = () => {
+      check();
+      raf = requestAnimationFrame(frame);
+    };
+    raf = requestAnimationFrame(frame);
+    window.addEventListener("popstate", check);
+    window.addEventListener("hashchange", check);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener("popstate", check);
+      window.removeEventListener("hashchange", check);
+    };
+  }
+
+  // src/content.ts
+  var ChatGptYadaApp = class {
+    sync = null;
+    hydrator = null;
+    toolbar = null;
+    quota = null;
+    routeDispose = null;
+    messageDispose = null;
+    hostGuard = null;
+    remounts = 0;
+    mount() {
+      this.sync = new ConversationSync();
+      this.sync.mountPageObserver();
+      this.hydrator = new OfficialNavigatorHydrator(this.sync);
+      this.hydrator.mount();
+      this.quota = new QuotaTracker(this.sync);
+      this.quota.mount();
+      this.toolbar = new YadaToolbar(this.sync);
+      this.toolbar.mount();
+      this.syncPageState();
+      this.routeDispose = observeRouteChange(() => {
+        this.toolbar?.closePanels();
+        this.hydrator?.resetRoute();
+        this.syncPageState();
+      });
+      const onMessage = (message, _sender, sendResponse) => {
+        if (message?.type !== "quota/refresh-current") return false;
+        void this.quota?.refreshCurrent().then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: String(error) }));
+        return true;
+      };
+      chrome.runtime.onMessage.addListener(onMessage);
+      this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
+      this.hostGuard = new MutationObserver(() => {
+        if (document.getElementById("chatgpt-yada-toolbar-host")) return;
+        if (this.remounts >= 5) return;
+        this.remounts += 1;
+        this.dispose();
+        this.mount();
+      });
+      this.hostGuard.observe(document, { childList: true });
+      this.hostGuard.observe(document.documentElement, { childList: true });
+    }
+    dispose = () => {
+      this.hostGuard?.disconnect();
+      this.hostGuard = null;
+      this.routeDispose?.();
+      this.routeDispose = null;
+      this.messageDispose?.();
+      this.messageDispose = null;
+      this.hydrator?.dispose();
+      this.hydrator = null;
+      this.quota?.dispose();
+      this.quota = null;
+      this.toolbar?.dispose();
+      this.toolbar = null;
+      this.sync?.dispose();
+      this.sync = null;
+    };
+    syncPageState() {
+      this.toolbar?.ensurePlacement();
+      this.toolbar?.setVisible(isChatGptPage());
+      const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
+      if (copy) copy.hidden = !isChatGptConversationPage();
+      this.sync?.setActiveConversation(getConversationIdFromUrl());
+    }
+  };
+  if (isChatGptPage()) {
+    const key = "__chatgptYadaDispose";
+    const state = globalThis;
+    state[key]?.();
+    const app = new ChatGptYadaApp();
+    app.mount();
+    const onPageHide = () => app.dispose();
+    const onPageShow = (event) => {
+      if (event.persisted) {
+        app.dispose();
+        app.mount();
+      }
+    };
+    window.addEventListener("pagehide", onPageHide);
+    window.addEventListener("pageshow", onPageShow);
+    state[key] = () => {
+      app.dispose();
+      window.removeEventListener("pagehide", onPageHide);
+      window.removeEventListener("pageshow", onPageShow);
+    };
+  }
+})();
+/*! Bundled license information:
+
+sortablejs/modular/sortable.esm.js:
+  (**!
+   * Sortable 1.15.6
+   * @author	RubaXa   <trash@rubaxa.org>
+   * @author	owenm    <owen23355@gmail.com>
+   * @license MIT
+   *)
+*/

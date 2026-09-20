@@ -104,6 +104,23 @@ export function countComposerElements(root: ParentNode = document): number {
   }
 }
 
+export function hasUnsentComposerDraft(root: ParentNode = document): boolean {
+  try {
+    for (const node of root.querySelectorAll(DRAFT_CONTROL_SELECTOR)) {
+      if (!(node instanceof HTMLElement)) continue;
+      if (!isComposerElement(node) && !isInsideComposer(node)) continue;
+      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+        if (node.value.trim()) return true;
+        continue;
+      }
+      if ((node.innerText || node.textContent || "").trim()) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
+
 function hasComposerAncestor(element: Element): boolean {
   return Boolean(element.closest([
     "form",

@@ -1,148 +1,61 @@
 # ChatGPT Yada Agent Guide
 
-This file is mandatory reading before every work session in this repository.
+Read this file before every work session in `gpt/`.
 
-## Project
+## Product contract
 
-Project name: ChatGPT Yada
+Current version is **4.0.2**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
-Positioning: a lightweight ChatGPT extension for 复制全部 + 对话导航 + 提示词库.
+The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
-The final product must stay small, focused, and easy to audit. The goal is not to merge all reference projects into one large enhancement suite.
+## Architecture
 
-Current product direction: API-first complete conversation copy with real timestamps, a single navigation rail with hover previews, and a local prompt library.
+- `ConversationSync`: the one current-conversation snapshot for Copy All and current-conversation quota turns.
+- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper and bounded prepare lease; no `chrome.*` API.
+- `nativeNavigator/hydrator.ts`: isolated PrepareSession that exposes the host pagination sentinel; no scrolling or reload.
+- `quota/vibebar/*`: authoritative quota parsing and allowance rules.
+- `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; one timer/flight, private staged slices, pause on hidden.
+- `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
 
-## Versioning
+## Required safety boundaries
 
-Version format: `MAJOR.MINOR.PATCH`.
+- Preserve the original fetch Promise/Response; inspect only a clone.
+- Never bridge or persist message bodies, auth data, Cookie, Token, or full payloads.
+- Never scroll, restore-scroll, reload, rewrite a deep link, or manipulate ChatGPT's official Navigator UI.
+- Stop on uncertainty, user input, drift over 8px, unstable layout, streaming, hidden page, route change, or budget exhaustion.
+- Do not add React/Vue, Fiber scanning, private virtualizer calls, debugger/webRequest/cookies permissions, a second extension, analytics, or external services.
+- Do not modify `claude/` or `gemini/`, push `main`, force push, open PRs, run hosted CI, or create Releases.
 
-1. PATCH: every small change, bugfix, or interaction repair increments the rightmost number.
-   Example: `1.0.4 -> 1.0.5`.
-2. MINOR: a complete feature module increments the middle number and resets PATCH.
-   Example: `1.0.9 -> 1.1.0`.
-3. MAJOR: an architecture change, compatibility break, or core feature rewrite increments the leftmost number and resets MINOR and PATCH.
-   Example: `1.9.9 -> 2.0.0`.
+## Verification contract
 
-Keep package, manifest, documentation, build and release archive versions consistent.
+The engineering closeout gate is:
 
-## Release Automation Rules
+```bash
+npm run build
+git diff --check
+npm run verify:gate
+```
 
-Every completed change that affects user-visible behavior must use the project release scripts before final reporting:
+Focused or full unit tests may be used for changed pure logic, but `npm run check` and browser automation are not release authority. Do not run candidate/Playwright/Mac mini ChatGPT acceptance, create test conversations, or consume Pro quota. Real product acceptance remains a MacBook manual task.
 
-1. Bugfixes, small changes, and interaction repairs: `npm run release:patch`.
-2. Complete new feature modules: `npm run release:minor`.
-3. Architecture changes, compatibility breaks, or core rewrites: `npm run release:major`.
+## Upstream boundaries
 
-Never manually update only `manifest.json`.
-Never leave `package.json` and `manifest.json` with different versions.
-Never build a release without refreshing the versioned zip archive.
-Every final report must state the version bump type and the reason for that choice.
+- Vibe Bar `af26391c5bcc074108072af8f2807fc4c47edf21`, AGPL-3.0: quota source of truth.
+- AI-MarkDone `d6cc562931607f378c48023420f814de1f7c9d60`, MIT: minimal official navigator selectors/structure and stable message identity are adapted.
+- GPT Conversation Toolkit `ca628eeaed87323c195aa7b6d2750d2804e6ac77`, MIT: existing conversation API and prompt library patterns remain; no Fiber virtualizer code.
+- GPT Navigator Helper `2ac38de536dacb0ed1ad25c31396fd62a1c49022`, no project license: behavioral reference only; no source copied.
 
-## Start-Of-Work Rules
+`gpt/` remains AGPL-3.0-only. Keep `NOTICE.md` and `THIRD_PARTY_NOTICES.md` accurate when upstream-derived code changes.
 
-1. Read `AGENTS.md` before making any change.
-2. Confirm the current working directory is the project root:
-   `/Volumes/AutomationData/10_Workspace/Codex/yada-gpt-optimization-20260916/gpt`
-3. Check the workspace state before edits.
-   - If this is a Git repository, run `git status --short`.
-   - If the working tree is dirty with changes unrelated to the current request, stop and explain before editing.
-   - If this is not a Git repository, say so in the work summary and continue only with the requested scope.
-4. Do not blindly modify files when unexpected changes are present.
+## Versioning and test packages
 
-## Read-Only Reference Boundary
+任何进入测试包的产品代码变化必须 bump version。产品行为、代码逻辑、UI 功能或 bugfix 均属于此规则；禁止代码更新而 manifest/package 版本不变。
 
-`reference/` is a read-only reference directory.
-
-Never modify, format, move, delete, rename, or generate files under `reference/`.
-
-Allowed use:
-
-- Read directory structure.
-- Read selected files for product, DOM, export, rail, preview, and engineering reference.
-- Summarize findings in project docs.
-
-Forbidden use:
-
-- Directly editing reference files.
-- Treating reference projects as source roots.
-- Running formatters or build commands inside reference projects.
-- Copying large modules without first documenting why the code is needed.
-
-## Current Architecture Rule
-
-The accepted route is:
-
-1. Keep this repository's MV3 + Vite + TypeScript shell.
-2. Read the active conversation id from the current ChatGPT URL.
-3. Fetch the canonical current branch from `/backend-api/conversation/{id}`.
-4. Normalize only visible user and final assistant messages, including attachment placeholders.
-5. Format Markdown and write it through the Clipboard API with the existing local fallback.
-6. Never report success after copying a DOM-only partial snapshot.
-
-Navigation is API-first:
-
-1. Complete API turns are the only authority for rail count, order, previews, timestamps and stable user message IDs.
-2. Official `data-turn-id-container` skeletons are materialization state only: they show which turns are currently loaded and scrollable.
-3. Native ChatGPT history pagination loads missing skeletons; Yada must not crop complete API entries down to the current skeleton window.
-4. Never reintroduce React private-object scanning, a virtualizer bridge, text matching, estimated heights, or probe scrolling.
-
-## Scope Control
-
-The feature set is limited to:
-
-1. One-click copy of the current ChatGPT conversation as Markdown.
-2. API-first conversation navigation with official skeleton materialization, native history hydration, container-ID jumps and Harson/Harson+ChatGPT hover previews.
-3. Local-only prompt CRUD and icon-only copying via chrome.storage.local; no search or composer insertion.
-4. Natural light/dark adaptation and existing attachment placeholders.
-
-Do not add features outside this scope unless the user explicitly changes the product scope in writing.
-
-Explicitly forbidden:
-
-- Selective copy, selection menus, lasso selection, or per-turn controls.
-- GPT quota reminders.
-- Token estimation.
-- Claude Counter features.
-- Multi-platform support.
-- Claude, Gemini, Grok, DeepSeek, or other platform support.
-- FolderManager.
-- FloatBall.
-- WidthPanel.
-- Backend server.
-- API keys.
-- Remote scripts.
-- OCR.
-- Reading file bodies.
-- Downloading attachment contents.
-- Batch historical conversation export.
-- PDF or PNG large export.
-- Reader mode.
-- Bookmark system.
-- Complex settings pages.
-- A large all-in-one enhancement suite.
-
-## Reference Code Intake Rule
-
-Before migrating any reference code or close derivative implementation, first document:
-
-1. Source path.
-2. Specific behavior needed.
-3. Why a smaller local implementation is not enough.
-4. What will be simplified or removed.
-5. License or attribution concern if applicable.
-
-Default preference: re-implement the smallest needed behavior in this project using the reference only as a guide.
-
-## UI Standards
-
-Render `预览模式圆点 | 复制全部 | 提示词` in the header actions with a compact fixed fallback and Shadow DOM isolation. Maintain one rail host and one marks layer; official side panels reposition it, while visible official conversation navigation hides that same host until it disappears. Prompt modal has its own body-level Shadow DOM host. Do not modify official navigation. Prompt text must use plain-text rendering. API data is canonical for complete copy, timestamps, preview text, rail count and stable message IDs. Official direct-child data-turn-id-container skeletons only report which turns are currently materialized. Never crop complete API entries to the current skeleton window. Never reintroduce React private-object scanning, a virtualizer bridge, or text matching. Prompts only copy through SVG icon controls and never insert into the composer.
-
-## Stage Discipline
-
-Every stage must include a self-check before completion.
-
-Report concise progress and a final verification result. Only gpt/ may be modified; claude/ and gemini/ remain read-only. No hosted CI, remote workflows or PR. For the explicitly authorized 2.2.2 PATCH release, local commit and direct push to main are allowed after local build and relevant verification. Never force push.
-
-During formal development, the project must be able to build. A stage that introduces source code must also define the relevant build and verification commands.
-
-`src/`, `package.json`, and `manifest.json` may be edited within the requested scope. Do not install dependencies unless a blocker proves it necessary.
+- PATCH：bugfix、小功能、小交互优化；例如 4.0.1 → 4.0.2。本轮长对话 official Navigator PrepareSession 修复属于 PATCH。
+- MINOR：新增完整功能模块；例如 4.0.x → 4.1.0。
+- MAJOR：架构兼容性变化或产品方向重大变化。
+- package、lockfile、source manifest、dist manifest、ZIP 文件名必须一致；`npm run package` 强制检查，拒绝覆盖已有版本包。
+- 固定依赖与 lockfile；SortableJS 1.15.6（MIT）使用官方默认 ESM（包含 AutoScroll），不实现自有拖拽状态机。
+- `historyComplete=true` 不因刷新开始、reload 或失败降级；只有账号变化、存储丢失/损坏或不兼容 schema 才能使 baseline 失效。
+- 本地固定验证：`npm test`、`npm run build`、`npm run verify:gate`、`git diff --check`，之后 `npm run package`。
+- `HOSTED_CI = DISABLED_BY_OWNER_NO_QUOTA`，含义为 `NOT_USED_BY_POLICY`；不属于 PASS、FAILURE 或 Release Authority。本分支仅测试包交付，不执行 PR、merge、Release 或部署阶段。

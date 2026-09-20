@@ -1,18 +1,22 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Yada",
-  "version": "2.2.2",
-  "description": "Complete ChatGPT Markdown copy with timestamps, conversation navigation and a local prompt library.",
-  "host_permissions": [
-    "https://chatgpt.com/*"
-  ],
+  "version": "4.0.2",
+  "description": "Restores ChatGPT's native long-conversation navigator, with copy-all, prompts, and local Pro quota estimates.",
+  "action": {
+    "default_title": "ChatGPT Yada Pro 额度",
+    "default_popup": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
         "https://chatgpt.com/*"
       ],
       "js": [
-        "history-page.js"
+        "native-navigator-main.js"
       ],
       "run_at": "document_start",
       "world": "MAIN"
@@ -28,6 +32,11 @@
     }
   ],
   "permissions": [
-    "storage"
+    "storage",
+    "alarms",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*"
   ]
 }

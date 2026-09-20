@@ -1,88 +1,39 @@
 # Changelog
 
-## v2.2.2 - 2026-09-17
+## v4.0.2 - 2026-09-20
 
-- 版本类型：PATCH
-- 变更说明：收紧原生历史分页事务、官方导航接管、会话级取消上限和刷新恢复。
-- 构建产物：ChatGPT-Yada-v2.2.2-dist_chrome.zip
+- 修复长对话 official Navigator 无法出现：PrepareSession 期间 initial 与 older pagination 合法请求都扩大到 `num_turns >= 100`，并使用 10 秒 lease + 4 秒 heartbeat，避免 MAIN 请求扩大泄漏。
+- HistoryChain 在 transient stalled 时保留已验证 cursor 链；unlinked / branch mismatch 仍 fail closed。
+- 官方 Navigator 按钮数与 API/captured prompt 数不一致不再作为 readiness 硬阻断；无自绘 fallback，不主动滚动。
+- Quota、Prompt Library 拖拽、ConversationSync / Copy All 行为不变。
+- 测试包 `ChatGPT-Yada-v4.0.2-official-only-UNVERIFIED.zip`；旧 4.0.0 / 4.0.1 包保留。Mac mini 产品测试不运行，MacBook 手工验收待执行。
 
-## v2.2.1 - 2026-09-17
+## v4.0.1 - 2026-09-20
 
-- 版本类型：PATCH
-- 变更说明：修复刷新后只显示局部骨架导航；完整 API 决定刻度，原生历史分页补齐未加载轮次。
-- 构建产物：ChatGPT-Yada-v2.2.1-dist_chrome.zip
+- 额度改为实时 local ledger、last-known-good baseline 和 10 分钟 stale-only reconciliation；fresh reload 不扫历史，刷新与失败保留已有数字。
+- 完整结果统一提交账本、cache、unclassified 与成功/尝试/错误元数据；updatedLabel 使用真实完整同步时间。
+- 数据进展最多 20 pass；传输失败最多两次重试，不再混用 20 pass；hidden 暂停，visible 过期才校准，manual refresh 忽略 TTL。
+- 提示词使用 SortableJS 1.15.6（MIT）增加手柄拖拽、AutoScroll 和本地持久排序；v1 → v2 一次迁移保持旧视觉顺序，新增顶部、编辑原位、失败回滚。
+- 写入长期版本规则，打包检查 package / lock / manifest / dist / ZIP 一致，保留旧 4.0.0 包。
+- Official Navigator、ConversationSync、Copy All、三环 renderer、Vibe Bar allowance 与窗口保持不变。
+- 测试包 `ChatGPT-Yada-v4.0.1-official-only-UNVERIFIED.zip`；Mac mini 产品测试不运行，MacBook 手工验收待执行。
 
-## v2.2.0 - 2026-09-17
+## v4.0.0 - 2026-09-19
 
-- 版本类型：MINOR
-- 变更说明：官方会话骨架导航替换；官方导航即时让位；Harson 与本地轮次时间预览；提示词 SVG icon-only 复制管理。
-- 构建产物：ChatGPT-Yada-v2.2.0-dist_chrome.zip
+- 产品方向改为只使用 ChatGPT 官方 Prompt Navigator。
+- 删除 Yada Rail、导航 hover preview、绿色模式点、Direct / Official Button Proxy / Stable Slot 跳转、官方导航隐藏和空 `?message=` preparation。
+- 新增 `document_start` MAIN-world history hook：只扩大当前对话合法 initial history request，并从 Response clone 读取 metadata。
+- 新增 bounded native history hydrator：使用 ChatGPT 自己的 pagination sentinel，不滚动页面；包含 cursor chain、阅读位置漂移保护、用户操作让权、共享恢复预算和 deep-link 排除。
+- 若 ChatGPT 最终不提供官方 Navigator，停止主动动作，不绘制 fallback。
+- 保留 ConversationSync、复制全部、真实时间戳和提示词库。
+- Pro 额度从单次扫描改为持久 cache 的渐进式有界补齐；新增 loading / backfill / ready / partial / error 状态。
+- 三环详情移至 body 下独立 fixed Shadow DOM portal，避免 ChatGPT Header 裁切。
+- 构建产物：`ChatGPT-Yada-v4.0.0-official-only-UNVERIFIED.zip`；MacBook 手工验收前不发布正式 Release 包。
 
-## v2.1.1 - 2026-09-17
+## v3.0.1 - 2026-09-17
 
-- 版本类型：PATCH
-- 变更说明：修复绿色双区块预览；移植独立提示词弹窗、稳定虚拟列表跳转及官方导航自动避让
-- 构建产物：ChatGPT-Yada-v2.1.1-dist_chrome.zip
+- 同一对话继续新增消息后刷新导航预览数据；请求合并防抖。
 
-## v2.1.0 - 2026-09-17
+## v3.0.0 - 2026-09-17
 
-- 版本类型：MINOR
-- 变更说明：新增真实消息时间戳、单宿主对话导航与本地提示词库；保留 API-first 完整活动分支复制。
-- 构建产物：ChatGPT-Yada-v2.1.0-dist_chrome.zip
-
-## v2.0.0 - 2026-08-17
-
-- 版本类型：MAJOR
-- 变更说明：收敛为仅复制全部的单一职责扩展，移除导航、选择复制、圆标预览切换及相关交互。
-- 构建产物：ChatGPT-Yada-v2.0.0-dist_chrome.zip
-
-## v1.1.7 - 2026-06-03
-
-- 版本类型：PATCH
-- 变更说明：exclude composer drafts from turns
-- 修复 ChatGPT 底部 composer/input 草稿被 DOM fallback 误采集成 turn 的问题；草稿文字、未发送图片/文件预览不会生成 rail marker、hover preview、selected-copy 内容或 turn count。
-- 新增 `conversationAudit` debug 字段，用于查看 raw DOM candidate、composer skip、final turn 和 composer leak warning。
-- 构建产物：GPTyada-v1.1.7-dist_chrome.zip
-
-## v1.1.6 - 2026-06-03
-
-- 版本类型：PATCH
-- 变更说明：fix single rail hover gradient
-- 修正 v1.1.5 的 active-only / sparse-only 误解：默认 marker 保持同轴灰色可见，hover 在同一 `.marks` 层和同一 `.mark-bar` 上应用距离渐变。
-- 构建产物：GPTyada-v1.1.6-dist_chrome.zip
-
-## v1.1.5 - 2026-06-02
-
-- 版本类型：PATCH
-- 变更说明：reduce default rail visual noise
-- 构建产物：ChatGPT-Yada-v1.1.5-dist_chrome.zip
-
-## v1.1.4 - 2026-06-02
-
-- 版本类型：PATCH
-- 变更说明：fix activity panel duplicate rail
-- 构建产物：ChatGPT-Yada-v1.1.4-dist_chrome.zip
-
-## v1.1.3 - 2026-06-01
-
-- 版本类型：PATCH
-- 变更说明：fix rail visual layer overlap and separate lasso hit zone
-- 构建产物：ChatGPT-Yada-v1.1.3-dist_chrome.zip
-
-## v1.1.2 - 2026-05-21
-
-- 版本类型：PATCH
-- 变更说明：rail active 全局轮次映射与 lasso 起始区域修复。
-- 构建产物：ChatGPT-Yada-v1.1.2-dist_chrome.zip
-
-## v1.1.1 - 2026-05-20
-
-- 版本类型：PATCH
-- 变更说明：真实 Chrome 验收后的 rail jump / hit-test / lasso 可靠性修复。
-- 构建产物：ChatGPT-Yada-v1.1.1-dist_chrome.zip
-
-## v1.1.0 - 2026-05-20
-
-- 版本类型：MINOR
-- 变更说明：新增完整 release 自动化能力。
-- 构建产物：ChatGPT-Yada-v1.1.0-dist_chrome.zip
+- 引入 ConversationSync、复制、时间戳、提示词和早期官方导航集成。
