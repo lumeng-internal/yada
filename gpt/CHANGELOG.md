@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.0.2 - 2026-09-20
+
+- 修复长对话 official Navigator 无法出现：PrepareSession 期间 initial 与 older pagination 合法请求都扩大到 `num_turns >= 100`，并使用 10 秒 lease + 4 秒 heartbeat，避免 MAIN 请求扩大泄漏。
+- HistoryChain 在 transient stalled 时保留已验证 cursor 链；unlinked / branch mismatch 仍 fail closed。
+- 官方 Navigator 按钮数与 API/captured prompt 数不一致不再作为 readiness 硬阻断；无自绘 fallback，不主动滚动。
+- Quota、Prompt Library 拖拽、ConversationSync / Copy All 行为不变。
+- 测试包 `ChatGPT-Yada-v4.0.2-official-only-UNVERIFIED.zip`；旧 4.0.0 / 4.0.1 包保留。Mac mini 产品测试不运行，MacBook 手工验收待执行。
+
 ## v4.0.1 - 2026-09-20
 
 - 额度改为实时 local ledger、last-known-good baseline 和 10 分钟 stale-only reconciliation；fresh reload 不扫历史，刷新与失败保留已有数字。

@@ -1,4 +1,4 @@
-# ChatGPT Yada 4.0.1 验收
+# ChatGPT Yada 4.0.2 验收
 
 ## 本轮工程门禁
 
@@ -23,11 +23,12 @@ MACBOOK_MANUAL_ACCEPTANCE = PENDING
 
 导航：
 
-1. 在 Edge 加载固定 `dist_chrome`，打开真实 100～200 轮对话。
-2. 右侧只能有 ChatGPT 官方 Navigator；无 Yada Rail、绿色点或第二套刻度。
-3. 打开和等待 hydration 时，当前阅读位置不得自行上下移动。
-4. 官方 prompt 数应完整；依次测试第一轮、中间轮、最后一轮，以及最后 → 第一 → 中间 → 最后。
-5. 滚动、点击、按键或输入期间，hydration 必须立即让权。
+1. 在 Edge 加载固定 `dist_chrome`，打开短对话：官方 Navigator 应正常出现。
+2. 打开之前 4.0.1 无 Navigator 的真实长对话。不滚动页面，保持 idle；预期 Yada 自动准备历史后官方 Navigator 出现。
+3. 右侧只能有 ChatGPT 官方 Navigator；无 Yada Rail、绿色点或第二套刻度。
+4. 自动准备期间正文不能自行明显上下跳。
+5. 依次点第一轮、中间轮、最后一轮，以及最后 → 第一 → 中间 → 最后。
+6. 准备期间滚轮/点击/按键：Yada 立即让权；停止操作、idle 后，在 recovery budget 内自动继续。
 
 额度：
 
@@ -46,22 +47,24 @@ MACBOOK_MANUAL_ACCEPTANCE = PENDING
 3. 编辑不改变排序；新增放顶部；删除保留其余顺序；复制不影响顺序。
 4. 列表较长时检查官方 AutoScroll；无缩放、旋转或彩色动画。
 
-验收前不要生成正式 `ChatGPT-Yada-v4.0.1-dist_chrome.zip`。
+复制全部：
+
+1. 复制当前活动分支 Markdown 与真实时间戳仍正常。
+
+验收前不要生成正式 `ChatGPT-Yada-v4.0.2-dist_chrome.zip`。
 
 ## 2026-09-20 工程结果
 
-- 基线：`2824616f00f232777d3c361ad2f6e8067a9919c2`，分支 `rebuild/gpt-yada-v4-official-only`。
-- `npm test`：12 文件、103 测试全部通过。其中额度 lifecycle / reader / ledger / prompt sorting 共 62 项，包含 fresh reload、stale timer、manual force、失败保留、两次 retry、20 数据 pass、hidden 取消、成功统一提交与写失败原结果保留。
-- 提示词测试使用真实 Sortable 实例及 DOM onEnd 适配；jsdom 不模拟真实鼠标/触屏拖动，交互验收仍待 MacBook。
+- 基线：`e71a843d3fd6ca076fcb1c9157ae8b7111445f3b`，分支 `rebuild/gpt-yada-v4-official-only`。
+- `npm test`：12 文件、111 测试全部通过。新增 short/120/280-turn fixtures、older expansion、prepare lease、stalled recovery、unlinked、count-mismatch readiness 与用户中断合同。
 - `npm run build`、`npm run verify:gate`、`git diff --check`：PASS。
 - `npm run package`：PASS；ZIP 与 dist 全文件 SHA-256 映射一致，`distMatchesZip=true`。
-- 打包拒绝错误 ZIP 版本、错误 dist 版本和覆盖已有版本包：PASS。
-- package / lock / source manifest / dist manifest / ZIP：统一 `4.0.1`。
-- 新包：`ChatGPT-Yada-v4.0.1-official-only-UNVERIFIED.zip`。
-- 新包 SHA256：`05c6b40796bfedd3544a7218273108a2dcbf6e6ecb812560124ec469212f0d3f`。
+- package / lock / source manifest / dist manifest / ZIP：统一 `4.0.2`。
+- 新包：`ChatGPT-Yada-v4.0.2-official-only-UNVERIFIED.zip`。
+- 新包 SHA256：`c1b8feb2992d7f8f9313444e472bc610f0d9205d953e2724f451fa1a5aff429d`。
+- 旧 `ChatGPT-Yada-v4.0.1-official-only-UNVERIFIED.zip` 保留；SHA256 `05c6b40796bfedd3544a7218273108a2dcbf6e6ecb812560124ec469212f0d3f`。
 - 旧 `ChatGPT-Yada-v4.0.0-official-only-UNVERIFIED.zip` 保留；SHA256 `43129ca43086fc5a161527a6c6abbf98ba6abf2f7675a2fb3a71b194f3b6941d`。
-- SortableJS 固定 1.15.6，MIT；构建 metafile 确认官方 `modular/sortable.esm.js` 入口，未打入 MultiDrag / Swap。
-- `npm audit --omit=dev`：0 漏洞。完整 audit 的 4 项为已有开发依赖（2 moderate、2 high），未在本轮扩展工具链升级范围。
-- Official Navigator、ConversationSync、Copy All、三环 renderer、Vibe Bar allowance、7 天窗口常量、claude/、gemini/：未改变。
+- 生产 Navigator 仍只有 `native-navigator-main.js` + isolated `content.js`；无 Luna、旧 Rail、preview、stable-slot、official proxy 或 fallback navigator。
+- Quota、Prompt Sorting、ConversationSync、Copy All：未改变。
 - `HOSTED_CI = DISABLED_BY_OWNER_NO_QUOTA` / `NOT_USED_BY_POLICY`，未运行；不将其记为 PASS 或 FAILURE。
 - PR / CI / Release / ECS / RDS / OSS：未执行。Mac mini 产品测试按设计不运行，MacBook 手工验收仍为 PENDING。

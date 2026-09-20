@@ -1,6 +1,6 @@
 # ChatGPT Yada 系统
 
-版本：**4.0.1**。
+版本：**4.0.2**。
 
 ```text
 ChatGPT Host
@@ -8,6 +8,7 @@ ChatGPT Host
   │    ↑
   │    └─ Native History Hydrator
   │         ├─ document_start MAIN fetch hook
+  │         ├─ bounded prepare lease
   │         ├─ metadata-only cursor chain
   │         └─ host pagination sentinel
   ├─ ConversationSync
@@ -23,13 +24,13 @@ ChatGPT Host
 
 ## 官方导航
 
-`native-navigator-main.js` 在 `document_start`、MAIN world 运行。它只包装 `window.fetch`，识别 chatgpt.com 同源、GET、地址栏当前 conversation 的已知 history endpoint。普通 initial request 的 `num_turns` 至少提升到 100；message 深链和所有不确定请求原样放行。
+`native-navigator-main.js` 在 `document_start`、MAIN world 运行。它只包装 `window.fetch`，识别 chatgpt.com 同源、GET、地址栏当前 conversation 的已知 history endpoint。可见页面上的合法 initial plural request 可以提前把 `num_turns` 至少提升到 100；只有 isolated PrepareSession 活跃时，同一 conversation 的 initial 与 older pagination 才会一起扩大。message 深链和所有不确定请求原样放行。Prepare 使用 10 秒 lease 与 4 秒 heartbeat；content script 消失、route/pagehide/generation 变化或 `prepare=false` 后立即停止扩大。
 
 ChatGPT 立即得到原始 Promise 和 Response。旁路只读取 Response clone 的 id、role、cursor、root 和 branch 元数据，并通过同源 `postMessage` 传给 isolated controller。正文、Cookie 和认证信息不跨 bridge。
 
-isolated controller 只在 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 时工作。它每次只暴露唯一 pagination sentinel 一页，并持续检查可见消息锚点。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式并停止。共享上限为 60 秒 active、20 个 additional pages、每页 12 秒、最多 3 次 interruption recovery。
+isolated controller 只在 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 时进入 PrepareSession。它发送 prepare handshake、4 秒 heartbeat，并每次只暴露唯一 pagination sentinel 一页，持续检查可见消息锚点。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式、发送 prepare=false 并停止。共享上限为 60 秒 active、20 个 additional pages、每页 12 秒、最多 3 次 interruption recovery。
 
-HistoryChain 只有在 initial → linked before cursor → explicit root 完整闭合时才认定 complete。重复 cursor、无进展、branch 改变或无法验证都会停止。历史完整后最多等待官方控件 2.5 秒；若仍不存在，状态为 `loaded-no-native`，不提供 fallback。
+HistoryChain 只有在 initial → linked before cursor → explicit root 完整闭合时才认定 complete。重复 cursor 或暂时无进展记为 `stalled`，但保留已经验证的 cursor 链；unlinked、limit 或明确 branch 变化仍然 fail closed。历史完整后最多等待官方控件 2.5 秒；官方 Navigator `found > 0` 且 `visible > 0` 即为 ready，按钮数与 prompt 数不一致只进 diagnostics。若仍不存在，状态为 `loaded-no-native`，不提供 fallback。
 
 ## 当前对话与额度
 

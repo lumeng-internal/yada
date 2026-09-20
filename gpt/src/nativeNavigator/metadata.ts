@@ -119,7 +119,8 @@ export class HistoryChain {
 
     if (page.boundary === "more") {
       if (!page.cursor || this.usedCursors.has(page.cursor) || (requestedBefore !== null && additions === 0)) {
-        this.fail("stalled");
+        this.issue = "stalled";
+        if (this.boundary !== "more" || this.cursor === null) this.fail("stalled");
         return;
       }
       this.usedCursors.add(page.cursor);
@@ -129,6 +130,10 @@ export class HistoryChain {
     this.boundary = page.boundary;
     this.cursor = page.cursor;
     this.issue = null;
+  }
+
+  clearTransientStalled(): void {
+    if (this.issue === "stalled") this.issue = null;
   }
 
   private begin(branch: string | null): void {

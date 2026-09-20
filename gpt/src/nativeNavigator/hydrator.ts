@@ -10,6 +10,8 @@ import {
 } from "./dom";
 import {
   NATIVE_NAV_CHANNEL,
+  PREPARE_ACK_WAIT_MS,
+  PREPARE_HEARTBEAT_MS,
   conversationIdFromUrl,
   emptyHistory,
   isMessageDeepLink,
@@ -37,11 +39,25 @@ export type NativeNavigatorDiagnostics = {
   nativeVisible: number;
   boundary: NativeHistoryState["boundary"];
   cursorPresent: boolean;
+  boosted: boolean;
+  prepareActive: boolean;
   issue: string | null;
+  lastOutcome: string | null;
   recoveryCount: number;
   elapsedActiveMs: number;
   maxObservedDriftPx: number;
 };
+
+export function officialNavigatorReadiness(
+  native: { found: number; visible: number },
+  waitedMs: number,
+  waitLimitMs = NATIVE_APPEARANCE_WAIT_MS
+): "ready-complete" | "hidden" | "waiting-native" | "loaded-no-native" {
+  if (native.found > 0 && native.visible > 0) return "ready-complete";
+  if (native.found > 0) return "hidden";
+  if (waitedMs < waitLimitMs) return "waiting-native";
+  return "loaded-no-native";
+}
 
 declare global {
   var __YADA_NATIVE_NAV_DIAGNOSTICS__: NativeNavigatorDiagnostics | undefined;
@@ -61,6 +77,9 @@ export class OfficialNavigatorHydrator {
   private phase = "waiting";
   private issue: string | null = null;
   private lastUserInput = performance.now() - RECOVERY_IDLE_MS;
+  private lastOutcome: string | null = null;
+  private prepareEnabled = false;
+  private heartbeat = 0;
   private operation: AbortController | null = null;
   private timer = 0;
   private mutations: MutationObserver | null = null;
@@ -183,7 +202,8 @@ export class OfficialNavigatorHydrator {
       this.publishDiagnostics();
       return;
     }
-    if (this.state.issue || this.state.boundary === "unknown") {
+    const recoverableStalled = this.state.issue === "stalled" && this.state.boundary === "more";
+    if (!recoverableStalled && (this.state.issue || this.state.boundary === "unknown")) {
       this.terminal = true;
       this.setPhase("unverified", this.state.issue ?? "unverified-history");
       return;
@@ -208,27 +228,19 @@ export class OfficialNavigatorHydrator {
   }
 
   private finishWithNativeState(native: ReturnType<typeof readNativePrompts>): void {
-    const snapshotMatch = this.expectedPrompts > 0 && native.found === this.expectedPrompts;
-    const captureMatch = this.state.prompts > 0 && native.found === this.state.prompts;
-    if (native.found > 0 && native.visible > 0 && (snapshotMatch || captureMatch)) {
-      this.terminal = true;
-      this.setPhase("ready-complete");
-      return;
-    }
-    if (native.found > 0 && this.expectedPrompts > 0 && !snapshotMatch && !captureMatch) {
-      this.terminal = true;
-      this.setPhase("prompt-count-mismatch", "prompt-count-mismatch");
-      return;
-    }
     if (this.completeSince === 0) this.completeSince = performance.now();
-    const remaining = NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince);
-    if (remaining > 0) {
+    const readiness = officialNavigatorReadiness(
+      native,
+      performance.now() - this.completeSince,
+      NATIVE_APPEARANCE_WAIT_MS
+    );
+    if (readiness === "waiting-native") {
       this.setPhase("waiting-native");
-      this.schedule(remaining);
+      this.schedule(NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince));
       return;
     }
     this.terminal = true;
-    this.setPhase("loaded-no-native");
+    this.setPhase(readiness);
   }
 
   private async launchAttempt(): Promise<void> {
@@ -239,17 +251,21 @@ export class OfficialNavigatorHydrator {
     this.setPhase("automatic-loading");
     let outcome: string;
     try {
+      this.startPrepare();
+      await this.waitForBoostedAck(controller.signal);
       outcome = await this.hydrate(controller.signal, attemptContext);
     } catch {
       outcome = controller.signal.reason === "user" || controller.signal.reason === "hidden"
         ? "interrupted"
         : "changed";
     } finally {
+      this.stopPrepare();
       this.activeMs += Math.max(0, performance.now() - started);
       if (this.operation === controller) this.operation = null;
     }
 
     if (this.disposed || attemptContext !== this.context) return;
+    this.lastOutcome = outcome;
     if (outcome === "complete") {
       this.completeSince = 0;
       this.schedule(0);
@@ -264,6 +280,16 @@ export class OfficialNavigatorHydrator {
         this.terminal = true;
         this.setPhase("recovery-limit", "recovery-limit");
       }
+      return;
+    }
+    if (outcome === "stalled") {
+      if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
+        this.terminal = true;
+        this.setPhase("limit", "limit");
+        return;
+      }
+      this.setPhase("stalled", "stalled");
+      this.schedule(180);
       return;
     }
     this.terminal = true;
@@ -355,6 +381,47 @@ export class OfficialNavigatorHydrator {
 
   private cancel(reason: string): void {
     this.operation?.abort(reason);
+    this.stopPrepare();
+  }
+
+  private startPrepare(): void {
+    this.sendPrepare(true);
+    this.clearHeartbeat();
+    this.heartbeat = window.setInterval(() => this.sendPrepare(true), PREPARE_HEARTBEAT_MS);
+  }
+
+  private stopPrepare(): void {
+    this.clearHeartbeat();
+    if (!this.prepareEnabled) return;
+    this.sendPrepare(false);
+  }
+
+  private sendPrepare(enabled: boolean): void {
+    if (!this.state.conversationId) {
+      this.prepareEnabled = false;
+      return;
+    }
+    this.prepareEnabled = enabled;
+    window.postMessage({
+      channel: NATIVE_NAV_CHANNEL,
+      kind: "prepare",
+      enabled,
+      conversationId: this.state.conversationId,
+      generation: this.state.generation
+    }, location.origin);
+  }
+
+  private clearHeartbeat(): void {
+    if (!this.heartbeat) return;
+    clearInterval(this.heartbeat);
+    this.heartbeat = 0;
+  }
+
+  private async waitForBoostedAck(signal: AbortSignal): Promise<void> {
+    const until = performance.now() + PREPARE_ACK_WAIT_MS;
+    while (!this.state.boosted && performance.now() < until) {
+      await abortableDelay(40, signal);
+    }
   }
 
   private resetContext(context: string, firstPage: number): void {
@@ -366,6 +433,7 @@ export class OfficialNavigatorHydrator {
     this.completeSince = 0;
     this.terminal = false;
     this.issue = null;
+    this.lastOutcome = null;
   }
 
   private setPhase(phase: string, issue: string | null = null): void {
@@ -391,7 +459,10 @@ export class OfficialNavigatorHydrator {
       nativeVisible: native.visible,
       boundary: this.state.boundary,
       cursorPresent: this.state.cursorPresent,
+      boosted: this.state.boosted,
+      prepareActive: this.prepareEnabled,
       issue: this.issue ?? this.state.issue,
+      lastOutcome: this.lastOutcome,
       recoveryCount: this.recoveries,
       elapsedActiveMs: Math.round(this.activeMs),
       maxObservedDriftPx: Math.round(this.peakDrift * 10) / 10

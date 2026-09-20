@@ -4,15 +4,15 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.0.1**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.0.2**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
 ## Architecture
 
 - `ConversationSync`: the one current-conversation snapshot for Copy All and current-conversation quota turns.
-- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper; no `chrome.*` API.
-- `nativeNavigator/hydrator.ts`: isolated, bounded host-history hydration with no scrolling or reload.
+- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper and bounded prepare lease; no `chrome.*` API.
+- `nativeNavigator/hydrator.ts`: isolated PrepareSession that exposes the host pagination sentinel; no scrolling or reload.
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
 - `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; one timer/flight, private staged slices, pause on hidden.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
@@ -51,7 +51,7 @@ Focused or full unit tests may be used for changed pure logic, but `npm run chec
 
 任何进入测试包的产品代码变化必须 bump version。产品行为、代码逻辑、UI 功能或 bugfix 均属于此规则；禁止代码更新而 manifest/package 版本不变。
 
-- PATCH：bugfix、小功能、小交互优化；例如 4.0.0 → 4.0.1。本轮 quota lifecycle 修复与现有 Prompt Library 拖拽增强属于 PATCH。
+- PATCH：bugfix、小功能、小交互优化；例如 4.0.1 → 4.0.2。本轮长对话 official Navigator PrepareSession 修复属于 PATCH。
 - MINOR：新增完整功能模块；例如 4.0.x → 4.1.0。
 - MAJOR：架构兼容性变化或产品方向重大变化。
 - package、lockfile、source manifest、dist manifest、ZIP 文件名必须一致；`npm run package` 强制检查，拒绝覆盖已有版本包。

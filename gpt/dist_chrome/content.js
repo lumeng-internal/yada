@@ -1317,6 +1317,8 @@ ${text}
 
   // src/nativeNavigator/protocol.ts
   var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
+  var PREPARE_HEARTBEAT_MS = 4e3;
+  var PREPARE_ACK_WAIT_MS = 1e3;
   var HISTORY_ISSUES = /* @__PURE__ */ new Set([
     null,
     "http-error",
@@ -1337,6 +1339,7 @@ ${text}
       prompts: 0,
       boundary: "unknown",
       cursorPresent: false,
+      boosted: false,
       issue: null
     };
   }
@@ -1369,6 +1372,7 @@ ${text}
     if (candidate.conversationId !== null && !identifier(candidate.conversationId)) return false;
     if (candidate.boundary !== "unknown" && candidate.boundary !== "more" && candidate.boundary !== "complete") return false;
     if (!HISTORY_ISSUES.has(candidate.issue) || typeof candidate.cursorPresent !== "boolean") return false;
+    if (typeof candidate.boosted !== "boolean") return false;
     for (const key of ["generation", "initialVersion", "revision", "pending", "pages", "messages", "prompts"]) {
       const number = candidate[key];
       if (!Number.isSafeInteger(number) || number < 0 || number > 1e6) return false;
@@ -1384,6 +1388,12 @@ ${text}
   var RECOVERY_IDLE_MS = 2500;
   var MAX_RECOVERIES = 3;
   var DEBUG_KEY = "chatgpt-yada:native-nav-debug";
+  function officialNavigatorReadiness(native, waitedMs, waitLimitMs = NATIVE_APPEARANCE_WAIT_MS) {
+    if (native.found > 0 && native.visible > 0) return "ready-complete";
+    if (native.found > 0) return "hidden";
+    if (waitedMs < waitLimitMs) return "waiting-native";
+    return "loaded-no-native";
+  }
   var OfficialNavigatorHydrator = class {
     constructor(sync) {
       this.sync = sync;
@@ -1401,6 +1411,9 @@ ${text}
     phase = "waiting";
     issue = null;
     lastUserInput = performance.now() - RECOVERY_IDLE_MS;
+    lastOutcome = null;
+    prepareEnabled = false;
+    heartbeat = 0;
     operation = null;
     timer = 0;
     mutations = null;
@@ -1510,7 +1523,8 @@ ${text}
         this.publishDiagnostics();
         return;
       }
-      if (this.state.issue || this.state.boundary === "unknown") {
+      const recoverableStalled = this.state.issue === "stalled" && this.state.boundary === "more";
+      if (!recoverableStalled && (this.state.issue || this.state.boundary === "unknown")) {
         this.terminal = true;
         this.setPhase("unverified", this.state.issue ?? "unverified-history");
         return;
@@ -1534,27 +1548,19 @@ ${text}
       await this.launchAttempt();
     }
     finishWithNativeState(native) {
-      const snapshotMatch = this.expectedPrompts > 0 && native.found === this.expectedPrompts;
-      const captureMatch = this.state.prompts > 0 && native.found === this.state.prompts;
-      if (native.found > 0 && native.visible > 0 && (snapshotMatch || captureMatch)) {
-        this.terminal = true;
-        this.setPhase("ready-complete");
-        return;
-      }
-      if (native.found > 0 && this.expectedPrompts > 0 && !snapshotMatch && !captureMatch) {
-        this.terminal = true;
-        this.setPhase("prompt-count-mismatch", "prompt-count-mismatch");
-        return;
-      }
       if (this.completeSince === 0) this.completeSince = performance.now();
-      const remaining = NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince);
-      if (remaining > 0) {
+      const readiness = officialNavigatorReadiness(
+        native,
+        performance.now() - this.completeSince,
+        NATIVE_APPEARANCE_WAIT_MS
+      );
+      if (readiness === "waiting-native") {
         this.setPhase("waiting-native");
-        this.schedule(remaining);
+        this.schedule(NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince));
         return;
       }
       this.terminal = true;
-      this.setPhase("loaded-no-native");
+      this.setPhase(readiness);
     }
     async launchAttempt() {
       const controller = new AbortController();
@@ -1564,14 +1570,18 @@ ${text}
       this.setPhase("automatic-loading");
       let outcome;
       try {
+        this.startPrepare();
+        await this.waitForBoostedAck(controller.signal);
         outcome = await this.hydrate(controller.signal, attemptContext);
       } catch {
         outcome = controller.signal.reason === "user" || controller.signal.reason === "hidden" ? "interrupted" : "changed";
       } finally {
+        this.stopPrepare();
         this.activeMs += Math.max(0, performance.now() - started);
         if (this.operation === controller) this.operation = null;
       }
       if (this.disposed || attemptContext !== this.context) return;
+      this.lastOutcome = outcome;
       if (outcome === "complete") {
         this.completeSince = 0;
         this.schedule(0);
@@ -1586,6 +1596,16 @@ ${text}
           this.terminal = true;
           this.setPhase("recovery-limit", "recovery-limit");
         }
+        return;
+      }
+      if (outcome === "stalled") {
+        if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
+          this.terminal = true;
+          this.setPhase("limit", "limit");
+          return;
+        }
+        this.setPhase("stalled", "stalled");
+        this.schedule(180);
         return;
       }
       this.terminal = true;
@@ -1667,6 +1687,42 @@ ${text}
     }
     cancel(reason) {
       this.operation?.abort(reason);
+      this.stopPrepare();
+    }
+    startPrepare() {
+      this.sendPrepare(true);
+      this.clearHeartbeat();
+      this.heartbeat = window.setInterval(() => this.sendPrepare(true), PREPARE_HEARTBEAT_MS);
+    }
+    stopPrepare() {
+      this.clearHeartbeat();
+      if (!this.prepareEnabled) return;
+      this.sendPrepare(false);
+    }
+    sendPrepare(enabled) {
+      if (!this.state.conversationId) {
+        this.prepareEnabled = false;
+        return;
+      }
+      this.prepareEnabled = enabled;
+      window.postMessage({
+        channel: NATIVE_NAV_CHANNEL,
+        kind: "prepare",
+        enabled,
+        conversationId: this.state.conversationId,
+        generation: this.state.generation
+      }, location.origin);
+    }
+    clearHeartbeat() {
+      if (!this.heartbeat) return;
+      clearInterval(this.heartbeat);
+      this.heartbeat = 0;
+    }
+    async waitForBoostedAck(signal) {
+      const until = performance.now() + PREPARE_ACK_WAIT_MS;
+      while (!this.state.boosted && performance.now() < until) {
+        await abortableDelay(40, signal);
+      }
     }
     resetContext(context, firstPage) {
       this.context = context;
@@ -1677,6 +1733,7 @@ ${text}
       this.completeSince = 0;
       this.terminal = false;
       this.issue = null;
+      this.lastOutcome = null;
     }
     setPhase(phase, issue = null) {
       this.phase = phase;
@@ -1700,7 +1757,10 @@ ${text}
         nativeVisible: native.visible,
         boundary: this.state.boundary,
         cursorPresent: this.state.cursorPresent,
+        boosted: this.state.boosted,
+        prepareActive: this.prepareEnabled,
         issue: this.issue ?? this.state.issue,
+        lastOutcome: this.lastOutcome,
         recoveryCount: this.recoveries,
         elapsedActiveMs: Math.round(this.activeMs),
         maxObservedDriftPx: Math.round(this.peakDrift * 10) / 10

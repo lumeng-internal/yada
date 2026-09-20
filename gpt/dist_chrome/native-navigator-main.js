@@ -2,6 +2,8 @@
 (() => {
   // src/nativeNavigator/protocol.ts
   var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
+  var MIN_HISTORY_TURNS = 100;
+  var PREPARE_LEASE_MS = 1e4;
   function emptyHistory(conversationId, generation = 0) {
     return {
       conversationId,
@@ -14,8 +16,12 @@
       prompts: 0,
       boundary: "unknown",
       cursorPresent: false,
+      boosted: false,
       issue: null
     };
+  }
+  function emptyPrepareLease() {
+    return { enabled: false, conversationId: null, generation: 0, until: 0 };
   }
   function record(value) {
     return value != null && typeof value === "object" && !Array.isArray(value) ? value : null;
@@ -69,19 +75,55 @@
       return null;
     }
   }
-  function expandInitialHistoryRequest(input, init, pageUrl) {
+  function canExpandInitial(input, init, pageUrl, visible) {
+    if (!visible || isMessageDeepLink(pageUrl)) return false;
     const match = historyRequest(input, init, pageUrl);
-    if (!match || match.kind !== "initial" || !match.plural || isMessageDeepLink(pageUrl)) return [input, init];
+    return match != null && match.kind === "initial" && match.plural;
+  }
+  function shouldExpandHistoryRequest(input, init, pageUrl, options) {
+    if (!historyRequest(input, init, pageUrl)) return false;
+    return options.prepareActive || canExpandInitial(input, init, pageUrl, options.visible);
+  }
+  function expandHistoryRequest(input, init, pageUrl) {
+    if (!historyRequest(input, init, pageUrl)) return [input, init];
     try {
       const original = typeof Request !== "undefined" && input instanceof Request ? input : null;
       const target = new URL(original?.url ?? String(input), pageUrl);
       const currentBatch = Number(target.searchParams.get("num_turns"));
-      if (Number.isFinite(currentBatch) && currentBatch >= 100) return [input, init];
-      target.searchParams.set("num_turns", "100");
+      if (Number.isFinite(currentBatch) && currentBatch >= MIN_HISTORY_TURNS) return [input, init];
+      target.searchParams.set("num_turns", String(MIN_HISTORY_TURNS));
       return [original ? new Request(target.href, requestCloneInit(original)) : target.href, init];
     } catch {
       return [input, init];
     }
+  }
+  function parsePrepareHandshake(value) {
+    const message = record(value);
+    if (!message || message.kind !== "prepare" || typeof message.enabled !== "boolean") return null;
+    const conversationId = identifier(message.conversationId);
+    if (!conversationId || !Number.isSafeInteger(message.generation) || message.generation < 0) return null;
+    return {
+      enabled: message.enabled,
+      conversationId,
+      generation: message.generation
+    };
+  }
+  function acceptPrepareHandshake(handshake, context) {
+    return handshake.conversationId === context.conversationId && handshake.generation === context.generation;
+  }
+  function applyPrepareHandshake(handshake, now) {
+    if (!handshake.enabled) {
+      return { enabled: false, conversationId: handshake.conversationId, generation: handshake.generation, until: 0 };
+    }
+    return {
+      enabled: true,
+      conversationId: handshake.conversationId,
+      generation: handshake.generation,
+      until: now + PREPARE_LEASE_MS
+    };
+  }
+  function isPrepareActive(lease, now, conversationId, generation) {
+    return lease.enabled && lease.until > now && conversationId != null && lease.conversationId === conversationId && lease.generation === generation;
   }
   function requestCloneInit(request) {
     return {
@@ -197,7 +239,8 @@
       }
       if (page.boundary === "more") {
         if (!page.cursor || this.usedCursors.has(page.cursor) || requestedBefore !== null && additions === 0) {
-          this.fail("stalled");
+          this.issue = "stalled";
+          if (this.boundary !== "more" || this.cursor === null) this.fail("stalled");
           return;
         }
         this.usedCursors.add(page.cursor);
@@ -206,6 +249,9 @@
       this.boundary = page.boundary;
       this.cursor = page.cursor;
       this.issue = null;
+    }
+    clearTransientStalled() {
+      if (this.issue === "stalled") this.issue = null;
     }
     begin(branch) {
       this.identities.clear();
@@ -236,15 +282,27 @@
     const readers = /* @__PURE__ */ new Set();
     let historyState = emptyHistory(conversationIdFromUrl(location.href));
     let chain = new HistoryChain();
+    let lease = emptyPrepareLease();
     let lastSequence = 0;
     const broadcast = () => {
       historyState.revision += 1;
       window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...historyState } }, location.origin);
     };
+    const closePrepare = () => {
+      lease = emptyPrepareLease();
+      historyState.boosted = false;
+    };
+    const expirePrepare = (now) => {
+      if (!lease.enabled) return;
+      if (isPrepareActive(lease, now, historyState.conversationId, historyState.generation)) return;
+      closePrepare();
+      broadcast();
+    };
     const synchronizeRoute = () => {
       const current = conversationIdFromUrl(location.href);
       if (current === historyState.conversationId) return;
       cancelReaders(readers);
+      closePrepare();
       historyState = emptyHistory(current, historyState.generation + 1);
       chain = new HistoryChain();
       broadcast();
@@ -253,16 +311,42 @@
     patchHistoryMethod("replaceState", synchronizeRoute);
     addEventListener("popstate", synchronizeRoute);
     addEventListener("pageshow", synchronizeRoute);
-    addEventListener("pagehide", () => cancelReaders(readers));
+    addEventListener("pagehide", () => {
+      cancelReaders(readers);
+      if (!lease.enabled && !historyState.boosted) return;
+      closePrepare();
+      broadcast();
+    });
     addEventListener("message", (event) => {
       if (event.source !== window || event.origin !== location.origin) return;
       const message = record(event.data);
-      if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "hello") return;
+      if (message?.channel !== NATIVE_NAV_CHANNEL) return;
       synchronizeRoute();
+      if (message.kind === "hello") {
+        broadcast();
+        return;
+      }
+      const handshake = parsePrepareHandshake(message);
+      if (!handshake) return;
+      if (!acceptPrepareHandshake(handshake, {
+        conversationId: historyState.conversationId,
+        generation: historyState.generation
+      })) return;
+      const now = Date.now();
+      const wasActive = isPrepareActive(lease, now, historyState.conversationId, historyState.generation);
+      lease = applyPrepareHandshake(handshake, now);
+      if (handshake.enabled && !wasActive) {
+        chain.clearTransientStalled();
+        if (historyState.issue === "stalled") historyState.issue = null;
+      }
+      if (!handshake.enabled) closePrepare();
+      else historyState.boosted = true;
       broadcast();
     });
     window.fetch = function(input, init) {
       synchronizeRoute();
+      const now = Date.now();
+      expirePrepare(now);
       const request = historyRequest(input, init, location.href);
       if (!request) return nativeFetch.call(this, input, init);
       if (request.kind === "initial") {
@@ -284,7 +368,11 @@
       };
       historyState.pending += 1;
       broadcast();
-      const expanded = expandInitialHistoryRequest(input, init, location.href);
+      const expand = shouldExpandHistoryRequest(input, init, location.href, {
+        visible: document.visibilityState === "visible",
+        prepareActive: isPrepareActive(lease, now, historyState.conversationId, historyState.generation)
+      });
+      const expanded = expand ? expandHistoryRequest(input, init, location.href) : [input, init];
       let original;
       try {
         original = nativeFetch.call(this, expanded[0], expanded[1]);
