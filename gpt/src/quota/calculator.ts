@@ -11,18 +11,21 @@ export function calculateQuotaSnapshot(input: {
   limits?: readonly ChatGPTChatModelLimit[];
   historyComplete: boolean;
   syncStatus?: QuotaSyncStatus;
-  historyError?: string | null;
+  lastHistorySuccessAt?: number;
+  lastHistoryAttemptAt?: number;
+  lastHistoryError?: string | null;
   unclassifiedTurns: number;
   now?: number;
   writeError?: string;
 }): QuotaSnapshot {
   const now = input.now ?? Date.now();
+  const limits = (input.limits ?? []).filter(limit => limit.resetsAt == null || limit.resetsAt > now);
   const requestedStatus: QuotaSyncStatus = input.writeError
     ? "error"
     : input.syncStatus ?? (input.historyComplete ? "ready" : "partial");
-  const syncStatus: QuotaSyncStatus = requestedStatus === "ready" && !input.historyComplete
-    ? "partial"
-    : requestedStatus;
+  const syncStatus: QuotaSyncStatus = input.historyComplete
+    ? "ready"
+    : requestedStatus === "ready" ? "partial" : requestedStatus;
   const countable = input.events.filter((event) =>
     event.accountKey === input.accountKey
     && (event.classification === "personal" || event.classification === "temporary")
@@ -33,8 +36,8 @@ export function calculateQuotaSnapshot(input: {
     model: event.model
   }));
   const allowanceList = allowances(input.plan);
-  const buckets = proBuckets(allowanceList, turns, input.limits ?? [], input.historyComplete && !input.writeError, now)
-    .map((bucket) => toMetric(bucket, input.limits ?? []));
+  const buckets = proBuckets(allowanceList, turns, limits, input.historyComplete && !input.writeError, now)
+    .map((bucket) => toMetric(bucket, limits));
   const gpt6ProWeekly = buckets.find((bucket) => bucket.id === "gpt6_pro_weekly") ?? null;
   const solProDaily = buckets.find((bucket) => bucket.id === "sol_pro_daily") ?? null;
   const combinedDaily = buckets.find((bucket) => bucket.id === "pro_daily") ?? buckets.find((bucket) => bucket.id === "pro_weekly") ?? null;
@@ -47,7 +50,7 @@ export function calculateQuotaSnapshot(input: {
   const ratios = buckets
     .map((bucket) => bucket.remainingRatio)
     .filter((value): value is number => value != null);
-  const fallbackModel = (input.limits ?? []).map((limit) => limit.fallbackModel).find((value): value is string => !!value) ?? null;
+  const fallbackModel = limits.map((limit) => limit.fallbackModel).find((value): value is string => !!value) ?? null;
   return {
     accountKey: input.accountKey,
     plan: input.plan,
@@ -61,13 +64,18 @@ export function calculateQuotaSnapshot(input: {
     recordedCount: countable.length,
     historyComplete: input.historyComplete,
     syncStatus,
-    historyError: input.writeError ?? input.historyError ?? null,
+    historyError: input.writeError ?? input.lastHistoryError ?? null,
+    lastHistorySuccessAt: input.lastHistorySuccessAt,
+    lastHistoryAttemptAt: input.lastHistoryAttemptAt,
+    lastHistoryError: input.lastHistoryError ?? null,
     coverageLabel,
     tightestRemainingPercent: ratios.length ? Math.round(Math.min(...ratios) * 100) : null,
     personalProEligible: input.workspaceKind !== "work" && input.plan != null,
-    serverLimits: [...(input.limits ?? [])],
+    serverLimits: [...limits],
     fallbackModel,
-    updatedLabel: "刚刚更新"
+    updatedLabel: input.lastHistorySuccessAt
+      ? `上次完整同步：${now - input.lastHistorySuccessAt < 60_000 ? "刚刚" : `${Math.floor(Math.max(0, now - input.lastHistorySuccessAt) / 60_000)} 分钟前`}${input.lastHistoryError ? " · 最近刷新失败，将稍后自动重试" : ""}`
+      : "尚未完成首次历史同步"
   };
 }
 

@@ -1,6 +1,7 @@
 import { calculateQuotaSnapshot } from "./calculator";
 import { EVENT_TTL_MS, LEDGER_KEY, MAX_EVENTS, STATE_KEY, type QuotaLedgerState, type QuotaPersistedState, type QuotaSnapshot, type QuotaSyncStatus, type QuotaUsageEvent } from "./types";
-import type { ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
+import { HISTORY_CACHE_KEY } from "./vibebar/historyReader";
+import type { ChatGPTChatHistoryCache, ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
 
 export type QuotaStorage = {
   get(keys: string[]): Promise<Record<string, unknown>>;
@@ -36,7 +37,10 @@ export class QuotaLedger {
     plan?: ChatPlan;
     historyComplete?: boolean;
     syncStatus?: QuotaSyncStatus;
-    historyError?: string | null;
+    lastHistorySuccessAt?: number;
+    lastHistoryAttemptAt?: number;
+    lastHistoryError?: string | null;
+    historyCache?: ChatGPTChatHistoryCache;
     unclassifiedTurns?: number;
     limits?: readonly ChatGPTChatModelLimit[];
     workspaceKind?: QuotaSnapshot["workspaceKind"];
@@ -50,29 +54,44 @@ export class QuotaLedger {
       }
       ledger.events = prune([...byId.values()], extras.now ?? Date.now());
       const accountKey = extras.accountKey ?? events[0]?.accountKey ?? state.accountKey;
+      if (accountKey !== state.accountKey) {
+        state.lastSnapshot = undefined;
+        state.historyComplete = false;
+        state.syncStatus = "loading";
+        state.lastHistorySuccessAt = undefined;
+        state.lastHistoryAttemptAt = undefined;
+        state.lastHistoryError = null;
+        state.unclassifiedTurns = 0;
+        state.plan = null;
+      }
       if (extras.plan !== undefined) state.plan = extras.plan;
-      if (extras.historyComplete !== undefined) state.historyComplete = extras.historyComplete;
+      if (extras.historyComplete !== undefined) state.historyComplete ||= extras.historyComplete;
       if (extras.syncStatus !== undefined) state.syncStatus = extras.syncStatus;
-      if (extras.historyError !== undefined) state.historyError = extras.historyError ?? undefined;
+      if (state.historyComplete) state.syncStatus = "ready";
+      if (extras.lastHistorySuccessAt !== undefined) state.lastHistorySuccessAt = extras.lastHistorySuccessAt;
+      if (extras.lastHistoryAttemptAt !== undefined) state.lastHistoryAttemptAt = extras.lastHistoryAttemptAt;
+      if (extras.lastHistoryError !== undefined) state.lastHistoryError = extras.lastHistoryError;
       if (extras.unclassifiedTurns !== undefined) state.unclassifiedTurns = extras.unclassifiedTurns;
       if (accountKey) state.accountKey = accountKey;
       const snapshot = accountKey
         ? calculateQuotaSnapshot({
           accountKey,
           plan: state.plan,
-          workspaceKind: extras.workspaceKind ?? "personal",
+          workspaceKind: extras.workspaceKind ?? state.lastSnapshot?.workspaceKind ?? "personal",
           events: ledger.events,
-          limits: extras.limits,
+          limits: extras.limits ?? state.lastSnapshot?.serverLimits,
           historyComplete: state.historyComplete,
           syncStatus: state.syncStatus,
-          historyError: state.historyError,
+          lastHistorySuccessAt: state.lastHistorySuccessAt,
+          lastHistoryAttemptAt: state.lastHistoryAttemptAt,
+          lastHistoryError: state.lastHistoryError,
           unclassifiedTurns: state.unclassifiedTurns,
           now: extras.now,
           writeError: state.writeError
         })
         : null;
       if (snapshot) state.lastSnapshot = snapshot;
-      await this.write(ledger, state);
+      await this.write(ledger, state, extras.historyCache);
       return snapshot;
     });
   }
@@ -84,7 +103,6 @@ export class QuotaLedger {
       workspaceKind?: QuotaSnapshot["workspaceKind"];
       historyComplete?: boolean;
       syncStatus?: QuotaSyncStatus;
-      historyError?: string | null;
       unclassifiedTurns?: number;
       limits?: readonly ChatGPTChatModelLimit[];
       now?: number;
@@ -93,14 +111,16 @@ export class QuotaLedger {
     const { ledger, state } = await this.read();
     return calculateQuotaSnapshot({
       accountKey,
-      plan: plan ?? state.plan,
-      workspaceKind: extras.workspaceKind ?? "personal",
+      plan: plan ?? (state.accountKey === accountKey ? state.plan : null),
+      workspaceKind: extras.workspaceKind ?? (state.accountKey === accountKey ? state.lastSnapshot?.workspaceKind : undefined) ?? "personal",
       events: ledger.events,
-      limits: extras.limits,
-      historyComplete: extras.historyComplete ?? state.historyComplete,
-      syncStatus: extras.syncStatus ?? state.syncStatus,
-      historyError: extras.historyError ?? state.historyError,
-      unclassifiedTurns: extras.unclassifiedTurns ?? state.unclassifiedTurns,
+      limits: extras.limits ?? (state.accountKey === accountKey ? state.lastSnapshot?.serverLimits : undefined),
+      historyComplete: state.accountKey === accountKey && (extras.historyComplete ?? state.historyComplete),
+      syncStatus: state.accountKey === accountKey ? extras.syncStatus ?? state.syncStatus : "loading",
+      lastHistorySuccessAt: state.accountKey === accountKey ? state.lastHistorySuccessAt : undefined,
+      lastHistoryAttemptAt: state.accountKey === accountKey ? state.lastHistoryAttemptAt : undefined,
+      lastHistoryError: state.accountKey === accountKey ? state.lastHistoryError : null,
+      unclassifiedTurns: state.accountKey === accountKey ? extras.unclassifiedTurns ?? state.unclassifiedTurns : 0,
       now: extras.now,
       writeError: state.writeError
     });
@@ -118,16 +138,23 @@ export class QuotaLedger {
 
   private async read(): Promise<{ ledger: QuotaLedgerState; state: QuotaPersistedState }> {
     const data = await this.storage.get([LEDGER_KEY, STATE_KEY]);
+    const rawLedger = data[LEDGER_KEY] as QuotaLedgerState | undefined;
+    const validLedger = rawLedger?.version === 2 && Array.isArray(rawLedger.events) && rawLedger.events.every(isUsageEvent);
     return {
       ledger: parseLedger(data[LEDGER_KEY]),
-      state: parseState(data[STATE_KEY])
+      state: parseState(validLedger ? data[STATE_KEY] : undefined)
     };
   }
 
-  private async write(ledger: QuotaLedgerState, state: QuotaPersistedState): Promise<void> {
+  private async write(ledger: QuotaLedgerState, state: QuotaPersistedState, cache?: ChatGPTChatHistoryCache): Promise<void> {
     try {
-      await this.storage.set({ [LEDGER_KEY]: ledger, [STATE_KEY]: state });
+      const values: Record<string, unknown> = { [LEDGER_KEY]: ledger, [STATE_KEY]: state };
+      if (cache && state.accountKey) {
+        const data = await this.storage.get([HISTORY_CACHE_KEY]);
+        values[HISTORY_CACHE_KEY] = { ...(data[HISTORY_CACHE_KEY] as object ?? {}), [state.accountKey]: cache };
+      }
       state.writeError = undefined;
+      await this.storage.set(values);
     } catch (error) {
       state.writeError = error instanceof Error ? error.message : "storage-write-failed";
       throw error;
@@ -148,13 +175,14 @@ function parseLedger(value: unknown): QuotaLedgerState {
   if (record.version !== 2 || !Array.isArray(record.events)) return { version: 2, events: [] };
   return {
     version: 2,
-    events: record.events.filter((event) => event && typeof event.id === "string" && typeof event.accountKey === "string" && typeof event.model === "string")
+    events: record.events.filter(isUsageEvent)
   };
 }
 
 function parseState(value: unknown): QuotaPersistedState {
   if (!value || typeof value !== "object") return { version: 2, plan: null, historyComplete: false, syncStatus: "loading", unclassifiedTurns: 0 };
   const record = value as QuotaPersistedState;
+  if (record.version !== 2) return parseState(undefined);
   return {
     version: 2,
     accountKey: record.accountKey,
@@ -165,7 +193,9 @@ function parseState(value: unknown): QuotaPersistedState {
       : record.historyComplete === true
         ? "ready"
         : "partial",
-    historyError: record.historyError,
+    lastHistorySuccessAt: validTime(record.lastHistorySuccessAt),
+    lastHistoryAttemptAt: validTime(record.lastHistoryAttemptAt),
+    lastHistoryError: typeof record.lastHistoryError === "string" ? record.lastHistoryError : null,
     unclassifiedTurns: record.unclassifiedTurns ?? 0,
     writeError: record.writeError,
     lastSnapshot: record.lastSnapshot
@@ -174,4 +204,16 @@ function parseState(value: unknown): QuotaPersistedState {
 
 function isSyncStatus(value: unknown): value is QuotaSyncStatus {
   return value === "loading" || value === "backfill" || value === "ready" || value === "partial" || value === "error";
+}
+
+function validTime(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function isUsageEvent(event: unknown): event is QuotaUsageEvent {
+  if (!event || typeof event !== "object") return false;
+  const value = event as QuotaUsageEvent;
+  return typeof value.id === "string" && typeof value.accountKey === "string"
+    && typeof value.model === "string" && Number.isFinite(value.createdAt)
+    && ["personal", "work", "unknown", "temporary"].includes(value.classification);
 }

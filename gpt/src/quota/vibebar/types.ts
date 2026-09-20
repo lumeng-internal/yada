@@ -61,6 +61,7 @@ export type ChatGPTChatHistorySummary = {
   observedFrom: number;
   complete: boolean;
   conversationsRead: number;
+  conversationsFetched: number;
   excludedWorkConversations: number;
   unclassifiedTurns: number;
   failedConversations: number;

@@ -87,11 +87,12 @@
     return `${Math.round(metric.remainingRatio * 100)}%`;
   }
   function historySyncLabel(snapshot) {
+    if (snapshot.historyComplete) return "历史同步完整";
     switch (snapshot.syncStatus) {
       case "loading":
         return "正在读取额度";
       case "backfill":
-        return `正在补齐最近 7 天 ChatGPT 历史 · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
+        return `正在首次同步最近 7 天 ChatGPT 历史… · 已记录 ${snapshot.recordedCount} 个 Pro 使用轮次`;
       case "ready":
         return "历史同步完整";
       case "error":

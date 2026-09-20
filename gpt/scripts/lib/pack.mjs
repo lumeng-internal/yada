@@ -23,8 +23,16 @@ export function distFileMap(distDir) {
 }
 
 export function zipDist({ projectRoot, zipName, distDir = "dist_chrome" }) {
+  const version = JSON.parse(readFileSync(resolve(projectRoot, "package.json"), "utf8")).version;
+  const source = JSON.parse(readFileSync(resolve(projectRoot, "manifest.json"), "utf8")).version;
+  const built = JSON.parse(readFileSync(resolve(projectRoot, distDir, "manifest.json"), "utf8")).version;
+  const lock = JSON.parse(readFileSync(resolve(projectRoot, "package-lock.json"), "utf8"));
+  if (version !== source || version !== built || version !== lock.version || version !== lock.packages[""].version
+    || zipName !== `ChatGPT-Yada-v${version}-official-only-UNVERIFIED.zip`) {
+    throw new Error("package / lock / manifest / dist / ZIP version mismatch");
+  }
   const zipPath = resolve(projectRoot, zipName);
-  if (existsSync(zipPath)) rmSync(zipPath);
+  if (existsSync(zipPath)) throw new Error("Test package already exists; do not overwrite a versioned artifact");
   execFileSync("zip", ["-qry", zipName, distDir], { cwd: projectRoot });
   const listing = execFileSync("unzip", ["-Z1", zipName], { cwd: projectRoot }).toString();
   if (!listing.includes(`${distDir}/native-navigator-main.js`) || !listing.includes(`${distDir}/content.js`) || !listing.includes(`${distDir}/background.js`) || !listing.includes(`${distDir}/popup.html`)) {
@@ -38,7 +46,7 @@ export function zipDist({ projectRoot, zipName, distDir = "dist_chrome" }) {
 }
 
 export function zipMatchesDist(projectRoot, zipName, distDir = resolve(projectRoot, "dist_chrome")) {
-  const extractDir = resolve(projectRoot, "artifacts/candidate/.zip-compare");
+  const extractDir = resolve(projectRoot, "artifacts/package/.zip-compare");
   rmSync(extractDir, { recursive: true, force: true });
   mkdirSync(extractDir, { recursive: true });
   execFileSync("unzip", ["-q", zipName, "-d", extractDir], { cwd: projectRoot });

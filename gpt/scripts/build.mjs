@@ -62,7 +62,8 @@ for (const file of ["LICENSE", "NOTICE.md", "THIRD_PARTY_NOTICES.md"]) {
 }
 
 const built = JSON.parse(readFileSync(resolve(outdir, "manifest.json"), "utf8"));
-if (built.version !== "4.0.0") throw new Error(`dist manifest version is ${built.version}`);
+const packageVersion = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).version;
+if (built.version !== packageVersion) throw new Error(`dist manifest version is ${built.version}`);
 if (!existsSync(resolve(outdir, "native-navigator-main.js")) || !existsSync(resolve(outdir, "content.js")) || !existsSync(resolve(outdir, "background.js")) || !existsSync(resolve(outdir, "popup.html"))) {
   throw new Error("extension outputs missing");
 }

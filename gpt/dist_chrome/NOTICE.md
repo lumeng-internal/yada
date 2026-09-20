@@ -19,9 +19,9 @@ ChatGPT Yada GPT 扩展（`gpt/`）使用 GNU Affero General Public License v3.0
 | `ChatGPTChatClient.swift` | `src/quota/pageClient.ts` | 读取 plan 与 exhausted/reset metadata |
 | `ChatGPTChatHistoryReader.swift` | `src/quota/vibebar/historyReader.ts` | 7 天、page size 50、4 pages、detail budget 24、25 秒、archived 双流 |
 
-未复制 Vibe Bar 的 macOS 应用壳、菜单栏 UI、其他供应商适配器或密钥处理。浏览器侧多轮 warmup 只编排原有 reader 和 cache，不改变额度规则。
+未复制 Vibe Bar 的 macOS 应用壳、菜单栏 UI、其他供应商适配器或密钥处理。浏览器侧 last-known-good / stale-only reconciliation 编排原有 reader 和 cache，不改变额度规则。
 
-浏览器适配为 history list 单独使用 45 秒传输超时，保留 reader 的 25 秒默认调度预算和其他 API 的 15 秒默认超时。Reader 显式区分临时传输失败与永久失败，沿用最多 20 pass、间隔 1.5 秒的有限续跑；历史未分类数仅由 history summary 更新。
+浏览器适配为 history list 单独使用 45 秒传输超时，保留 reader 的 25 秒默认调度预算和其他 API 的 15 秒默认超时。Reader 显式区分临时传输失败与永久失败，有真实数据进展时最多 20 数据 pass，临时传输失败另行最多 2 次重试（1.5 秒 / 5 秒）；完整成功才原子发布 cache、账本与历史未分类数。
 
 ## AI-MarkDone
 
@@ -48,3 +48,7 @@ ChatGPT Yada GPT 扩展（`gpt/`）使用 GNU Affero General Public License v3.0
 ## 仓库中的独立程序
 
 `claude/` 与 `gemini/` 不与 `gpt/` 构建、链接或打包，保留各自许可证。
+
+## SortableJS
+
+[SortableJS/Sortable](https://github.com/SortableJS/Sortable)，固定 npm `sortablejs@1.15.6`，MIT，Copyright (c) 2019 All contributors to Sortable。用于现有提示词卡片拖拽和官方 AutoScroll；采用默认 ESM 入口，不引入框架 wrapper。完整 MIT 文本与版权见 `THIRD_PARTY_NOTICES.md`；package-lock.json 固定 tarball integrity。

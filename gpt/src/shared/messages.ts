@@ -1,5 +1,5 @@
 import type { QuotaSnapshot, QuotaSyncStatus, QuotaUsageEvent } from "../quota/types";
-import type { ChatGPTChatModelLimit, ChatPlan } from "../quota/vibebar/types";
+import type { ChatGPTChatHistoryCache, ChatGPTChatModelLimit, ChatPlan } from "../quota/vibebar/types";
 import { withTimeout } from "./timeout";
 
 export const MESSAGE_TIMEOUT_MS = 15_000;
@@ -15,7 +15,10 @@ export type QuotaIngest = {
   plan?: ChatPlan;
   historyComplete?: boolean;
   syncStatus?: QuotaSyncStatus;
-  historyError?: string | null;
+  lastHistorySuccessAt?: number;
+  lastHistoryAttemptAt?: number;
+  lastHistoryError?: string | null;
+  historyCache?: ChatGPTChatHistoryCache;
   unclassifiedTurns?: number;
   workspaceKind?: QuotaSnapshot["workspaceKind"];
   limits?: ChatGPTChatModelLimit[];

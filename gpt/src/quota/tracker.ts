@@ -1,16 +1,18 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
 import { ChatGPTApiTimeoutError, chatgptApi, fetchConversation } from "../conversation/fetchConversation";
-import { MESSAGE_TIMEOUT_MS, REFRESH_TIMEOUT_MS, sendRuntimeMessage } from "../shared/messages";
+import { MESSAGE_TIMEOUT_MS, REFRESH_TIMEOUT_MS, sendRuntimeMessage, type QuotaIngest } from "../shared/messages";
 import { withTimeout } from "../shared/timeout";
 import { readChatAccount, readModelLimits, type ChatAccount } from "./pageClient";
-import type { QuotaClassification, QuotaSyncStatus, QuotaUsageEvent } from "./types";
+import type { QuotaClassification, QuotaSnapshot, QuotaUsageEvent } from "./types";
 import { createChromeHistoryStore, readChatHistory, RetryableHistoryTransportError } from "./vibebar/historyReader";
 import type { ChatGPTChatHistorySummary, ChatGPTChatTurn } from "./vibebar/types";
 
 const FIRST_HISTORY_DELAY_MS = 4_000;
 const NEXT_HISTORY_SLICE_DELAY_MS = 1_500;
-const MAX_HISTORY_PASSES = 20;
+export const MAX_HISTORY_PASSES = 20;
+export const MAX_TRANSIENT_RETRIES = 2;
+export const HISTORY_RECONCILE_INTERVAL_MS = 10 * 60 * 1000;
 const HISTORY_LIST_TIMEOUT_MS = 45_000;
 
 export async function requestHistoryList(path: string, signal?: AbortSignal): Promise<unknown> {
@@ -33,6 +35,25 @@ export async function requestHistoryList(path: string, signal?: AbortSignal): Pr
   }
 }
 
+// Preserve the existing detail fetch/pagination behavior; only classify its transport failures.
+export async function requestHistoryDetail(id: string, signal?: AbortSignal): Promise<unknown> {
+  try {
+    return await fetchConversation(id, signal);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (!signal?.aborted && (error instanceof TypeError || error instanceof ChatGPTApiTimeoutError
+      || /API timed out|API failed: (408|500|502|503|504)\b/.test(message))) {
+      throw new RetryableHistoryTransportError("History detail transport interrupted");
+    }
+    throw error;
+  }
+}
+
+export function shouldReconcileHistory(snapshot: Pick<QuotaSnapshot, "historyComplete" | "lastHistorySuccessAt">, now: number): boolean {
+  return !snapshot.historyComplete || !snapshot.lastHistorySuccessAt
+    || now - snapshot.lastHistorySuccessAt >= HISTORY_RECONCILE_INTERVAL_MS;
+}
+
 export class QuotaTracker {
   private unsubscribe: (() => void) | null = null;
   private ingestQueue: Promise<void> = Promise.resolve();
@@ -41,11 +62,9 @@ export class QuotaTracker {
   private historyFlight: Promise<void> | null = null;
   private historyTimer = 0;
   private historyAbort: AbortController | null = null;
+  private nextHistoryAt = 0;
+  private forceHistory = false;
   private historyIdentity: string | null = null;
-  private historyPass = 0;
-  private historyStopped = false;
-  private historyResumePending = false;
-  private lastAccount: ChatAccount | null = null;
 
   constructor(private readonly sync: ConversationSync) {}
 
@@ -56,148 +75,156 @@ export class QuotaTracker {
   }
 
   async refreshCurrent(): Promise<void> {
-    await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
-    await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
-    this.historyStopped = false;
-    this.historyResumePending = false;
-    this.scheduleHistory(0);
+    try {
+      await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
+      await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
+    } finally {
+      // A current-conversation failure must not prevent the explicitly requested history refresh.
+      this.nextHistoryAt = 0;
+      this.forceHistory = true;
+      this.scheduleHistory(0);
+    }
   }
 
   dispose(): void {
     this.disposed = true;
     this.historyAbort?.abort();
-    this.historyAbort = null;
-    this.historyResumePending = false;
     window.clearTimeout(this.historyTimer);
-    this.historyTimer = 0;
     this.unsubscribe?.();
     this.unsubscribe = null;
     document.removeEventListener("visibilitychange", this.onVisibility);
   }
 
   private onSnapshot(snapshot: ConversationSnapshot | null): Promise<void> {
-    const work = this.writeLedger(snapshot);
-    this.ingestQueue = this.ingestQueue.then(() => work, () => work);
-    if (snapshot && !this.historyStopped) this.scheduleHistory(600);
-    return work;
+    const work = this.ingestQueue.then(() => this.writeLedger(snapshot));
+    this.ingestQueue = work.catch(() => undefined);
+    return this.ingestQueue;
   }
 
   private scheduleHistory(delayMs: number): void {
-    if (this.disposed || this.historyStopped || this.historyFlight || document.visibilityState === "hidden") return;
+    if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
     window.clearTimeout(this.historyTimer);
-    this.historyTimer = window.setTimeout(() => {
-      this.historyTimer = 0;
-      this.startHistoryScan();
-    }, Math.max(0, delayMs));
+    this.historyTimer = window.setTimeout(() => this.startHistoryScan(), Math.max(0, delayMs));
   }
 
   private startHistoryScan(): void {
-    if (this.disposed || this.historyStopped || this.historyFlight || document.visibilityState === "hidden") return;
+    if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
     const controller = new AbortController();
     this.historyAbort = controller;
     this.historyFlight = this.scanHistory(controller.signal)
-      .catch((error) => this.handleHistoryError(error, controller.signal))
+      .catch(() => { this.forceHistory = false; this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS; })
       .finally(() => {
-        if (this.historyAbort === controller) this.historyAbort = null;
+        this.historyAbort = null;
         this.historyFlight = null;
-        if (this.historyResumePending) {
-          this.historyResumePending = false;
-          this.scheduleHistory(NEXT_HISTORY_SLICE_DELAY_MS);
-        }
+        this.scheduleHistory(this.forceHistory ? 0 : Math.max(600, this.nextHistoryAt - Date.now()));
       });
   }
 
   private async scanHistory(signal: AbortSignal): Promise<void> {
     const account = await readChatAccount(signal);
     if (signal.aborted || this.disposed) return;
-    this.lastAccount = account;
-    if (this.historyIdentity !== account.identity) {
-      this.historyIdentity = account.identity;
-      this.historyPass = 0;
-      this.historyStopped = false;
-      this.historyResumePending = false;
+    // Temporary auth/network failure is not an account change.
+    if (!account.userId) throw new Error("login");
+    const response = await sendRuntimeMessage<{ snapshot?: QuotaSnapshot; error?: string }>({
+      type: "quota/get-state", accountKey: account.identity, plan: account.plan ?? undefined
+    });
+    if (!response.snapshot || response.error) throw new Error("quota state unavailable");
+    const baseline = response.snapshot;
+    const force = this.forceHistory;
+    this.forceHistory = false;
+    if (!force && !shouldReconcileHistory(baseline, Date.now())) {
+      this.nextHistoryAt = baseline.lastHistorySuccessAt! + HISTORY_RECONCILE_INTERVAL_MS;
+      return;
     }
-    this.historyPass += 1;
-    await this.publishHistoryState(account, [], "backfill", false, undefined, null);
-
-    const result = await readChatHistory({
-      transport: { request: requestHistoryList },
-      fetchDetail: (id, requestSignal) => fetchConversation(id, requestSignal),
-      store: this.history,
-      identity: account.identity,
-      now: Date.now(),
-      signal
-    });
-    if (signal.aborted || this.disposed) return;
-    if (result.summary.cancelled) throw new Error("login");
-
-    const resumable = historyNeedsAnotherPass(result.summary) && this.historyPass < MAX_HISTORY_PASSES;
-    const status: QuotaSyncStatus = result.summary.complete
-      ? "ready"
-      : resumable
-        ? "backfill"
-        : "partial";
-    await this.publishHistoryState(
-      account,
-      result.turns,
-      status,
-      result.summary.complete,
-      result.summary.unclassifiedTurns,
-      null
-    );
-    if (resumable) this.historyResumePending = true;
-    else this.historyStopped = true;
+    const retryDue = (baseline.lastHistoryAttemptAt ?? 0) + HISTORY_RECONCILE_INTERVAL_MS;
+    if (!force && baseline.lastHistoryError && Date.now() < retryDue) {
+      this.nextHistoryAt = retryDue;
+      return;
+    }
+    if (signal.aborted) return;
+    this.historyIdentity = account.identity;
+    const attemptAt = Date.now();
+    try {
+      await this.publish(account, {
+        syncStatus: baseline.historyComplete ? "ready" : "backfill",
+        lastHistoryAttemptAt: attemptAt
+      });
+      // Progressive slices share a private staging cache. Only a complete result is committed.
+      let cache = structuredClone(await this.history.load(account.identity));
+      const store = {
+        load: async () => cache,
+        save: async (next: typeof cache) => { cache = next; }
+      };
+      let dataPass = 1;
+      let retries = 0;
+      while (!signal.aborted) {
+        const result = await readChatHistory({
+          transport: { request: requestHistoryList },
+          fetchDetail: requestHistoryDetail,
+          store, identity: account.identity, now: Date.now(), signal
+        });
+        if (signal.aborted || this.disposed) return;
+        const summary = result.summary;
+        if (summary.cancelled) throw new Error("login");
+        if (summary.complete) {
+          const successAt = Date.now();
+          await this.publish(account, {
+            events: toEvents(result.turns, account.identity, "personal"),
+            historyCache: cache, historyComplete: true, syncStatus: "ready",
+            unclassifiedTurns: summary.unclassifiedTurns,
+            lastHistorySuccessAt: successAt, lastHistoryAttemptAt: attemptAt, lastHistoryError: null
+          });
+          this.nextHistoryAt = successAt + HISTORY_RECONCILE_INTERVAL_MS;
+          return;
+        }
+        if (summary.permanentFailures > 0) throw new Error("历史数据暂不完整");
+        if (summary.retryableFailures > 0) {
+          if (retries >= MAX_TRANSIENT_RETRIES) throw new Error("历史接口暂不可用");
+          await pause(retries++ === 0 ? 1_500 : 5_000, signal);
+        } else if (historyNeedsAnotherPass(summary) && dataPass < MAX_HISTORY_PASSES) {
+          dataPass += 1;
+          await pause(NEXT_HISTORY_SLICE_DELAY_MS, signal);
+        } else {
+          throw new Error("历史数据暂不完整");
+        }
+      }
+    } catch (error) {
+      if (signal.aborted || this.disposed) return;
+      await this.publish(account, {
+        syncStatus: "error", lastHistoryAttemptAt: attemptAt, lastHistoryError: conciseError(error)
+      });
+      this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS;
+    }
   }
 
-  private async handleHistoryError(error: unknown, signal: AbortSignal): Promise<void> {
-    if (signal.aborted || this.disposed) return;
-    this.historyStopped = true;
-    this.historyResumePending = false;
-    const account = this.lastAccount;
-    if (!account) return;
-    const message = conciseError(error);
-    await this.publishHistoryState(account, [], "error", false, undefined, message).catch(() => undefined);
-  }
-
-  private async publishHistoryState(
-    account: ChatAccount,
-    turns: readonly ChatGPTChatTurn[],
-    syncStatus: QuotaSyncStatus,
-    historyComplete: boolean,
-    unclassifiedTurns: number | undefined,
-    historyError: string | null
-  ): Promise<void> {
-    const events = toEvents(turns, account.identity, "personal");
-    await sendRuntimeMessage({
-      type: "quota/ingest",
-      events,
-      plan: account.plan,
-      unclassifiedTurns,
-      historyComplete,
-      syncStatus,
-      historyError,
-      workspaceKind: "personal",
-      accountKey: account.identity
+  private async publish(account: ChatAccount, extras: Partial<QuotaIngest>): Promise<void> {
+    const response = await sendRuntimeMessage<{ error?: string }>({
+      type: "quota/ingest", events: [], plan: account.plan ?? undefined,
+      accountKey: account.identity, ...extras
     });
+    if (response?.error) throw new Error(response.error);
   }
 
   private async writeLedger(snapshot: ConversationSnapshot | null): Promise<void> {
     if (this.disposed || !snapshot) return;
     const account = await readChatAccount();
-    this.lastAccount = account;
-    const limits = await readModelLimits();
+    if (this.disposed || !account.userId) return;
+    const accountChanged = this.historyIdentity !== null && this.historyIdentity !== account.identity;
+    if (accountChanged) {
+      this.historyAbort?.abort();
+      this.nextHistoryAt = 0;
+    }
+    this.historyIdentity = account.identity;
     const classification = classifySnapshot(snapshot);
-    const events = snapshot.quotaIsWork
-      ? []
-      : toEvents(snapshot.quotaTurns, account.identity, classification);
-    await sendRuntimeMessage({
-      type: "quota/ingest",
-      events,
-      plan: account.plan,
-      workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal",
-      limits,
-      historyComplete: undefined,
-      accountKey: account.identity
+    const events = snapshot.quotaIsWork ? [] : toEvents(snapshot.quotaTurns, account.identity, classification);
+    // Publish live turns before the optional model-limit request can delay them.
+    await this.publish(account, {
+      events, workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
+    });
+    if (accountChanged) this.scheduleHistory(0);
+    const limits = await readModelLimits();
+    if (!this.disposed) await this.publish(account, { limits,
+      workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
     });
   }
 
@@ -205,17 +232,20 @@ export class QuotaTracker {
     if (document.visibilityState === "hidden") {
       this.historyAbort?.abort();
       window.clearTimeout(this.historyTimer);
-      this.historyTimer = 0;
       return;
     }
-    if (!this.historyStopped) {
-      if (this.historyFlight) this.historyResumePending = true;
-      else this.scheduleHistory(RECOVERY_DELAY_MS);
-    }
+    this.scheduleHistory(0);
   };
 }
 
-const RECOVERY_DELAY_MS = 600;
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = () => { window.clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
+    const timer = window.setTimeout(done, ms);
+    signal.addEventListener("abort", done, { once: true });
+    if (signal.aborted) done();
+  });
+}
 
 function classifySnapshot(snapshot: ConversationSnapshot): QuotaClassification {
   if (snapshot.quotaIsWork) return "work";
@@ -248,5 +278,6 @@ function conciseError(error: unknown): string {
 
 export function historyNeedsAnotherPass(summary: ChatGPTChatHistorySummary): boolean {
   return !summary.complete && !summary.cancelled && summary.permanentFailures === 0
-    && (summary.hitDetailBudget || summary.hitDeadline || summary.retryableFailures > 0);
+    && summary.retryableFailures === 0 && summary.conversationsFetched > 0
+    && (summary.hitDetailBudget || summary.hitDeadline);
 }

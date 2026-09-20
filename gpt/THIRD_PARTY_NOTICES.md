@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 4.0.0
+# Third-party notices — ChatGPT Yada 4.0.1
 
 ## Vibe Bar
 
@@ -59,10 +59,20 @@ Reference only for MV3 service-worker icon updates and popup/background synchron
 
 ## Historical LunaTOC note
 
-LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.0.0.
+LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.0.1.
+
+## SortableJS
+
+- Repository: https://github.com/SortableJS/Sortable
+- Fixed npm package: `sortablejs@1.15.6` (package-lock.json records the tarball and integrity)
+- License: MIT
+- Copyright (c) 2019 All contributors to Sortable
+
+Official default ESM entry (`modular/sortable.esm.js`) supplies handle-only prompt reordering and AutoScroll. No framework wrapper, MultiDrag or Swap is bundled. Type declarations: `@types/sortablejs@1.15.8`, development only.
 
 ## MIT license text
 
+Copyright (c) 2019 All contributors to Sortable
 Copyright (c) 2026 bujue3709
 Copyright (c) 2026 zhaoliangbin42
 Copyright (c) 2015 Max Konovalov

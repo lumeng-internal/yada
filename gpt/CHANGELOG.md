@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.0.1 - 2026-09-20
+
+- 额度改为实时 local ledger、last-known-good baseline 和 10 分钟 stale-only reconciliation；fresh reload 不扫历史，刷新与失败保留已有数字。
+- 完整结果统一提交账本、cache、unclassified 与成功/尝试/错误元数据；updatedLabel 使用真实完整同步时间。
+- 数据进展最多 20 pass；传输失败最多两次重试，不再混用 20 pass；hidden 暂停，visible 过期才校准，manual refresh 忽略 TTL。
+- 提示词使用 SortableJS 1.15.6（MIT）增加手柄拖拽、AutoScroll 和本地持久排序；v1 → v2 一次迁移保持旧视觉顺序，新增顶部、编辑原位、失败回滚。
+- 写入长期版本规则，打包检查 package / lock / manifest / dist / ZIP 一致，保留旧 4.0.0 包。
+- Official Navigator、ConversationSync、Copy All、三环 renderer、Vibe Bar allowance 与窗口保持不变。
+- 测试包 `ChatGPT-Yada-v4.0.1-official-only-UNVERIFIED.zip`；Mac mini 产品测试不运行，MacBook 手工验收待执行。
+
 ## v4.0.0 - 2026-09-19
 
 - 产品方向改为只使用 ChatGPT 官方 Prompt Navigator。

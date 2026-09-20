@@ -42,6 +42,9 @@ export type QuotaSnapshot = {
   historyComplete: boolean;
   syncStatus: QuotaSyncStatus;
   historyError: string | null;
+  lastHistorySuccessAt?: number;
+  lastHistoryAttemptAt?: number;
+  lastHistoryError?: string | null;
   coverageLabel: "完整" | "历史估算" | "数据不完整";
   tightestRemainingPercent: number | null;
   personalProEligible: boolean;
@@ -61,7 +64,9 @@ export type QuotaPersistedState = {
   plan: ChatPlan;
   historyComplete: boolean;
   syncStatus: QuotaSyncStatus;
-  historyError?: string;
+  lastHistorySuccessAt?: number;
+  lastHistoryAttemptAt?: number;
+  lastHistoryError?: string | null;
   // History-wide unresolved turns; only a completed reader pass may update this count.
   unclassifiedTurns: number;
   lastSnapshot?: QuotaSnapshot;

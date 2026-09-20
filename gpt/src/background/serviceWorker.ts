@@ -46,7 +46,10 @@ async function ingest(message: QuotaIngest): Promise<{ snapshot: QuotaSnapshot |
     plan: message.plan,
     historyComplete: message.historyComplete,
     syncStatus: message.syncStatus,
-    historyError: message.historyError,
+    lastHistorySuccessAt: message.lastHistorySuccessAt,
+    lastHistoryAttemptAt: message.lastHistoryAttemptAt,
+    lastHistoryError: message.lastHistoryError,
+    historyCache: message.historyCache,
     unclassifiedTurns: message.unclassifiedTurns,
     limits: message.limits,
     workspaceKind: message.workspaceKind,
@@ -59,17 +62,7 @@ async function ingest(message: QuotaIngest): Promise<{ snapshot: QuotaSnapshot |
 async function getState(message: QuotaGetState): Promise<{ snapshot: QuotaSnapshot }> {
   const restored = await ledger.restore();
   const accountKey = message.accountKey ?? restored.state.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "chat-unknown";
-  const snapshot = calculateQuotaSnapshot({
-    accountKey,
-    plan: message.plan ?? restored.state.plan,
-    workspaceKind: restored.state.lastSnapshot?.workspaceKind ?? "personal",
-    events: restored.ledger.events,
-    historyComplete: restored.state.historyComplete,
-    syncStatus: restored.state.syncStatus,
-    historyError: restored.state.historyError,
-    unclassifiedTurns: restored.state.unclassifiedTurns,
-    writeError: restored.state.writeError
-  });
+  const snapshot = await ledger.getSnapshot(accountKey, message.plan ?? null);
   await publish(snapshot);
   return { snapshot };
 }
@@ -82,9 +75,12 @@ async function restore(): Promise<void> {
     plan: restored.state.plan,
     workspaceKind: last?.workspaceKind ?? "personal",
     events: restored.ledger.events,
+    limits: last?.serverLimits,
     historyComplete: restored.state.historyComplete,
     syncStatus: restored.state.syncStatus,
-    historyError: restored.state.historyError,
+    lastHistorySuccessAt: restored.state.lastHistorySuccessAt,
+    lastHistoryAttemptAt: restored.state.lastHistoryAttemptAt,
+    lastHistoryError: restored.state.lastHistoryError,
     unclassifiedTurns: restored.state.unclassifiedTurns,
     writeError: restored.state.writeError
   });

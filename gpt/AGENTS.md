@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.0.0**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.0.1**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
@@ -14,7 +14,7 @@ The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There
 - `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper; no `chrome.*` API.
 - `nativeNavigator/hydrator.ts`: isolated, bounded host-history hydration with no scrolling or reload.
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
-- `QuotaTracker`: progressive browser-lifecycle cache warmup; one flight, bounded passes, pause/cancel/stop.
+- `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; one timer/flight, private staged slices, pause on hidden.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
 
 ## Required safety boundaries
@@ -46,3 +46,16 @@ Focused or full unit tests may be used for changed pure logic, but `npm run chec
 - GPT Navigator Helper `2ac38de536dacb0ed1ad25c31396fd62a1c49022`, no project license: behavioral reference only; no source copied.
 
 `gpt/` remains AGPL-3.0-only. Keep `NOTICE.md` and `THIRD_PARTY_NOTICES.md` accurate when upstream-derived code changes.
+
+## Versioning and test packages
+
+任何进入测试包的产品代码变化必须 bump version。产品行为、代码逻辑、UI 功能或 bugfix 均属于此规则；禁止代码更新而 manifest/package 版本不变。
+
+- PATCH：bugfix、小功能、小交互优化；例如 4.0.0 → 4.0.1。本轮 quota lifecycle 修复与现有 Prompt Library 拖拽增强属于 PATCH。
+- MINOR：新增完整功能模块；例如 4.0.x → 4.1.0。
+- MAJOR：架构兼容性变化或产品方向重大变化。
+- package、lockfile、source manifest、dist manifest、ZIP 文件名必须一致；`npm run package` 强制检查，拒绝覆盖已有版本包。
+- 固定依赖与 lockfile；SortableJS 1.15.6（MIT）使用官方默认 ESM（包含 AutoScroll），不实现自有拖拽状态机。
+- `historyComplete=true` 不因刷新开始、reload 或失败降级；只有账号变化、存储丢失/损坏或不兼容 schema 才能使 baseline 失效。
+- 本地固定验证：`npm test`、`npm run build`、`npm run verify:gate`、`git diff --check`，之后 `npm run package`。
+- `HOSTED_CI = DISABLED_BY_OWNER_NO_QUOTA`，含义为 `NOT_USED_BY_POLICY`；不属于 PASS、FAILURE 或 Release Authority。本分支仅测试包交付，不执行 PR、merge、Release 或部署阶段。

@@ -2,6 +2,7 @@
  * features/prompt-library.js. Copyright (c) 2026 bujue3709. MIT; see THIRD_PARTY_NOTICES.md.
  * Yada adapters: storage, editing, clipboard feedback and focus lifecycle.
  */
+import Sortable from "sortablejs";
 import styles from "./panel.css?inline";
 import { writeTextToClipboard } from "../export/clipboard";
 import { readLibrary, saveLibrary } from "./storage";
@@ -10,6 +11,7 @@ import { detectYadaTheme, observeYadaTheme } from "../ui/theme";
 
 const svg = (body: string): string => `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
 const ICONS: Record<string, string> = {
+  grip: svg('<circle cx="9" cy="5" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="19" r="1"/>'),
   copy: svg('<rect x="8" y="8" width="12" height="13" rx="2"/><path d="M16 8V5a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h3"/>'),
   edit: svg('<path d="m15 4 5 5M4 20l5-1L21 7a2 2 0 0 0-5-5L4 14Z"/>'),
   delete: svg('<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>'),
@@ -21,10 +23,11 @@ export class PromptPanel {
   readonly host = document.createElement("div");
   private readonly root: ShadowRoot;
   private readonly modal: HTMLElement;
-  private library: PromptLibrary = { version: 1, prompts: [] };
+  private library: PromptLibrary = { version: 2, prompts: [] };
   private copyTimers = new Map<HTMLButtonElement, number>();
   private generation = 0;
   private busy = false;
+  private sortable: Sortable | null = null;
   private disposed = false;
   private editing: Prompt | null = null;
   private readonly disposeTheme: () => void;
@@ -38,7 +41,7 @@ export class PromptPanel {
     const style = document.createElement("style"); style.textContent = styles;
     this.modal = document.createElement("section");
     this.modal.className = "yada-prompt-modal is-visible";
-    // Upstream complete modal shell; intentionally omit category, sort and import/export.
+    // Upstream complete modal shell; intentionally omit category and import/export.
     this.modal.innerHTML = `
       <div class="yada-prompt-backdrop" data-prompt-action="close"></div>
       <div class="yada-prompt-panel" role="dialog" aria-modal="true" aria-label="提示词收藏库">
@@ -78,6 +81,7 @@ export class PromptPanel {
   };
   private query<T extends HTMLElement>(selector: string): T { return this.root.querySelector<T>(selector)!; }
   close = (): void => {
+    this.destroySortable();
     this.generation++;
     for (const [button, timer] of this.copyTimers) { clearTimeout(timer); button.innerHTML = ICONS.copy; }
     this.copyTimers.clear(); this.host.hidden = true;
@@ -91,6 +95,7 @@ export class PromptPanel {
   }
   private toggle = async (): Promise<void> => {
     if (!this.host.hidden) { this.close(); return; }
+    if (this.busy) return;
     const generation = ++this.generation;
     if (!this.host.isConnected) document.body.append(this.host);
     this.host.hidden = false; this.button.setAttribute("aria-expanded", "true");
@@ -127,11 +132,12 @@ export class PromptPanel {
     if (kind === 'add') this.edit();
     if (kind === 'cancel') { this.query('form').hidden = true; this.renderList(); }
     if (kind === 'edit' && prompt) this.edit(prompt);
-    if (kind === 'delete' && prompt) void this.persist({ version: 1, prompts: this.library.prompts.filter(item => item.id !== prompt.id) });
+    if (kind === 'delete' && prompt) void this.persist({ version: 2, prompts: this.library.prompts.filter(item => item.id !== prompt.id) });
     if (kind === 'copy' && prompt) void this.copy(prompt, action as HTMLButtonElement);
   };
   private renderList(): void {
-    const items = [...this.library.prompts].sort((a, b) => b.updatedAt - a.updatedAt);
+    this.destroySortable();
+    const items = this.library.prompts;
     const list = this.query('.yada-prompt-list'); list.replaceChildren(); list.hidden = false;
     this.query('.yada-prompt-empty').hidden = items.length > 0;
     const fragment = document.createDocumentFragment();
@@ -143,9 +149,30 @@ export class PromptPanel {
       const content = document.createElement('p'); content.className = 'yada-prompt-item-content'; content.textContent = item.content;
       const actions = document.createElement('div'); actions.className = 'yada-prompt-item-actions';
       actions.append(this.action('复制提示词', 'copy', item.id), this.action('编辑提示词', 'edit', item.id), this.action('删除提示词', 'delete', item.id));
-      header.append(title, actions); article.append(header, content); fragment.append(article);
+      const grip = document.createElement('span'); grip.className = 'yada-prompt-grip';
+      grip.title = '拖拽排序'; grip.setAttribute('aria-label', '拖拽排序'); grip.innerHTML = ICONS.grip;
+      header.append(grip, title, actions); article.append(header, content); fragment.append(article);
     }
     list.append(fragment);
+    if (this.disposed || this.host.hidden) return;
+    // Official default ESM entry includes AutoScroll; no custom pointer/scroll state machine.
+    this.sortable = new Sortable(list, {
+      handle: '.yada-prompt-grip', draggable: '.yada-prompt-item', dataIdAttr: 'data-prompt-id',
+      animation: 150, ghostClass: 'yada-prompt-ghost', chosenClass: 'yada-prompt-chosen',
+      scroll: list, bubbleScroll: false,
+      onEnd: () => { void this.saveOrder(); }
+    });
+  }
+  private destroySortable(): void { this.sortable?.destroy(); this.sortable = null; }
+  private async saveOrder(): Promise<void> {
+    if (!this.sortable || this.busy) return;
+    const ids = this.sortable.toArray();
+    if (ids.every((id, index) => id === this.library.prompts[index]?.id)) return;
+    const byId = new Map(this.library.prompts.map(item => [item.id, item]));
+    if (ids.length !== byId.size || new Set(ids).size !== byId.size || ids.some(id => !byId.has(id))) {
+      this.renderList(); return;
+    }
+    await this.persist({ version: 2, prompts: ids.map(id => byId.get(id)!) }, true);
   }
   private action(text: string, action: string, id: string): HTMLButtonElement {
     const button = document.createElement('button'); button.type = 'button'; button.className = 'yada-prompt-icon';
@@ -153,6 +180,7 @@ export class PromptPanel {
     button.dataset.promptAction = action; button.dataset.promptId = id; return button;
   }
   private edit(prompt?: Prompt): void {
+    this.destroySortable();
     this.editing = prompt ?? null; this.query('form').hidden = false;
     this.query('.yada-prompt-list').hidden = true; this.query('.yada-prompt-empty').hidden = true;
     this.query<HTMLInputElement>('[name="title"]').value = prompt?.title ?? '';
@@ -165,16 +193,20 @@ export class PromptPanel {
     if (!title || !content.trim() || this.busy) return;
     const previous = this.editing, now = Date.now();
     const item: Prompt = { id: previous?.id ?? crypto.randomUUID(), title, content, createdAt: previous?.createdAt ?? now, updatedAt: now };
-    await this.persist({ version: 1, prompts: previous ? this.library.prompts.map(p => p.id === previous.id ? item : p) : [...this.library.prompts, item] });
+    await this.persist({ version: 2, prompts: previous ? this.library.prompts.map(p => p.id === previous.id ? item : p) : [item, ...this.library.prompts] });
   }
-  private async persist(next: PromptLibrary): Promise<void> {
+  private async persist(next: PromptLibrary, sorting = false): Promise<void> {
     if (this.busy) return;
-    this.busy = true; const generation = this.generation;
+    this.busy = true; this.sortable?.option("disabled", true); const generation = this.generation;
     try {
       await saveLibrary(next); this.library = next;
       if (!this.disposed && generation === this.generation) { this.renderList(); this.query('form').hidden = true; }
-    } catch { if (generation === this.generation) this.error('保存失败，内容仍保留，请重试。'); }
-    finally { this.busy = false; }
+    } catch {
+      if (generation === this.generation) {
+        if (sorting) this.renderList();
+        this.error(sorting ? '排序保存失败，请重试' : '保存失败，内容仍保留，请重试。');
+      }
+    } finally { this.busy = false; this.sortable?.option("disabled", false); }
   }
   private async copy(prompt: Prompt, button: HTMLButtonElement): Promise<void> {
     const generation = this.generation;

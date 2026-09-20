@@ -184,7 +184,7 @@ describe("inline toolbar quota rings", () => {
     await flush();
     expect(mounted.canvas.dataset.quotaCenter).toBe("…");
     mounted.button.click();
-    expect(mounted.popover.textContent).toContain("正在补齐最近 7 天 ChatGPT 历史");
+    expect(mounted.popover.textContent).toContain("正在首次同步最近 7 天 ChatGPT 历史");
     expect(mounted.popover.textContent).toContain(`已记录 ${snapshot.recordedCount}`);
   });
 

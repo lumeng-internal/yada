@@ -7,7 +7,10 @@ execFileSync("git", ["diff", "--exit-code", "a4bc0c56908df1e2643e1adb76c897f1198
 console.log("PASS claude/ and gemini/ unchanged from 2.1.1 baseline");
 
 const manifest = JSON.parse(readFileSync(resolve(root, "manifest.json"), "utf8"));
-if (manifest.version !== "4.0.0") throw new Error(`manifest version ${manifest.version}`);
+const packageVersion = JSON.parse(readFileSync(resolve(root, "package.json"), "utf8")).version;
+const lockVersion = JSON.parse(readFileSync(resolve(root, "package-lock.json"), "utf8")).packages[""].version;
+const distVersion = JSON.parse(readFileSync(resolve(root, "dist_chrome/manifest.json"), "utf8")).version;
+if (manifest.version !== packageVersion || lockVersion !== packageVersion || distVersion !== packageVersion) throw new Error(`manifest version ${manifest.version}`);
 if (manifest.background?.service_worker !== "background.js") throw new Error("background service worker missing");
 if (manifest.action?.default_popup !== "popup.html") throw new Error("popup missing");
 if (!manifest.permissions?.includes("storage") || !manifest.permissions?.includes("alarms") || !manifest.permissions?.includes("activeTab")) {
@@ -28,7 +31,7 @@ if (existsSync(resolve(root, "src/nativeBootstrap")) || existsSync(resolve(root,
 if (existsSync(resolve(root, "vendor/luna-navigation"))) {
   throw new Error("vendor/luna-navigation must be removed from production");
 }
-console.log("PASS manifest 4.0.0 has isolated content, document_start MAIN hook, background, and popup");
+console.log(`PASS version ${packageVersion} consistent; isolated content, document_start MAIN hook, background, and popup`);
 
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {

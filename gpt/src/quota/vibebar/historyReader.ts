@@ -102,6 +102,7 @@ export async function readChatHistory(input: {
   let work = 0;
   let unknown = 0;
   let fetched = 0;
+  let fetchedSuccessfully = 0;
   let read = 0;
   let cancelled = false;
   let hitDeadline = false;
@@ -161,6 +162,7 @@ export async function readChatHistory(input: {
                   : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
                 parsed = await parseConversation(detail, id, updated, cutoff);
                 cache.conversations[key] = parsed;
+                fetchedSuccessfully += 1;
               } catch (error) {
                 if (isAbortError(error)) throw error;
                 recordFailure(error);
@@ -208,6 +210,7 @@ export async function readChatHistory(input: {
       observedFrom: cutoff,
       complete,
       conversationsRead: read,
+      conversationsFetched: fetchedSuccessfully,
       excludedWorkConversations: work,
       unclassifiedTurns: unknown,
       failedConversations: failures,

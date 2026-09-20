@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { GPT6_PRO, SOL_PRO, allowances, parsePlanType } from "../src/quota/vibebar/allowances";
 import { identity, isTemporary, isWork, parseConversation } from "../src/quota/vibebar/conversationParser";
 import { modelLimits } from "../src/quota/vibebar/modelLimits";
@@ -152,5 +152,68 @@ describe("calculation", () => {
     expect(snapshot.coverageLabel).toBe("历史估算");
     expect(snapshotToRings(snapshot).center).toBe("—");
     expect(snapshotTitle(snapshot)).not.toMatch(/官方/);
+  });
+});
+
+describe("last-good persistence and data time", () => {
+  it("retains ready baseline through refresh/error and resets only on an account switch", async () => {
+    const ledger = new QuotaLedger();
+    await ledger.ingest([event({})], { accountKey: "account", plan: "pro", historyComplete: true, lastHistorySuccessAt: NOW, now: NOW });
+    await ledger.ingest([], { accountKey: "account", historyComplete: false, syncStatus: "backfill", lastHistoryAttemptAt: NOW + 600_000, now: NOW + 600_000 });
+    await ledger.ingest([], { accountKey: "account", syncStatus: "error", lastHistoryError: "offline", now: NOW + 600_000 });
+    const state = (await ledger.restore()).state;
+    expect(state).toMatchObject({ historyComplete: true, syncStatus: "ready", lastHistorySuccessAt: NOW });
+    const view = await ledger.getSnapshot("account", "pro", { now: NOW + 1_080_000 });
+    expect(view.updatedLabel).toBe("上次完整同步：18 分钟前 · 最近刷新失败，将稍后自动重试");
+    expect(view.gpt6ProWeekly?.estimatedRemaining).toBe(199);
+    expect((await ledger.restore()).state.lastHistorySuccessAt).toBe(NOW);
+    const other = await ledger.getSnapshot("other", "pro", { now: NOW });
+    expect(other.historyComplete).toBe(false);
+    expect(other.lastHistorySuccessAt).toBeUndefined();
+    await ledger.ingest([], { accountKey: "other", now: NOW });
+    expect((await ledger.restore()).state).toMatchObject({ historyComplete: false, lastHistorySuccessAt: undefined });
+  });
+
+  it("does not fabricate first success time and rolls expired usage out without history download", async () => {
+    const ledger = new QuotaLedger();
+    await ledger.ingest([event({})], { accountKey: "account", plan: "pro", historyComplete: false, now: NOW });
+    expect((await ledger.getSnapshot("account", "pro", { now: NOW })).updatedLabel).toBe("尚未完成首次历史同步");
+    await ledger.ingest([], { accountKey: "account", historyComplete: true, lastHistorySuccessAt: NOW, now: NOW });
+    expect((await ledger.getSnapshot("account", "pro", { now: NOW + 86_400_001 })).combinedDaily?.estimatedRemaining).toBe(200);
+    expect((await ledger.getSnapshot("account", "pro", { now: NOW + 7 * 86_400_000 + 1 })).gpt6ProWeekly?.estimatedRemaining).toBe(200);
+    expect((await ledger.restore()).state.lastHistorySuccessAt).toBe(NOW);
+  });
+
+  it("does not trust a baseline whose ledger is missing or unparseable", async () => {
+    await chrome.storage.local.set({ "chatgpt-yada:quota-state:v2": {
+      version: 2, accountKey: "account", plan: "pro", historyComplete: true, lastHistorySuccessAt: NOW
+    } });
+    expect((await new QuotaLedger().getSnapshot("account", "pro")).historyComplete).toBe(false);
+  });
+});
+
+
+describe("baseline commit boundaries", () => {
+  it("retains last-good cache and state when the atomic storage write fails", async () => {
+    const ledger = new QuotaLedger();
+    const oldCache = { conversations: {} };
+    await ledger.ingest([event({})], { accountKey: "account", plan: "pro", historyComplete: true,
+      lastHistorySuccessAt: NOW, historyCache: oldCache, now: NOW });
+    const before = structuredClone(await chrome.storage.local.get(null));
+    const write = vi.spyOn(chrome.storage.local, "set").mockRejectedValueOnce(new Error("disk full"));
+    try {
+      await expect(ledger.ingest([event({ id: "new" })], { accountKey: "account", historyComplete: true,
+        lastHistorySuccessAt: NOW + 600_000, historyCache: oldCache, now: NOW + 600_000 })).rejects.toThrow("disk full");
+      expect(await chrome.storage.local.get(null)).toEqual(before);
+    } finally { write.mockRestore(); }
+  });
+
+  it("preserves active model limits through reads, expires them on time, and isolates accounts", async () => {
+    const ledger = new QuotaLedger();
+    await ledger.ingest([event({})], { accountKey: "account", plan: "pro", historyComplete: true, now: NOW,
+      limits: [{ model: GPT6_PRO, resetsAt: NOW + 1_000, fallbackModel: "gpt-5.4" }] });
+    expect((await ledger.getSnapshot("account", "pro", { now: NOW })).gpt6ProWeekly?.estimatedRemaining).toBe(0);
+    expect((await ledger.getSnapshot("account", "pro", { now: NOW + 1_001 })).gpt6ProWeekly?.estimatedRemaining).toBe(199);
+    expect((await ledger.getSnapshot("other", "pro", { now: NOW })).gpt6ProWeekly?.estimatedRemaining).toBeNull();
   });
 });
