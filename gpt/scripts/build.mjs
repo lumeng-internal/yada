@@ -13,12 +13,16 @@ mkdirSync(outdir, { recursive: true });
 const inlineCss = {
   name: "inline-css",
   setup(buildApi) {
-    buildApi.onResolve({ filter: /\.css(\?inline)?$/ }, (args) => ({
-      path: resolve(args.resolveDir, args.path.replace(/\?inline$/, "")),
-      namespace: "inline-css"
-    }));
+    buildApi.onResolve({ filter: /\.css(\?inline)?$/ }, (args) => {
+      const relativePath = args.path.replace(/\?inline$/, "");
+      return {
+        path: relativePath,
+        namespace: "inline-css",
+        pluginData: { absolutePath: resolve(args.resolveDir, relativePath) }
+      };
+    });
     buildApi.onLoad({ filter: /.*/, namespace: "inline-css" }, async (args) => ({
-      contents: await readFile(args.path, "utf8"),
+      contents: await readFile(args.pluginData.absolutePath, "utf8"),
       loader: "text"
     }));
   }
