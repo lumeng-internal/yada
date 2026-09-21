@@ -31,6 +31,12 @@ export type QuotaGetState = {
   plan?: ChatPlan;
 };
 
+export type QuotaGetHeatmap = {
+  type: "quota/get-heatmap";
+  accountKey?: string;
+  plan?: ChatPlan;
+};
+
 export type QuotaRefreshCurrent = {
   type: "quota/refresh-current";
   conversationId: string;
@@ -41,5 +47,5 @@ export type QuotaStorageChanged = {
   snapshot: QuotaSnapshot;
 };
 
-export type YadaRequest = QuotaIngest | QuotaGetState | QuotaRefreshCurrent;
+export type YadaRequest = QuotaIngest | QuotaGetState | QuotaGetHeatmap | QuotaRefreshCurrent;
 export type YadaEvent = QuotaStorageChanged;

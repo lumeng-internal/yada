@@ -1,8 +1,8 @@
 # ChatGPT Yada
 
-ChatGPT Yada 4.0.4 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
+ChatGPT Yada 4.1.0 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
 
-4.0.4 的运行方式是：ConversationSync 提供唯一完整对话真相，MAIN 只发请求生命周期信号，isolated hydrator 只驱动 ChatGPT 官方分页并验证官方 UI；成功后自动休眠。多标签仅保留必要的回答完成监听，hidden idle tab 不主动发起首次完整对话读取；完整额度历史同一时间最多一个标签校准。
+4.1.0 保持 4.0.4 的 Navigator 与多标签运行方式：ConversationSync 提供唯一完整对话真相，MAIN 只发请求生命周期信号，isolated hydrator 只驱动 ChatGPT 官方分页并验证官方 UI；成功后自动休眠。hidden idle tab 不主动发起首次完整对话读取；完整额度历史同一时间最多一个标签校准。
 
 Yada 不再绘制右侧导航条，也没有导航预览、绿色模式点或代理跳转。页面工具栏只有：`Pro 额度三环 | 复制全部 | 提示词`。
 
@@ -13,7 +13,8 @@ Yada 不再绘制右侧导航条，也没有导航预览、绿色模式点或代
 - **复制全部**：导出当前活动分支 Markdown 和真实时间戳。
 - **提示词**：本地收藏、编辑、删除与复制；支持本地拖拽排序，顺序自动保存。新增放顶部，编辑不改变顺序。第一次点击「提示词」才创建面板。
 - **Pro 额度**：首次同步最近 7 天历史；此后当前聊天实时记账，每 10 分钟仅在数据变旧时后台校准。同一时间最多一个标签做完整历史校准；已经开始的校准不会因为切走标签而中断。后台刷新不会清空已有额度。沿用 Vibe Bar 规则与 `model_limits`，这是本地估算，不是 OpenAI 官方余额。
-- **同一份额度数据**：页面三环、浏览器 Action 图标和 popup 都读取同一个 `QuotaSnapshot`。点击三环后，健康状态只显示三组预计剩余数字和上次完整同步时间。
+- **Pro 使用量滚动热力图**：只在用户打开三环详情时，Service Worker 从现有 `QuotaLedgerState.events` 按 allowance 在内存中聚合；页面只收到最多 216 个小时 cell。24 小时图从下一个完整小时开始，7 天图按 7 行 × 24 列连续排列；关闭详情即移除 SVG、共享 Tooltip、事件委托与整点 timer。
+- **同一份额度数据**：页面三环、浏览器 Action 图标和 popup 都读取同一个 `QuotaSnapshot`。热力图不保存第二份长期数据，不新增 ChatGPT 网络请求，也不返回原始事件。
 
 message / messageId 深链保持原样，Yada 不介入 hydration。普通网络、DOM 或 host pagination 暂时不可用时进入轻量 sleeping；同 conversation 的新请求、ConversationSync snapshot、重新可见或 route reset 会事件驱动恢复。只有明确深链、60 秒 active budget、20 个真实 older requests 或用户恢复预算耗尽才 stopped。官方 Navigator 按钮数必须与 `expectedPrompts > 0` 精确匹配才可 ready。
 
@@ -21,7 +22,7 @@ message / messageId 深链保持原样，Yada 不介入 hydration。普通网络
 
 需要已登录 ChatGPT 的 Chrome 或 Edge。
 
-1. 加载 `gpt/dist_chrome`，或解压 `ChatGPT-Yada-v4.0.4-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
+1. 加载 `gpt/dist_chrome`，或解压 `ChatGPT-Yada-v4.1.0-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
 2. 刷新 ChatGPT 标签页。
 
 该包是手工验收包，不是正式 Release。Mac mini 不执行产品测试；MacBook Edge 与真实 10～15 标签的验收状态见 `QA.md`。
@@ -41,10 +42,10 @@ git diff --check
 npm run package
 ```
 
-旧 4.0.0、4.0.1、4.0.2 与 4.0.3 测试包保留，新的 4.0.4 包不覆盖旧包。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
+旧 4.0.3 与 4.0.4 测试包保留，新的 4.1.0 包不覆盖旧包。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
 
 不运行 Mac mini 浏览器验收、GitHub Actions、PR 或 Release。
 
 ## 许可证
 
-`gpt/` 使用 AGPL-3.0-only。额度核心移植自 Vibe Bar；AI-MarkDone 的少量官方 Navigator DOM 识别结构按 MIT 合规复用。GPT Navigator Helper 仅作为无许可证的行为参考，没有复制源码。详见 `NOTICE.md` 与 `THIRD_PARTY_NOTICES.md`。
+`gpt/` 使用 AGPL-3.0-only。额度核心移植自 Vibe Bar；热力图窄范围移植并适配 Cal-Heatmap 与 `@uiw/react-heat-map` 的 MIT 源码，但未引入其 React、D3、Popper 或 dayjs 运行时。AI-MarkDone 的少量官方 Navigator DOM 识别结构按 MIT 合规复用。详见 `NOTICE.md` 与 `THIRD_PARTY_NOTICES.md`。

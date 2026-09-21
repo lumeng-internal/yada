@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.1.0 - 2026-09-22
+
+- 新增 Pro 使用量滚动热力图：GPT-6 Pro 为 7×24，Sol Pro 与组合桶为 1×24；第一格固定从下一个本地完整小时开始，Tooltip 显示对应历史使用小时和精确次数。
+- 新增 `quota/get-heatmap` 按需消息。Service Worker 只读取现有 Ledger 并复用 Vibe Bar allowance；content 最多接收 216 个聚合 cell，不接收 raw events，不新增 ChatGPT 请求、历史扫描或长期 heatmap 数据。
+- 热力图仅在三环详情打开时创建 SVG、一个共享 Tooltip、事件委托和单个整点 `setTimeout`；关闭即清理。无 legend、动画、RAF、interval、MutationObserver 或常驻后台过程。
+- SVG rect grid、动态 panel colors 与 hover 合规移植自 `@uiw/react-heat-map` v2.3.4；rolling hour/day 和 Tooltip lifecycle 合规移植自 Cal-Heatmap 4.2.4。未引入 React、ReactDOM、D3、Popper、dayjs 或第三方图表运行时。
+- 4.0.4 Navigator、ConversationSync、QuotaTracker、Web Locks、Prompt drag、Copy All 与 Toolbar 架构保持不变。
+- 测试包 `ChatGPT-Yada-v4.1.0-official-only-UNVERIFIED.zip`；真实 MacBook 产品验收待执行。
+
 ## v4.0.4 - 2026-09-22
 
 - Navigator 收口为单一完整对话真相：`ConversationSync.activeTurns.length` 是唯一 `expectedPrompts`；删除 Navigator 自建的 message/branch/cursor/boundary/explicit-root `HistoryChain` 与 `metadata.ts`。

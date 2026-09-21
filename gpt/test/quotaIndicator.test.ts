@@ -305,11 +305,11 @@ describe("inline toolbar quota rings", () => {
     expect(popoverOf()).toBeNull();
     await vi.advanceTimersByTimeAsync(QUOTA_INDICATOR_DEBOUNCE_MS + 20);
     await flush();
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls.filter((call) => (call[0] as { type?: string }).type === "quota/get-state")).toHaveLength(1);
     await chrome.storage.local.set({ [STATE_KEY]: { version: 2, plan: "pro", historyComplete: true, unclassifiedTurns: 0 } });
     await vi.advanceTimersByTimeAsync(QUOTA_INDICATOR_DEBOUNCE_MS + 20);
     await flush();
-    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls.filter((call) => (call[0] as { type?: string }).type === "quota/get-state")).toHaveLength(1);
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
   });

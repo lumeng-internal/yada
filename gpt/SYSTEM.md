@@ -1,6 +1,6 @@
 # ChatGPT Yada 系统
 
-版本：**4.0.4**。
+版本：**4.1.0**。
 
 ```text
 ChatGPT Host
@@ -19,6 +19,7 @@ ChatGPT Host
   ├─ Vibe Bar quota reader
   │    └─ last-good baseline + staged reconciliation cache
   │    └─ Web Locks 跨标签单飞 7 天校准
+  │    └─ on-demand rolling heatmap aggregation
   └─ Yada Toolbar
        ├─ Pro quota rings
        ├─ 复制全部
@@ -64,6 +65,8 @@ Yada 明确分成三个阶段。新工作必须进入其中一档，禁止把 BO
 
 只有用户点击提示词或额度三环，才创建对应的重 UI 和 document/window listener。关闭后 listener 必须卸掉；DOM 可以隐藏保留。
 
+额度热力图严格属于 ON-DEMAND：页面加载不读取热力图数据、不创建 SVG/Tooltip/小时 timer。三环详情打开后，background 从现有 Ledger 按 allowance 聚合固定 cells；关闭后移除 renderer 与 listener。跨整点只使用一个指向下一整点后 50ms 的 `setTimeout`，不使用 interval、RAF、MutationObserver、历史扫描或新网络请求。
+
 ## 官方导航
 
 `native-navigator-main.js` 在 `document_start`、MAIN world 运行。它只包装 `window.fetch`，识别 chatgpt.com 同源、GET、地址栏当前 conversation 的已知 history endpoint。可见页面上的合法 initial plural request 可以提前把 `num_turns` 至少提升到 100；只有 isolated PrepareSession 活跃时，同一 conversation 的 initial 与 older pagination 才会一起扩大。message 深链和所有不确定请求原样放行。Prepare 使用 10 秒 lease 与 4 秒 heartbeat；content script 消失、route/pagehide/generation 变化或 `prepare=false` 后立即停止扩大。
@@ -105,6 +108,8 @@ Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts�
 - 账号不明的临时网络错误不会被当成账号切换；真正 identity 变化重置 baseline。账本缺失、结构损坏或不兼容版本不沿用完整状态。
 
 额度状态仍为 `loading | backfill | ready | partial | error`，仅 first baseline 未建立时使用补齐/错误显示。健康详情只显示三组预计剩余和上次完整同步；异常状态仍说明首次同步、失败或不完整原因。三环 Canvas 常驻；详情 Portal 第一次点击才创建。
+
+`quota/get-heatmap` 只在健康、已知套餐、个人 Pro 可计费的详情打开状态请求。Service Worker 读取现有 Ledger，复用 `allowances(plan)` 的模型、周期与 Pro / ProLite 桶，在内存中按下一本地整点聚合；content 只接收 release hour、对应 usage hour、count 与 bucket 元数据，最多 216 cells，不接收 raw events。SVG renderer、共享 Tooltip 和整点 timer 在详情关闭时销毁。
 
 ## 提示词顺序
 

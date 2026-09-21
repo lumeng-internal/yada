@@ -466,6 +466,58 @@
     return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
   }
 
+  // src/quota/heatmap.ts
+  var HOUR_MS = 60 * 60 * 1e3;
+  function nextFullLocalHour(now) {
+    const next = new Date(now instanceof Date ? now.getTime() : now);
+    next.setMinutes(0, 0, 0);
+    next.setHours(next.getHours() + 1);
+    return next.getTime();
+  }
+  function buildQuotaHeatmap(input) {
+    const generatedAt = input.now ?? Date.now();
+    const anchor = nextFullLocalHour(generatedAt);
+    const countable = input.events.filter(
+      (event) => event.accountKey === input.accountKey && (event.classification === "personal" || event.classification === "temporary")
+    );
+    const buckets = allowances(input.plan).flatMap((allowance) => {
+      const windowHours = allowance.windowSeconds * 1e3 / HOUR_MS;
+      if (windowHours !== 24 && windowHours !== 168) return [];
+      const rows = windowHours === 168 ? 7 : 1;
+      const windowMs = windowHours * HOUR_MS;
+      const cells = Array.from({ length: windowHours }, (_, slot) => {
+        const releaseHourStart = anchor + slot * HOUR_MS;
+        return {
+          releaseHourStart,
+          usageHourStart: releaseHourStart - windowMs,
+          count: 0
+        };
+      });
+      for (const event of countable) {
+        if (!allowance.models.has(event.model)) continue;
+        const releaseAt = event.createdAt + windowMs;
+        const slot = Math.floor((releaseAt - anchor) / HOUR_MS);
+        if (slot < 0 || slot >= windowHours) continue;
+        cells[slot].count += 1;
+      }
+      return [{
+        id: allowance.id,
+        windowHours,
+        rows,
+        columns: 24,
+        firstReleaseHour: anchor,
+        cells,
+        maxCount: cells.reduce((maximum, cell) => Math.max(maximum, cell.count), 0)
+      }];
+    });
+    return {
+      generatedAt,
+      historyComplete: input.historyComplete,
+      accountKey: input.accountKey,
+      buckets
+    };
+  }
+
   // src/shared/timeout.ts
   function withTimeout(promise, timeoutMs, message = "timeout") {
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
@@ -513,6 +565,7 @@
   async function handle(message) {
     if (message.type === "quota/ingest") return ingest(message);
     if (message.type === "quota/get-state") return getState(message);
+    if (message.type === "quota/get-heatmap") return getHeatmap(message);
     if (message.type === "quota/refresh-current") {
       const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
       const tabId = tabs[0]?.id;
@@ -526,6 +579,20 @@
       return getState({ type: "quota/get-state" });
     }
     return { error: "unknown-message" };
+  }
+  async function getHeatmap(message) {
+    const restored = await ledger.restore();
+    const accountKey = message.accountKey ?? restored.state.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "chat-unknown";
+    const sameAccount = restored.state.accountKey === accountKey;
+    const plan = sameAccount ? restored.state.plan ?? message.plan ?? null : null;
+    return {
+      heatmap: buildQuotaHeatmap({
+        accountKey,
+        plan,
+        events: restored.ledger.events,
+        historyComplete: sameAccount && restored.state.historyComplete
+      })
+    };
   }
   async function ingest(message) {
     const snapshot = await ledger.ingest(message.events, {

@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 4.0.3
+# Third-party notices — ChatGPT Yada 4.1.0
 
 ## Vibe Bar
 
@@ -7,6 +7,30 @@
 - License: AGPL-3.0
 
 The ChatGPT Chat quota core is ported from Swift into `src/quota/vibebar/`. The file mapping and modifications are documented in `NOTICE.md`. The macOS shell and menu-bar UI are not copied.
+
+## @uiw/react-heat-map
+
+- Repository: https://github.com/uiwjs/react-heat-map
+- Stable tag: `v2.3.4`
+- Commit: `8eb45dff2ec5ce0d317a9094e42afbdb44c10f92`
+- License: MIT
+- Copyright (c) 2021 uiw
+
+Adapted/ported files: `core/src/SVG.tsx`, `core/src/Day.tsx`, `core/src/Rect.tsx`, `core/src/utils.ts`, and `core/src/style/index.less` into `src/ui/quotaHeatmap.ts`. The port covers direct SVG groups/rects, cell/gap geometry, dynamic-maximum panel thresholds, panel color selection, rect metadata, and hover stroke. Yada fits the grid to its 312px popover, uses CSS theme variables, omits the legend, and implements no React elements.
+
+Not bundled: `@uiw/react-heat-map`, React, ReactDOM, `@uiw/react-tooltip`, calendar navigation, legend components, or any uiw runtime dependency.
+
+## Cal-Heatmap
+
+- Repository: https://github.com/wa0x6e/cal-heatmap
+- Latest stable tag: `4.2.4`
+- Commit: `815d7440acb40e91f0907f82267d5b8b4dd8ac76`
+- License: MIT
+- Copyright (c) 2012 Tyler Kellen, contributors
+
+Adapted/ported files: `src/templates/hour.ts`, `src/templates/day.ts`, `src/subDomain/SubDomainPainter.ts`, `src/plugins/Tooltip.ts`, and `src/cal-heatmap.scss` into `src/quota/heatmap.ts` and `src/ui/quotaHeatmap.ts`. The port covers continuous hour/day cell semantics, SVG row/rect positioning, delegated immediate tooltip show/hide, one tooltip root, cleanup, and light/dark presentation. Popper placement is replaced by a small viewport clamp; natural calendar domains are replaced by Yada's next-full-hour rolling rows.
+
+Not bundled: Cal-Heatmap npm runtime, D3, Popper, dayjs, Observable Plot, navigation, animation, plugin system, locale framework, date paging, or legends.
 
 ## AI-MarkDone
 
@@ -59,7 +83,7 @@ Reference only for MV3 service-worker icon updates and popup/background synchron
 
 ## Historical LunaTOC note
 
-LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.0.3.
+LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.1.0.
 
 ## SortableJS
 
@@ -78,6 +102,8 @@ Copyright (c) 2026 zhaoliangbin42
 Copyright (c) 2015 Max Konovalov
 Copyright (c) JonasDoesThings
 Copyright (c) cupcakedev
+Copyright (c) 2021 uiw
+Copyright (c) 2012 Tyler Kellen, contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

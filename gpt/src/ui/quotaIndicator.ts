@@ -14,8 +14,9 @@ import {
   snapshotBucketViews,
   workspaceStatusNote
 } from "../quota/presentation";
-import { LEDGER_KEY, STATE_KEY, type QuotaSnapshot } from "../quota/types";
+import { LEDGER_KEY, STATE_KEY, type QuotaHeatmapResponse, type QuotaSnapshot } from "../quota/types";
 import { sendRuntimeMessage } from "../shared/messages";
+import { QUOTA_HEATMAP_CSS, QuotaHeatmapRenderer } from "./quotaHeatmap";
 import { detectYadaTheme, observeYadaTheme, type YadaTheme } from "./theme";
 
 export const QUOTA_INDICATOR_DEBOUNCE_MS = 80;
@@ -27,6 +28,7 @@ const VIEWPORT_GUTTER = 8;
 
 export type QuotaStateResponse = {
   snapshot?: QuotaSnapshot;
+  heatmap?: QuotaHeatmapResponse;
   error?: string;
 };
 
@@ -100,6 +102,7 @@ const POPOVER_CSS = `
   }
   [data-quota-popover] [data-quota-warn],
   [data-quota-popover] [data-quota-error] { color: var(--yada-text); }
+  ${QUOTA_HEATMAP_CSS}
 `;
 
 export class QuotaIndicator {
@@ -117,7 +120,11 @@ export class QuotaIndicator {
   private rings: RingValues = UNKNOWN_QUOTA_RINGS;
   private themeValue: YadaTheme;
   private quotaDirty = false;
+  private heatmapVisibilityDirty = false;
   private popoverListeners = false;
+  private heatmapRenderer: QuotaHeatmapRenderer | null = null;
+  private heatmapGeneration = 0;
+  private heatmapHourTimer = 0;
 
   constructor(
     private readonly button: HTMLButtonElement,
@@ -143,6 +150,7 @@ export class QuotaIndicator {
   }
 
   close = (): void => {
+    this.stopHeatmapLifecycle();
     if (this.popover) this.popover.hidden = true;
     this.button.setAttribute("aria-expanded", "false");
     this.detachPopoverListeners();
@@ -203,8 +211,19 @@ export class QuotaIndicator {
   };
 
   private readonly onVisibility = (): void => {
-    if (this.disposed || document.visibilityState !== "visible" || !this.quotaDirty) return;
+    if (this.disposed) return;
+    if (document.visibilityState !== "visible") {
+      if (this.popover?.hidden === false) {
+        this.heatmapVisibilityDirty = true;
+        this.heatmapGeneration += 1;
+        window.clearTimeout(this.heatmapHourTimer);
+        this.heatmapHourTimer = 0;
+      }
+      return;
+    }
+    if (!this.quotaDirty && !this.heatmapVisibilityDirty) return;
     this.quotaDirty = false;
+    this.heatmapVisibilityDirty = false;
     void this.loadState();
   };
 
@@ -247,8 +266,10 @@ export class QuotaIndicator {
           : "Pro 额度：读取中"
     );
     if (this.popover && !this.popover.hidden) {
+      this.disposeHeatmapRenderer();
       this.renderPopover();
       this.positionPopover();
+      this.refreshHeatmap();
     }
   }
 
@@ -277,6 +298,7 @@ export class QuotaIndicator {
     this.button.setAttribute("aria-expanded", "true");
     this.attachPopoverListeners();
     this.positionPopover();
+    this.refreshHeatmap();
   }
 
   private ensurePopover(): void {
@@ -358,6 +380,7 @@ export class QuotaIndicator {
           const remaining = document.createElement("p");
           remaining.dataset.quotaRemaining = "true";
           remaining.textContent = metricRemainingLabel(bucket.metric);
+          if (bucket.metric) section.dataset.quotaBucketId = bucket.metric.id;
           section.append(row, remaining);
           this.popover.append(section);
         }
@@ -367,6 +390,83 @@ export class QuotaIndicator {
     this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
     const workspace = workspaceStatusNote(this.snapshot);
     if (workspace) this.popover.append(note(workspace, "quota-warn"));
+  }
+
+  private refreshHeatmap(): void {
+    window.clearTimeout(this.heatmapHourTimer);
+    this.heatmapHourTimer = 0;
+    if (!this.heatmapEligible()) {
+      this.disposeHeatmapRenderer();
+      return;
+    }
+    void this.requestHeatmap();
+    this.scheduleHeatmapHourRefresh();
+  }
+
+  private async requestHeatmap(): Promise<void> {
+    if (!this.popover || this.popover.hidden || !this.heatmapEligible()) return;
+    const snapshot = this.snapshot!;
+    const generation = ++this.heatmapGeneration;
+    try {
+      const response = await this.send({
+        type: "quota/get-heatmap",
+        accountKey: snapshot.accountKey,
+        plan: snapshot.plan
+      });
+      if (this.disposed || generation !== this.heatmapGeneration || this.popover.hidden) return;
+      const heatmap = response.heatmap;
+      if (response.error || !heatmap || !heatmap.historyComplete || heatmap.accountKey !== snapshot.accountKey) return;
+      this.disposeHeatmapRenderer();
+      this.heatmapRenderer = new QuotaHeatmapRenderer(this.popover);
+      for (const bucket of heatmap.buckets) {
+        const container = [...this.popover.querySelectorAll<HTMLElement>("[data-quota-bucket-id]")]
+          .find((node) => node.dataset.quotaBucketId === bucket.id);
+        if (container) this.heatmapRenderer.render(bucket, container);
+      }
+      this.positionPopover();
+    } catch {
+      // The existing quota numbers remain useful if on-demand aggregation fails.
+    }
+  }
+
+  private heatmapEligible(): boolean {
+    return this.popover?.hidden === false
+      && document.visibilityState !== "hidden"
+      && this.snapshot?.historyComplete === true
+      && this.snapshot.syncStatus === "ready"
+      && this.snapshot.plan != null
+      && this.snapshot.personalProEligible === true;
+  }
+
+  private scheduleHeatmapHourRefresh(): void {
+    window.clearTimeout(this.heatmapHourTimer);
+    if (!this.heatmapEligible()) {
+      this.heatmapHourTimer = 0;
+      return;
+    }
+    const now = new Date();
+    const next = new Date(now.getTime());
+    next.setMinutes(0, 0, 0);
+    next.setHours(next.getHours() + 1);
+    this.heatmapHourTimer = window.setTimeout(() => {
+      this.heatmapHourTimer = 0;
+      if (!this.heatmapEligible()) return;
+      void this.requestHeatmap();
+      this.scheduleHeatmapHourRefresh();
+    }, Math.max(1, next.getTime() - now.getTime() + 50));
+  }
+
+  private stopHeatmapLifecycle(): void {
+    this.heatmapGeneration += 1;
+    window.clearTimeout(this.heatmapHourTimer);
+    this.heatmapHourTimer = 0;
+    this.heatmapVisibilityDirty = false;
+    this.disposeHeatmapRenderer();
+  }
+
+  private disposeHeatmapRenderer(): void {
+    this.heatmapRenderer?.dispose();
+    this.heatmapRenderer = null;
   }
 
   private positionPopover(): void {

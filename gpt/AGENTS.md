@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.0.4**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.1.0**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
@@ -18,6 +18,7 @@ Runtime is subtractive: BOOT work may use CPU/network; STEADY must sleep; heavy 
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
 - `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; Web Locks so only one tab runs a full 7-day scan; a started scan is not aborted on hidden.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
+- `quota/heatmap.ts` + `ui/quotaHeatmap.ts`: on-demand, ledger-only rolling-hour aggregation and direct SVG rendering. No heatmap work runs until quota details open; close removes the SVG, shared tooltip, delegated listeners, and hour-boundary timeout.
 
 ## Runtime rules for new work
 
@@ -72,6 +73,8 @@ Do not run candidate/Playwright/Mac mini ChatGPT acceptance, create test convers
 - AI-MarkDone `d6cc562931607f378c48023420f814de1f7c9d60`, MIT: minimal official navigator selectors/structure and stable message identity are adapted.
 - GPT Conversation Toolkit `ca628eeaed87323c195aa7b6d2750d2804e6ac77`, MIT: existing conversation API and prompt library patterns remain; no Fiber virtualizer code.
 - GPT Navigator Helper `2ac38de536dacb0ed1ad25c31396fd62a1c49022`, no project license: behavioral reference only; no source copied.
+- Cal-Heatmap `4.2.4` / `815d7440acb40e91f0907f82267d5b8b4dd8ac76`, MIT: rolling hour/day cell semantics and delegated tooltip lifecycle are narrowly adapted; D3, Popper and dayjs are not bundled.
+- `@uiw/react-heat-map` `v2.3.4` / `8eb45dff2ec5ce0d317a9094e42afbdb44c10f92`, MIT: SVG rect grid, spacing, dynamic panel thresholds and hover contract are ported without React/ReactDOM.
 
 `gpt/` remains AGPL-3.0-only. Keep `NOTICE.md` and `THIRD_PARTY_NOTICES.md` accurate when upstream-derived code changes.
 

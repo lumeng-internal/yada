@@ -23,6 +23,44 @@ ChatGPT Yada GPT 扩展（`gpt/`）使用 GNU Affero General Public License v3.0
 
 浏览器适配为 history list 单独使用 45 秒传输超时，保留 reader 的 25 秒默认调度预算和其他 API 的 15 秒默认超时。Reader 显式区分临时传输失败与永久失败，有真实数据进展时最多 20 数据 pass，临时传输失败另行最多 2 次重试（1.5 秒 / 5 秒）；完整成功才原子发布 cache、账本与历史未分类数。
 
+## @uiw/react-heat-map
+
+`src/ui/quotaHeatmap.ts` 直接移植并适配了 [uiwjs/react-heat-map](https://github.com/uiwjs/react-heat-map) 的 MIT SVG heatmap 源码。
+
+- 固定 Tag：`v2.3.4`
+- 固定 Commit：`8eb45dff2ec5ce0d317a9094e42afbdb44c10f92`
+- 原许可证：MIT
+- 原版权：Copyright (c) 2021 uiw
+
+| 上游文件 | 本项目文件 | 复制或改编范围 |
+| --- | --- | --- |
+| `core/src/SVG.tsx` | `src/ui/quotaHeatmap.ts` | SVG 容器、cell/space 尺寸合同、panel colors 与 dynamic maximum 入口；11px cell 为适配 312px 浮层缩为 8px，保留 2px gap |
+| `core/src/Day.tsx` | `src/ui/quotaHeatmap.ts` | `<g>` + `<rect>` grid、row/column/index 元数据和 `x/y = index × (cell + gap)` 结构 |
+| `core/src/Rect.tsx` | `src/ui/quotaHeatmap.ts` | rect render/hover 交互合同；通过原 `rectProps`/`rx` 能力固定为 2px 圆角 |
+| `core/src/utils.ts` | `src/ui/quotaHeatmap.ts` | `ceil(maxCount / (colors.length - 1))` 动态 panel threshold 与有序颜色选择；Yada 对 `count=0` 明确保留中性灰 |
+| `core/src/style/index.less` | `src/ui/quotaHeatmap.ts` | hover 时 1px stroke；删除 active fill 与所有 transition |
+
+React component、React DOM、Legend、month/week calendar navigation 与 `@uiw/react-tooltip` 没有复制或打包。Yada 使用原生 SVG DOM、稀疏滚动小时轴、CSS variables 和一个共享 Tooltip。
+
+## Cal-Heatmap
+
+`src/ui/quotaHeatmap.ts` 直接移植并适配了 [wa0x6e/cal-heatmap](https://github.com/wa0x6e/cal-heatmap) 的 MIT 时间 cell 与 Tooltip 源码。
+
+- 固定稳定 Tag：`4.2.4`
+- 固定 Commit：`815d7440acb40e91f0907f82267d5b8b4dd8ac76`
+- 原许可证：MIT
+- 原版权：Copyright (c) 2012 Tyler Kellen, contributors
+
+| 上游文件 | 本项目文件 | 复制或改编范围 |
+| --- | --- | --- |
+| `src/templates/hour.ts` | `src/quota/heatmap.ts`、`src/ui/quotaHeatmap.ts` | 连续小时 cell、小时起点、row/column 时间语义；适配为从下一本地整点开始的固定 24/168 小时 row-major 布局 |
+| `src/templates/day.ts` | `src/ui/quotaHeatmap.ts` | 连续日期 row label 语义；适配为每 24 小时一行的 `MM/DD` 标签，不使用自然周 |
+| `src/subDomain/SubDomainPainter.ts` | `src/ui/quotaHeatmap.ts` | SVG group/rect、gutter、radius、mouseover/mouseout 交互；适配为原生 DOM 事件委托 |
+| `src/plugins/Tooltip.ts` | `src/ui/quotaHeatmap.ts` | 单一 Tooltip root、mouseover 立即 show、mouseout 立即 hide、销毁时 remove；Popper 定位改为本地 viewport clamp |
+| `src/cal-heatmap.scss` | `src/ui/quotaHeatmap.ts` | light/dark 中性 cell、hover stroke、Tooltip padding/background/radius/shadow；颜色通过 Yada CSS variables 适配 |
+
+未引入 Cal-Heatmap npm runtime、D3、Popper、dayjs、动画、插件系统、导航、日期翻页、locale framework 或 legend。聚合算法只读取 Yada 现有 Ledger，未复制 Cal-Heatmap 的数据获取器。
+
 ## AI-MarkDone
 
 本目录直接适配了 [zhaoliangbin42/AI-MarkDone](https://github.com/zhaoliangbin42/AI-MarkDone) 的极少量 MIT 结构。

@@ -1,8 +1,9 @@
 import { QuotaLedger } from "../quota/ledger";
 import { applyQuotaIcon, nextAlarmAt } from "../quota/iconState";
 import { calculateQuotaSnapshot } from "../quota/calculator";
-import { STATE_KEY, type QuotaSnapshot } from "../quota/types";
-import type { QuotaGetState, QuotaIngest, YadaRequest } from "../shared/messages";
+import { buildQuotaHeatmap } from "../quota/heatmap";
+import { STATE_KEY, type QuotaHeatmapResponse, type QuotaSnapshot } from "../quota/types";
+import type { QuotaGetHeatmap, QuotaGetState, QuotaIngest, YadaRequest } from "../shared/messages";
 import { REFRESH_TIMEOUT_MS } from "../shared/messages";
 import { withTimeout } from "../shared/timeout";
 
@@ -26,6 +27,7 @@ chrome.runtime.onMessage.addListener((message: YadaRequest, _sender, sendRespons
 async function handle(message: YadaRequest): Promise<unknown> {
   if (message.type === "quota/ingest") return ingest(message);
   if (message.type === "quota/get-state") return getState(message);
+  if (message.type === "quota/get-heatmap") return getHeatmap(message);
   if (message.type === "quota/refresh-current") {
     const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const tabId = tabs[0]?.id;
@@ -39,6 +41,21 @@ async function handle(message: YadaRequest): Promise<unknown> {
     return getState({ type: "quota/get-state" });
   }
   return { error: "unknown-message" };
+}
+
+async function getHeatmap(message: QuotaGetHeatmap): Promise<{ heatmap: QuotaHeatmapResponse }> {
+  const restored = await ledger.restore();
+  const accountKey = message.accountKey ?? restored.state.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "chat-unknown";
+  const sameAccount = restored.state.accountKey === accountKey;
+  const plan = sameAccount ? restored.state.plan ?? message.plan ?? null : null;
+  return {
+    heatmap: buildQuotaHeatmap({
+      accountKey,
+      plan,
+      events: restored.ledger.events,
+      historyComplete: sameAccount && restored.state.historyComplete
+    })
+  };
 }
 
 async function ingest(message: QuotaIngest): Promise<{ snapshot: QuotaSnapshot | null }> {

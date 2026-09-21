@@ -58,6 +58,29 @@ export type QuotaLedgerState = {
   events: QuotaUsageEvent[];
 };
 
+export type QuotaHeatmapCell = {
+  releaseHourStart: number;
+  usageHourStart: number;
+  count: number;
+};
+
+export type QuotaHeatmapBucket = {
+  id: string;
+  windowHours: 24 | 168;
+  rows: 1 | 7;
+  columns: 24;
+  firstReleaseHour: number;
+  cells: QuotaHeatmapCell[];
+  maxCount: number;
+};
+
+export type QuotaHeatmapResponse = {
+  generatedAt: number;
+  historyComplete: boolean;
+  accountKey: string;
+  buckets: QuotaHeatmapBucket[];
+};
+
 export type QuotaPersistedState = {
   version: 2;
   accountKey?: string;
