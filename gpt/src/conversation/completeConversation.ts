@@ -112,7 +112,7 @@ export async function fetchCompleteConversation(
   signal?: AbortSignal,
   options: CompleteConversationOptions = {}
 ): Promise<ApiConversation> {
-  const requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+  const requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   const rateLimitWaitMs = options.rateLimitWaitMs ?? 1_000;
   const request = async (url: string): Promise<ConversationResponse> => {
     const once = async (): Promise<Response> => {

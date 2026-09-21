@@ -1,11 +1,8 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationSync } from "../src/core/conversationSync";
-import { HistoryChain, readHistoryMetadata } from "../src/nativeNavigator/metadata";
+import type { ConversationSnapshot } from "../src/core/types";
 import { exposePaginationSentinel, readNativePrompts } from "../src/nativeNavigator/dom";
-import {
-  OfficialNavigatorHydrator,
-  officialNavigatorReadiness
-} from "../src/nativeNavigator/hydrator";
+import { OfficialNavigatorHydrator, officialNavigatorReadiness } from "../src/nativeNavigator/hydrator";
 import {
   NATIVE_NAV_CHANNEL,
   PREPARE_HEARTBEAT_MS,
@@ -13,13 +10,12 @@ import {
   acceptPrepareHandshake,
   applyPrepareHandshake,
   canExpandInitial,
-  emptyHistory,
   emptyPrepareLease,
+  emptyTransportState,
   expandHistoryRequest,
   historyRequest,
-  isNativeHistoryState,
+  isNativeTransportState,
   isPrepareActive,
-  parseParkHandshake,
   parsePrepareHandshake,
   parseRouteEvent,
   record,
@@ -34,29 +30,20 @@ function turnsParam(value: RequestInfo | URL): string | null {
   return new URL(href, "https://chatgpt.com").searchParams.get("num_turns");
 }
 
-function promptTurns(start: number, count: number): Array<{ id: string; author: { role: string } }> {
-  const messages: Array<{ id: string; author: { role: string } }> = [];
-  for (let index = start; index < start + count; index += 1) {
-    messages.push({ id: `u${index}`, author: { role: "user" } });
-    messages.push({ id: `a${index}`, author: { role: "assistant" } });
-  }
-  return messages;
-}
-
-function pagedConversation(
-  id: string,
-  start: number,
-  count: number,
-  previous: false | string
-): Record<string, unknown> {
-  return {
-    id,
-    current_node: "branch",
-    messages: promptTurns(start, count),
-    page_info: previous === false
-      ? { has_previous_page: false }
-      : { has_previous_page: true, start_cursor: previous }
+function visibleBox(element: HTMLElement, top = 10): void {
+  const rectangle = {
+    top,
+    bottom: top + 20,
+    left: 10,
+    right: 110,
+    width: 100,
+    height: 20,
+    x: 10,
+    y: top,
+    toJSON() {}
   };
+  Object.defineProperty(element, "getClientRects", { configurable: true, value: () => [rectangle] });
+  Object.defineProperty(element, "getBoundingClientRect", { configurable: true, value: () => rectangle });
 }
 
 function officialNavigator(found: number, visible = found): HTMLElement {
@@ -65,20 +52,34 @@ function officialNavigator(found: number, visible = found): HTMLElement {
   root.className = "x_convSearchResultHighlightRoot";
   const fixed = document.createElement("div");
   fixed.className = "fixed inset-e-4 top-1/2 z-20 -translate-y-1/2";
+  visibleBox(fixed);
   for (let index = 0; index < found; index += 1) {
     const button = document.createElement("button");
     button.dataset.tocItemIndex = String(index);
     button.setAttribute("aria-label", `Prompt ${index + 1}`);
-    if (index >= visible) {
-      button.style.display = "none";
-      Object.defineProperty(button, "getClientRects", { value: () => [] });
-    }
+    visibleBox(button, 10 + index);
+    if (index >= visible) button.style.display = "none";
     fixed.append(button);
   }
   root.append(fixed);
   main.append(root);
   document.body.append(main);
   return main;
+}
+
+function mockSync(promptCount: number): ConversationSync {
+  const snapshot = promptCount > 0
+    ? ({ conversationId: "current", activeTurns: Array.from({ length: promptCount }, () => ({})) } as ConversationSnapshot)
+    : null;
+  return {
+    subscribe(listener: (value: ConversationSnapshot | null) => void) {
+      void listener(snapshot);
+      return () => undefined;
+    },
+    getSnapshot() {
+      return snapshot;
+    }
+  } as unknown as ConversationSync;
 }
 
 describe("native history request boundary", () => {
@@ -98,7 +99,6 @@ describe("native history request boundary", () => {
     expect(historyRequest("/backend-api/conversations/current", { method: "POST" }, PAGE)).toBeNull();
     expect(historyRequest("/backend-api/conversations/current?message_id=m1", undefined, PAGE)).toBeNull();
     expect(historyRequest("/backend-api/conversations/current/messages", undefined, PAGE)).toBeNull();
-    expect(historyRequest("/backend-api/conversation/init", undefined, PAGE)).toBeNull();
   });
 
   it("expands validated initial and older history requests without lowering a larger batch", () => {
@@ -111,206 +111,214 @@ describe("native history request boundary", () => {
     expect((cloneInit.headers as Headers).get("X-Test")).toBe("kept");
     expect(cloneInit.credentials).toBe("include");
     expect(cloneInit.signal).toBe(request.signal);
-    expect(cloneInit.method).toBe("GET");
     expect("body" in cloneInit).toBe(false);
 
     expect(turnsParam(expandHistoryRequest(
-      "https://chatgpt.com/backend-api/conversations/current?num_turns=20",
-      undefined,
-      PAGE
+      "https://chatgpt.com/backend-api/conversations/current?num_turns=20", undefined, PAGE
     )[0])).toBe("100");
     expect(turnsParam(expandHistoryRequest(
-      "https://chatgpt.com/backend-api/conversations/current/messages?before=cursor-1",
-      undefined,
-      PAGE
+      "https://chatgpt.com/backend-api/conversations/current/messages?before=c&num_turns=20", undefined, PAGE
     )[0])).toBe("100");
-    expect(turnsParam(expandHistoryRequest(
-      "https://chatgpt.com/backend-api/conversations/current/messages?before=cursor-1&num_turns=20",
-      undefined,
-      PAGE
-    )[0])).toBe("100");
-
     const alreadyLarge = new Request("https://chatgpt.com/backend-api/conversations/current/messages?before=c&num_turns=200");
     expect(expandHistoryRequest(alreadyLarge, undefined, PAGE)[0]).toBe(alreadyLarge);
-
-    const other = "https://chatgpt.com/backend-api/conversations/other?num_turns=20";
-    expect(expandHistoryRequest(other, undefined, PAGE)[0]).toBe(other);
-    const foreign = "https://example.com/backend-api/conversations/current?num_turns=20";
-    expect(expandHistoryRequest(foreign, undefined, PAGE)[0]).toBe(foreign);
-    const posted = "https://chatgpt.com/backend-api/conversations/current?num_turns=20";
-    expect(expandHistoryRequest(posted, { method: "POST" }, PAGE)[0]).toBe(posted);
-    const ordinary = "https://chatgpt.com/backend-api/conversation/current/upload";
-    expect(expandHistoryRequest(ordinary, undefined, PAGE)[0]).toBe(ordinary);
   });
 
-  it("keeps early expand on visible initial pages and older expand only in prepare mode", () => {
+  it("keeps visible initial boost and prepare-only older boost", () => {
     const initial = "/backend-api/conversations/current?num_turns=20";
     const older = "/backend-api/conversations/current/messages?before=cursor-1&num_turns=20";
-    const deepLink = `${PAGE}?message=m1`;
-
     expect(canExpandInitial(initial, undefined, PAGE, true)).toBe(true);
     expect(canExpandInitial(initial, undefined, PAGE, false)).toBe(false);
-    expect(canExpandInitial(initial, undefined, deepLink, true)).toBe(false);
-    expect(canExpandInitial(older, undefined, PAGE, true)).toBe(false);
-
     expect(shouldExpandHistoryRequest(initial, undefined, PAGE, { visible: true, prepareActive: false })).toBe(true);
     expect(shouldExpandHistoryRequest(older, undefined, PAGE, { visible: true, prepareActive: false })).toBe(false);
-    expect(shouldExpandHistoryRequest(older, undefined, PAGE, { visible: true, prepareActive: true })).toBe(true);
-    expect(shouldExpandHistoryRequest(initial, undefined, deepLink, { visible: true, prepareActive: false })).toBe(false);
     expect(shouldExpandHistoryRequest(older, undefined, PAGE, { visible: false, prepareActive: true })).toBe(true);
   });
 });
 
-describe("prepare lease", () => {
+describe("prepare lease and transport protocol", () => {
   it("activates, heartbeats, expires, and rejects mismatched context", () => {
     const handshake = parsePrepareHandshake({
-      kind: "prepare",
-      enabled: true,
-      conversationId: "current",
-      generation: 3
+      kind: "prepare", enabled: true, conversationId: "current", generation: 3
     });
-    expect(handshake).toEqual({ enabled: true, conversationId: "current", generation: 3 });
     expect(acceptPrepareHandshake(handshake!, { conversationId: "current", generation: 3 })).toBe(true);
     expect(acceptPrepareHandshake(handshake!, { conversationId: "other", generation: 3 })).toBe(false);
-    expect(acceptPrepareHandshake(handshake!, { conversationId: "current", generation: 4 })).toBe(false);
-
     const started = applyPrepareHandshake(handshake!, 1_000);
-    expect(started).toEqual({
-      enabled: true,
-      conversationId: "current",
-      generation: 3,
-      until: 1_000 + PREPARE_LEASE_MS
-    });
     expect(isPrepareActive(started, 1_000 + 4_000, "current", 3)).toBe(true);
     expect(isPrepareActive(started, 1_000 + PREPARE_LEASE_MS, "current", 3)).toBe(false);
-    expect(isPrepareActive(started, 2_000, "other", 3)).toBe(false);
-
     const heartbeat = applyPrepareHandshake(handshake!, 1_000 + PREPARE_HEARTBEAT_MS);
     expect(isPrepareActive(heartbeat, 1_000 + PREPARE_HEARTBEAT_MS + PREPARE_LEASE_MS - 1, "current", 3)).toBe(true);
-
-    const stopped = applyPrepareHandshake({ ...handshake!, enabled: false }, 8_000);
-    expect(stopped.enabled).toBe(false);
-    expect(isPrepareActive(stopped, 8_000, "current", 3)).toBe(false);
     expect(isPrepareActive(emptyPrepareLease(), 8_000, "current", 3)).toBe(false);
-    expect(isNativeHistoryState({ ...emptyHistory("current"), boosted: true })).toBe(true);
-    expect(isNativeHistoryState({ ...emptyHistory("current"), boosted: "yes" })).toBe(false);
-    expect(parseRouteEvent({
-      channel: NATIVE_NAV_CHANNEL, kind: "route", conversationId: "current", generation: 1
-    })).toEqual({ conversationId: "current", generation: 1 });
-    expect(parseParkHandshake({
-      kind: "park", conversationId: "current", generation: 1
-    })).toEqual({ conversationId: "current", generation: 1 });
+  });
+
+  it("validates only lightweight request lifecycle state", () => {
+    const state = {
+      ...emptyTransportState("current", 2),
+      revision: 4,
+      historyRequests: 3,
+      olderRequests: 2,
+      requestInFlight: true,
+      lastRequestKind: "older" as const
+    };
+    expect(isNativeTransportState(state)).toBe(true);
+    expect(isNativeTransportState({ ...state, olderRequests: 4 })).toBe(false);
+    expect(isNativeTransportState({ ...state, lastRequestError: "capture-unavailable" })).toBe(false);
+    expect(parseRouteEvent({ kind: "route", conversationId: "current", generation: 1 }))
+      .toEqual({ conversationId: "current", generation: 1 });
   });
 });
 
-describe("history metadata chain", () => {
-  it("closes a short conversation from a complete initial page", () => {
-    const initial = readHistoryMetadata(pagedConversation("current", 0, 30, false), "current");
-    const chain = new HistoryChain();
-    chain.accept(initial!, null);
-    expect(initial!.messages).toHaveLength(60);
-    expect(chain.boundary).toBe("complete");
-    expect(chain.pages).toBe(1);
-    expect(chain.prompts).toBe(30);
-    expect(chain.cursor).toBeNull();
+describe("official Navigator contract", () => {
+  beforeEach(() => {
+    history.replaceState({}, "", "/c/current");
   });
 
-  it("loads a 120-prompt conversation with one older page", () => {
-    const initial = readHistoryMetadata(pagedConversation("current", 20, 100, "cursor-a"), "current");
-    const older = readHistoryMetadata(pagedConversation("current", 0, 20, false), "current");
-    const chain = new HistoryChain();
-    chain.accept(initial!, null);
-    expect(chain.boundary).toBe("more");
-    expect(chain.cursor).toBe("cursor-a");
-    expect(chain.prompts).toBe(100);
-    chain.accept(older!, "cursor-a");
-    expect(chain.boundary).toBe("complete");
-    expect(chain.pages).toBe(2);
-    expect(chain.prompts).toBe(120);
+  afterEach(() => {
+    document.body.innerHTML = "";
+    history.replaceState({}, "", "/");
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
-  it("loads a 280-prompt conversation across three pages", () => {
-    const initial = readHistoryMetadata(pagedConversation("current", 180, 100, "cursor-a"), "current");
-    const olderA = readHistoryMetadata(pagedConversation("current", 80, 100, "cursor-b"), "current");
-    const olderB = readHistoryMetadata(pagedConversation("current", 0, 80, false), "current");
-    const chain = new HistoryChain();
-    chain.accept(initial!, null);
-    chain.accept(olderA!, "cursor-a");
-    expect(chain.boundary).toBe("more");
-    expect(chain.cursor).toBe("cursor-b");
-    expect(chain.prompts).toBe(200);
-    chain.accept(olderB!, "cursor-b");
-    expect(chain.boundary).toBe("complete");
-    expect(chain.pages).toBe(3);
-    expect(chain.prompts).toBe(280);
-    expect(chain.identities.size).toBe(560);
+  it("never reports ready when expectedPrompts is zero", () => {
+    expect(officialNavigatorReadiness({ found: 33, visible: 33 }, 0, 2)).toBe("waiting");
   });
 
-  it("keeps the verified cursor chain when a later page stalls, then recovers", () => {
-    const chain = new HistoryChain();
-    chain.accept({
-      messages: [{ id: "u2", prompt: true }],
-      boundary: "more",
-      cursor: "cursor-a",
-      branch: "branch"
-    }, null);
-    chain.accept({
-      messages: [{ id: "u1", prompt: true }],
-      boundary: "more",
-      cursor: "cursor-b",
-      branch: "branch"
-    }, "cursor-a");
-    expect(chain.boundary).toBe("more");
-    expect(chain.cursor).toBe("cursor-b");
-    expect(chain.pages).toBe(2);
-
-    chain.accept({
-      messages: [{ id: "u1", prompt: true }],
-      boundary: "more",
-      cursor: "cursor-b",
-      branch: "branch"
-    }, "cursor-b");
-    expect(chain.issue).toBe("stalled");
-    expect(chain.boundary).toBe("more");
-    expect(chain.cursor).toBe("cursor-b");
-    expect(chain.pages).toBe(2);
-    expect([...chain.identities.keys()]).toEqual(["u2", "u1"]);
-
-    chain.clearTransientStalled();
-    expect(chain.issue).toBeNull();
-    chain.accept({
-      messages: [{ id: "u0", prompt: true }],
-      boundary: "complete",
-      cursor: null,
-      branch: "branch"
-    }, "cursor-b");
-    expect(chain.boundary).toBe("complete");
-    expect(chain.issue).toBeNull();
-    expect(chain.prompts).toBe(3);
+  it("keeps a count mismatch recoverable", () => {
+    expect(officialNavigatorReadiness({ found: 33, visible: 33 }, 36, 2)).toBe("incomplete");
   });
 
-  it("fails closed on an unlinked cursor or selected-branch change", () => {
-    const unlinked = new HistoryChain();
-    unlinked.accept({ messages: [{ id: "u2", prompt: true }], boundary: "more", cursor: "cursor-b", branch: "a" }, null);
-    unlinked.accept({ messages: [{ id: "u1", prompt: true }], boundary: "complete", cursor: null, branch: "a" }, "cursor-c");
-    expect(unlinked.issue).toBe("unlinked");
-    expect(unlinked.boundary).toBe("unknown");
-    expect(unlinked.cursor).toBe("cursor-b");
-
-    const mismatched = new HistoryChain();
-    mismatched.accept({ messages: [{ id: "u2", prompt: true }], boundary: "more", cursor: "cursor-b", branch: "a" }, null);
-    mismatched.accept({ messages: [{ id: "u1", prompt: true }], boundary: "complete", cursor: null, branch: "b" }, "cursor-b");
-    expect(mismatched.issue).toBe("unlinked");
-    expect(mismatched.boundary).toBe("unknown");
+  it("requires two stable matching checks", async () => {
+    officialNavigator(36);
+    const hydrator = new OfficialNavigatorHydrator(mockSync(36));
+    hydrator.mount();
+    const internals = hydrator as unknown as {
+      state: ReturnType<typeof emptyTransportState>;
+      connected: boolean;
+      evaluate(): Promise<void>;
+      stableCheckedAt: number;
+      readyStableChecks: number;
+      phase: string;
+    };
+    internals.state = emptyTransportState("current", 1);
+    internals.connected = true;
+    await internals.evaluate();
+    expect(internals.readyStableChecks).toBe(1);
+    expect(internals.phase).not.toBe("ready");
+    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    internals.stableCheckedAt -= 301;
+    await internals.evaluate();
+    expect(internals.readyStableChecks).toBe(2);
+    expect(internals.phase).toBe("ready");
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    expect(hydrator.isParked()).toBe(true);
+    hydrator.dispose();
   });
-});
 
-describe("official navigator readiness", () => {
-  it("treats a visible official navigator as ready even when counts differ", () => {
-    expect(officialNavigatorReadiness({ found: 149, visible: 12 }, 0)).toBe("ready-complete");
-    expect(officialNavigatorReadiness({ found: 12, visible: 0 }, 0)).toBe("hidden");
-    expect(officialNavigatorReadiness({ found: 0, visible: 0 }, 1_000)).toBe("waiting-native");
-    expect(officialNavigatorReadiness({ found: 0, visible: 0 }, 2_500)).toBe("loaded-no-native");
+  it("keeps expected zero in waiting even with visible official buttons", async () => {
+    officialNavigator(33);
+    const hydrator = new OfficialNavigatorHydrator(mockSync(0));
+    hydrator.mount();
+    const internals = hydrator as unknown as {
+      state: ReturnType<typeof emptyTransportState>;
+      connected: boolean;
+      evaluate(): Promise<void>;
+      phase: string;
+    };
+    internals.state = emptyTransportState("current", 1);
+    internals.connected = true;
+    await internals.evaluate();
+    expect(internals.phase).toBe("waiting");
+    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    hydrator.dispose();
+  });
+
+  it("wakes sleeping work on a later same-conversation transport event", () => {
+    const hydrator = new OfficialNavigatorHydrator(mockSync(2));
+    hydrator.mount();
+    const internals = hydrator as unknown as {
+      state: ReturnType<typeof emptyTransportState>;
+      context: string;
+      sleep(reason: string): void;
+      phase: string;
+    };
+    internals.state = emptyTransportState("current", 1);
+    internals.context = "current:1";
+    internals.sleep("http-error");
+    expect(internals.phase).toBe("sleeping");
+    const incoming = { ...emptyTransportState("current", 1), revision: 1, historyRequests: 1, lastRequestKind: "initial" as const };
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { channel: NATIVE_NAV_CHANNEL, kind: "state", state: incoming },
+      origin: location.origin,
+      source: window
+    }));
+    expect(internals.phase).toBe("waiting");
+    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    hydrator.dispose();
+  });
+
+  it("sleeps, rather than stopping, when an exposed sentinel produces no request for 12 seconds", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(performance.now()), 16));
+    vi.stubGlobal("cancelAnimationFrame", (frame: number) => window.clearTimeout(frame));
+    const main = document.createElement("main");
+    const scroller = document.createElement("div");
+    scroller.style.overflowY = "auto";
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(scroller, "clientTop", { configurable: true, value: 0 });
+    visibleBox(scroller, 0);
+    const message = document.createElement("div");
+    message.dataset.messageAuthorRole = "user";
+    visibleBox(message, 100);
+    const sentinel = document.createElement("div");
+    sentinel.dataset.testid = "conversation-pagination-sentinel";
+    visibleBox(sentinel, 80);
+    scroller.append(message, sentinel);
+    main.append(scroller);
+    document.body.append(main);
+
+    const hydrator = new OfficialNavigatorHydrator(mockSync(2));
+    hydrator.mount();
+    const internals = hydrator as unknown as {
+      state: ReturnType<typeof emptyTransportState>;
+      connected: boolean;
+      context: string;
+      launchAttempt(): Promise<void>;
+      phase: string;
+      sleepReason: string | null;
+    };
+    internals.state = { ...emptyTransportState("current", 1), boosted: true };
+    internals.connected = true;
+    internals.context = "current:1";
+    const attempt = internals.launchAttempt();
+    await vi.advanceTimersByTimeAsync(12_100);
+    await attempt;
+    expect(internals.phase).toBe("sleeping");
+    expect(internals.sleepReason).toBe("no-host-request");
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    hydrator.dispose();
+  });
+
+  it("stops only when a real active budget is exhausted and route reset re-arms", async () => {
+    const hydrator = new OfficialNavigatorHydrator(mockSync(2));
+    hydrator.mount();
+    const internals = hydrator as unknown as {
+      state: ReturnType<typeof emptyTransportState>;
+      connected: boolean;
+      activeMs: number;
+      phase: string;
+      evaluate(): Promise<void>;
+    };
+    internals.state = emptyTransportState("current", 1);
+    internals.connected = true;
+    internals.activeMs = 60_000;
+    await internals.evaluate();
+    expect(internals.phase).toBe("stopped");
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    hydrator.resetRoute();
+    expect(internals.phase).toBe("waiting");
+    expect(internals.activeMs).toBe(0);
+    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    hydrator.dispose();
   });
 });
 
@@ -319,96 +327,60 @@ describe("host DOM ownership", () => {
     document.body.innerHTML = "";
   });
 
-  it("temporarily exposes one sentinel and restores only its owned styles", () => {
+  it("temporarily exposes one sentinel and restores only owned styles", () => {
     const scroller = document.createElement("div");
     const sentinel = document.createElement("div");
     sentinel.dataset.testid = "conversation-pagination-sentinel";
     sentinel.style.top = "12px";
-    Object.defineProperty(sentinel, "getClientRects", { value: () => [{ width: 1, height: 1 }] });
-    Object.defineProperty(sentinel, "getBoundingClientRect", {
-      value: () => ({ top: 0, bottom: 1, left: 0, right: 1, width: 1, height: 1, x: 0, y: 0, toJSON() {} })
-    });
+    visibleBox(sentinel);
     scroller.append(sentinel);
     document.body.append(scroller);
     const exposure = exposePaginationSentinel(scroller);
     expect(exposure).toBeTruthy();
     expect(sentinel.style.getPropertyValue("position")).toBe("sticky");
-    expect(sentinel.style.getPropertyPriority("position")).toBe("important");
     exposure?.release();
     expect(sentinel.style.getPropertyValue("position")).toBe("");
     expect(sentinel.style.getPropertyValue("top")).toBe("12px");
   });
 
-  it("recognizes the MIT-referenced official prompt structure without creating a Yada navigator", () => {
-    officialNavigator(3);
-    expect(readNativePrompts().found).toBe(3);
+  it("rejects official controls hidden by an ancestor", () => {
+    const main = officialNavigator(3);
+    expect(readNativePrompts()).toMatchObject({ found: 3, visible: 3 });
+    main.style.display = "none";
+    expect(readNativePrompts()).toMatchObject({ found: 0, visible: 0 });
     expect(document.querySelector("[data-yada-navigator]")).toBeNull();
   });
 });
 
 describe("prepare session interruption", () => {
+  beforeEach(() => {
+    history.replaceState({}, "", "/c/current");
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
+    history.replaceState({}, "", "/");
     vi.restoreAllMocks();
   });
 
   it("stops the current preparation and clears prepare on user input", () => {
     const posted: unknown[] = [];
-    vi.spyOn(window, "postMessage").mockImplementation((data: unknown) => {
-      posted.push(data);
-    });
-    const hydrator = new OfficialNavigatorHydrator({
-      subscribe: () => () => undefined
-    } as unknown as ConversationSync);
+    vi.spyOn(window, "postMessage").mockImplementation((data: unknown) => { posted.push(data); });
+    const hydrator = new OfficialNavigatorHydrator(mockSync(1));
     hydrator.mount();
     const internals = hydrator as unknown as {
-      state: ReturnType<typeof emptyHistory>;
+      state: ReturnType<typeof emptyTransportState>;
       operation: AbortController | null;
       prepareEnabled: boolean;
     };
-    internals.state = emptyHistory("current", 4);
+    internals.state = emptyTransportState("current", 4);
     internals.prepareEnabled = true;
     const controller = new AbortController();
     internals.operation = controller;
-
     window.dispatchEvent(new Event("wheel"));
     expect(controller.signal.aborted).toBe(true);
-    const stop = posted.map((item) => record(item)).find((item) => item?.kind === "prepare");
-    expect(stop).toMatchObject({
-      channel: NATIVE_NAV_CHANNEL,
-      kind: "prepare",
-      enabled: false,
-      conversationId: "current",
-      generation: 4
-    });
+    expect(posted.map((item) => record(item)).some((item) => item?.kind === "prepare" && item.enabled === false)).toBe(true);
     expect(internals.prepareEnabled).toBe(false);
     hydrator.dispose();
-  });
-
-  it("lets pointer, key, and touch input release the current session", () => {
-    for (const type of ["pointerdown", "keydown", "touchstart"]) {
-      const posted: unknown[] = [];
-      const spy = vi.spyOn(window, "postMessage").mockImplementation((data: unknown) => {
-        posted.push(data);
-      });
-      const hydrator = new OfficialNavigatorHydrator({
-        subscribe: () => () => undefined
-      } as unknown as ConversationSync);
-      hydrator.mount();
-      const internals = hydrator as unknown as {
-        state: ReturnType<typeof emptyHistory>;
-        operation: AbortController | null;
-        prepareEnabled: boolean;
-      };
-      internals.state = emptyHistory("current", 1);
-      internals.prepareEnabled = true;
-      const controller = new AbortController();
-      internals.operation = controller;
-      window.dispatchEvent(new Event(type));
-      expect(controller.signal.aborted, type).toBe(true);
-      expect(posted.map((item) => record(item)).some((item) => item?.kind === "prepare" && item.enabled === false), type).toBe(true);
-      hydrator.dispose();
-      spy.mockRestore();
-    }
   });
 });

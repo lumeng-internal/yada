@@ -1,18 +1,19 @@
 # ChatGPT Yada 系统
 
-版本：**4.0.3**。
+版本：**4.0.4**。
 
 ```text
 ChatGPT Host
   ├─ Official Prompt Navigator
   │    ↑
-  │    └─ Native History Hydrator
-  │         ├─ document_start MAIN fetch hook
-  │         ├─ route event + parked fast-pass
-  │         ├─ bounded prepare lease
-  │         ├─ metadata-only cursor chain
-  │         └─ host pagination sentinel
+  │    └─ Official Navigator Driver
+  │         ├─ thin document_start MAIN request lifecycle hook
+  │         ├─ route event + bounded prepare lease
+  │         ├─ host pagination sentinel
+  │         └─ official DOM stable-match detector
   ├─ ConversationSync
+  │    ├─ complete conversation single truth
+  │    ├─ Navigator expectedPrompts
   │    ├─ Copy All
   │    └─ current-conversation quota turns
   ├─ Vibe Bar quota reader
@@ -41,19 +42,20 @@ Yada 明确分成三个阶段。新工作必须进入其中一档，禁止把 BO
 
 ### STEADY
 
-官方 Navigator 已经成功，或本次准备已经进入 terminal 后，必须进入极轻待机。
+官方 Navigator 已经成功、暂时没有新恢复证据或本次准备进入真正 stopped 后，必须进入极轻待机。
 
 不再：
 
 - 逐帧轮询 URL
-- Navigator 全页面 MutationObserver / heartbeat / sentinel / history parsing
-- MAIN history clone / parse / pending / broadcast
+- Navigator 全页面 MutationObserver / heartbeat / sentinel
+- MAIN history clone / body reader / decode / JSON parse
 - Toolbar 全 body subtree 观察
 - 隐藏提示词或额度详情的全局 listener
 
 只保留：
 
 - MAIN route event（conversationId 变化）
+- MAIN 轻量 history request lifecycle signal
 - 回答完成检测（250ms debounce 的 ConversationSync observer）
 - 当前聊天实时额度写入
 - 用户按钮（三环 Canvas、复制全部、提示词）
@@ -68,17 +70,25 @@ Yada 明确分成三个阶段。新工作必须进入其中一档，禁止把 BO
 
 `history.pushState` / `replaceState` / `popstate` / `pageshow` 确认 conversationId 变化后，发送 `kind: "route"`。isolated content 收到后关闭面板、reset hydrator、同步当前对话。没有永久 `requestAnimationFrame` URL 轮询。
 
-ChatGPT 立即得到原始 Promise 和 Response。旁路只读取 Response clone 的 id、role、cursor、root 和 branch 元数据，并通过同源 `postMessage` 传给 isolated controller。正文、Cookie 和认证信息不跨 bridge。Navigator terminal 后 MAIN `captureActive=false`，后续 fetch 只多一个 boolean 判断后直通 native fetch。SPA 切换对话时 `synchronizeRoute()` 会重新打开 capture。
+ChatGPT 始终得到原始 Promise 和原始 Response。MAIN 不调用 `response.clone()`、不读取 `body`、不使用 `TextDecoder`、不 `JSON.parse` history response。它只在合法请求开始、结束或 reject 时，通过同源 `postMessage` 发送 conversationId、generation、revision、history/older 计数、in-flight、request kind、HTTP status、duration、time、轻量 error 与 `boosted`。没有 `captureActive`；同 route 的后续请求始终可成为恢复证据。
 
-isolated controller 只在 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 时进入 PrepareSession。它发送 prepare handshake、4 秒 heartbeat，并每次只暴露唯一 pagination sentinel 一页，持续检查可见消息锚点。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式、发送 prepare=false 并停止。共享上限为 60 秒 active、20 个 additional pages、每页 12 秒、最多 3 次 interruption recovery。
+isolated controller 从 `ConversationSync.activeTurns.length` 获得唯一 `expectedPrompts`。只有 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 且 `expectedPrompts > 0` 时才进入 PrepareSession。它发送 prepare handshake、4 秒 heartbeat，并每次只暴露唯一 pagination sentinel 一页；发现 host history request start 立即释放 sentinel，等待 request end、短暂 settle 后重新检查 official DOM。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式、发送 prepare=false 并停止当前尝试。共享上限为 60 秒 active、20 个真实 older requests、每页 12 秒、最多 3 次 interruption recovery。
 
-HistoryChain 只有在 initial → linked before cursor → explicit root 完整闭合时才认定 complete。重复 cursor 或暂时无进展记为 `stalled`，但保留已经验证的 cursor 链；unlinked、limit 或明确 branch 变化仍然 fail closed。历史完整后最多等待官方控件 2.5 秒；官方 Navigator `found > 0` 且 `visible > 0` 即为 ready。ready-complete、loaded-no-native、deep-link、limit、unverified 等 terminal 状态会 park 重观察：断开 MutationObserver、清 timer/heartbeat、卸掉输入与 resize/visibility listener，并通知 MAIN park。只保留极轻的 window message listener。route change 时重新 arm。
+Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts、branch、cursor、boundary 或 explicit root。完成合同只有：`expectedPrompts > 0`、official `found === expectedPrompts`、至少一个按钮真实可见、root/container connected，并在同 root/container 上间隔约 300ms 稳定两次。祖先 `hidden` / `display:none` / `visibility:hidden` / `opacity:0` 与无 client rect 的按钮不计 visible。
 
-若仍不存在官方 Navigator，状态为 `loaded-no-native`，不提供 fallback。Hidden 页面立即停止 Navigator，因为 Sentinel 依赖阅读位置。
+状态只有五类：
+
+- `waiting`：等待 ConversationSync snapshot、`expectedPrompts > 0` 或基础 DOM/layout；不运行 Sentinel。
+- `preparing`：PrepareSession 正在驱动 host-owned pagination；每个真实 older request 计一次 page progress。
+- `sleeping`：普通 HTTP/fetch transient、count mismatch、sentinel 12 秒无请求或暂时 layout/DOM 不可用。断开 MutationObserver、heartbeat、sentinel 与输入重 listener；没有固定 timer、轮询或 auto reload。同 conversation 新 transport lifecycle、ConversationSync snapshot、hidden → visible 或 route reset 才 wake。
+- `ready`：稳定匹配两次后断开所有 heavy work，只保留 route、轻量 message listener 和共享 ConversationSync 生命周期。
+- `stopped`：仅用于明确不支持的 deep link、dispose、60 秒 active、20 older requests 或 3 次用户 interruption recovery 耗尽。
+
+不提供 fallback Navigator。普通官方 DOM 暂时缺失不是永久 terminal；它会在无进展后 sleeping，等待新证据。Hidden 页面释放当前 Sentinel 并 sleeping，因为 Sentinel 依赖阅读位置；重新 visible 可事件驱动恢复。
 
 ## 当前对话与额度
 
-`ConversationSync` 仍是 Copy All 与当前会话 quota turns 的唯一当前对话快照。额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。MutationObserver 仍挂在 `document.documentElement`，但 callback 只调度 250ms debounce；streaming 中不读完整 Conversation API，streaming 结束或出现新的 stable assistant id 才 `requestSync()`。hidden 标签仍检测回答完成。
+`ConversationSync` 是完整 current conversation 的唯一真相，同时服务 Navigator expectedPrompts、Copy All 与当前会话 quota turns。完整 conversation 单请求默认 timeout 为 30 秒；route/abort signal 立即 abort，429 仍最多等待后重试一次，5xx/timeout 不建立无限重试。额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。MutationObserver 仍挂在 `document.documentElement`，但 callback 只调度 250ms debounce；streaming 中不读完整 Conversation API，streaming 结束或出现新的 stable assistant id 才 `requestSync()`。hidden idle tab 不主动执行首次完整 snapshot；streaming end、新 stable assistant、Copy All、额度手动刷新或重新 visible 仍会读取。
 
 `QuotaTracker` 直接维护 history timer / flight / abort。账号/套餐内存缓存 30 分钟，model limits 内存缓存 10 分钟；手动刷新 bypass。实时 quotaTurns 仍然每次回答完成后立即写 Ledger。
 

@@ -9,6 +9,7 @@ describe("completeConversation transport ownership", () => {
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
+    vi.useRealTimers();
   });
 
   it("does not fall back after a timeout", async () => {
@@ -26,6 +27,21 @@ describe("completeConversation transport ownership", () => {
     expect(urls).toHaveLength(1);
     expect(urls[0]).toContain("include_has_versions");
     expect(urls.some((url) => url.includes("include_full_conversation"))).toBe(false);
+  });
+
+  it("uses a 30-second default request timeout", async () => {
+    vi.useFakeTimers();
+    globalThis.fetch = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => new Promise<Response>((_, reject) => {
+      const abort = (): void => reject(Object.assign(new Error("Aborted"), { name: "AbortError" }));
+      init?.signal?.addEventListener("abort", abort, { once: true });
+    })) as typeof fetch;
+    const pending = fetchCompleteConversation("id", {});
+    let settled = false;
+    void pending.catch(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(10_500);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(19_500);
+    await expect(pending).rejects.toThrow(/timed out/);
   });
 
   it("retries 429 once and does not fall back to legacy endpoints", async () => {

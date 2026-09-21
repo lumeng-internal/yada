@@ -4,12 +4,9 @@ import { JSDOM } from "jsdom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConversationSync, SIGNAL_INSPECTION_DEBOUNCE_MS } from "../src/core/conversationSync";
 import type { ConversationSnapshot } from "../src/core/types";
-import { OfficialNavigatorHydrator } from "../src/nativeNavigator/hydrator";
 import { installNativeHistoryHook } from "../src/nativeNavigator/mainHook";
 import {
   NATIVE_NAV_CHANNEL,
-  emptyHistory,
-  parseParkHandshake,
   parseRouteEvent,
   record
 } from "../src/nativeNavigator/protocol";
@@ -56,29 +53,29 @@ function json(value: unknown): Response {
 }
 
 describe("source lifecycle invariants", () => {
-  it("removes permanent RAF route polling, body subtree placement, and app hostGuard", () => {
+  it("removes permanent RAF route polling, duplicate response parsing, and app hostGuard", () => {
     expect(existsSync(resolve(ROOT, "src/utils/route.ts"))).toBe(false);
     const content = readFileSync(resolve(ROOT, "src/content.ts"), "utf8");
     const toolbar = readFileSync(resolve(ROOT, "src/ui/toolbar.ts"), "utf8");
+    const mainHook = readFileSync(resolve(ROOT, "src/nativeNavigator/mainHook.ts"), "utf8");
     expect(content).not.toMatch(/observeRouteChange|requestAnimationFrame|hostGuard/);
     expect(content).not.toMatch(/this\.dispose\(\);\s*this\.mount\(\)/);
     expect(toolbar).not.toMatch(/observe\(document\.body,\s*\{\s*childList:\s*true,\s*subtree:\s*true/);
-    expect(readFileSync(resolve(ROOT, "src/nativeNavigator/mainHook.ts"), "utf8")).toMatch(/kind:\s*"route"/);
-    expect(readFileSync(resolve(ROOT, "src/nativeNavigator/mainHook.ts"), "utf8")).toMatch(/captureActive/);
+    expect(mainHook).toMatch(/kind:\s*"route"/);
+    expect(mainHook).not.toMatch(/response\.clone|\.body\?*\.getReader|TextDecoder|JSON\.parse|captureActive/);
+    expect(existsSync(resolve(ROOT, "src/nativeNavigator/metadata.ts"))).toBe(false);
   });
 });
 
-describe("MAIN route and capture park", () => {
+describe("MAIN route and transport lifecycle", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
-  it("parses route and park messages", () => {
+  it("parses route messages", () => {
     expect(parseRouteEvent({
       channel: NATIVE_NAV_CHANNEL, kind: "route", conversationId: "b", generation: 2
-    })).toEqual({ conversationId: "b", generation: 2 });
-    expect(parseParkHandshake({
-      kind: "park", conversationId: "b", generation: 2
     })).toEqual({ conversationId: "b", generation: 2 });
     expect(parseRouteEvent({ kind: "state" })).toBeNull();
   });
@@ -102,106 +99,44 @@ describe("MAIN route and capture park", () => {
     post.mockRestore();
   });
 
-  it("fast-passes parked fetches without clone/parse and re-arms after route change", async () => {
+  it("does not clone, parse, or consume a 10.5-second successful history response", async () => {
+    vi.useFakeTimers();
     const dom = new JSDOM("<!doctype html>", { url: "https://chatgpt.com/c/aaa" });
     const win = dom.window as unknown as Window & { fetch: typeof fetch };
-    const clone = vi.fn();
-    const native = vi.fn(async () => {
-      const response = json({ id: "aaa" });
-      vi.spyOn(response, "clone").mockImplementation(() => {
-        clone();
-        return json({ id: "aaa" });
-      });
-      return response;
+    const response = json({ id: "aaa", ok: true });
+    const clone = vi.spyOn(response, "clone");
+    const parse = vi.spyOn(response, "json");
+    const reader = vi.spyOn(response.body!, "getReader");
+    let original!: Promise<Response>;
+    const native = vi.fn(() => {
+      original = new Promise<Response>((resolve) => setTimeout(() => resolve(response), 10_500));
+      return original;
     });
     win.fetch = native as unknown as typeof fetch;
-    const states: unknown[] = [];
+    const states: Array<Record<string, unknown>> = [];
     vi.spyOn(win, "postMessage").mockImplementation((data: unknown) => {
       const message = record(data);
-      if (message?.kind === "state") states.push(message);
+      if (message?.kind === "state" && record(message.state)) states.push(record(message.state)!);
     });
     installNativeHistoryHook(win);
-    await win.fetch("/backend-api/conversations/aaa?num_turns=20");
-    await flush(10);
-    const beforePark = native.mock.calls.length;
-    const stateBeforePark = states.length;
-    expect(beforePark).toBe(1);
-    expect(stateBeforePark).toBeGreaterThan(0);
-    win.dispatchEvent(new win.MessageEvent("message", {
-      data: {
-        channel: NATIVE_NAV_CHANNEL,
-        kind: "park",
-        conversationId: "aaa",
-        generation: 0
-      },
-      origin: win.location.origin,
-      source: win
-    }));
+    const pagePromise = win.fetch("/backend-api/conversations/aaa?num_turns=20");
+    expect(pagePromise).toBe(original);
+    expect(states.at(-1)).toMatchObject({ historyRequests: 1, requestInFlight: true, lastRequestKind: "initial" });
+    await vi.advanceTimersByTimeAsync(10_500);
+    const pageResponse = await pagePromise;
     await flush(4);
-    clone.mockClear();
-    states.length = 0;
-    await win.fetch("/backend-api/conversations/aaa?num_turns=20");
-    await flush(10);
-    expect(native.mock.calls.length).toBe(beforePark + 1);
     expect(clone).not.toHaveBeenCalled();
-    expect(states).toEqual([]);
-    win.history.pushState({}, "", "/c/bbb");
-    await win.fetch("/backend-api/conversations/bbb?num_turns=20");
-    await flush(10);
-    expect(native.mock.calls.length).toBe(beforePark + 2);
-    expect(states.length).toBeGreaterThan(0);
-  });
-});
-
-describe("navigator park", () => {
-  afterEach(() => {
-    document.body.innerHTML = "";
-    vi.restoreAllMocks();
-  });
-
-  it("parks heavy observers after ready-complete and re-arms on route change", async () => {
-    const posted: unknown[] = [];
-    vi.spyOn(window, "postMessage").mockImplementation((data: unknown) => {
-      posted.push(data);
+    expect(parse).not.toHaveBeenCalled();
+    expect(reader).not.toHaveBeenCalled();
+    expect(pageResponse.bodyUsed).toBe(false);
+    expect(states.at(-1)).toMatchObject({
+      requestInFlight: false,
+      lastHttpStatus: 200,
+      lastRequestDurationMs: 10_500,
+      lastRequestError: null
     });
-    const hydrator = new OfficialNavigatorHydrator({
-      subscribe: () => () => undefined
-    } as unknown as ConversationSync);
-    hydrator.mount();
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
-    const main = document.createElement("main");
-    const root = document.createElement("div");
-    root.className = "x_convSearchResultHighlightRoot";
-    const fixed = document.createElement("div");
-    fixed.className = "fixed inset-e-4 top-1/2 z-20 -translate-y-1/2";
-    const button = document.createElement("button");
-    button.dataset.tocItemIndex = "0";
-    button.setAttribute("aria-label", "Prompt 1");
-    fixed.append(button);
-    root.append(fixed);
-    main.append(root);
-    document.body.append(main);
-    const internals = hydrator as unknown as {
-      state: ReturnType<typeof emptyHistory>;
-      connected: boolean;
-      evaluate: () => Promise<void>;
-      heartbeat: number;
-      prepareEnabled: boolean;
-      timer: number;
-    };
-    internals.state = { ...emptyHistory("current", 4), initialVersion: 1, boundary: "complete" };
-    internals.connected = true;
-    await internals.evaluate();
-    expect(hydrator.isParked()).toBe(true);
-    expect(hydrator.isHeavyWorkArmed()).toBe(false);
-    expect(internals.heartbeat).toBe(0);
-    expect(internals.prepareEnabled).toBe(false);
-    expect(internals.timer).toBe(0);
-    expect(posted.some((item) => record(item)?.kind === "park")).toBe(true);
-    hydrator.resetRoute();
-    expect(hydrator.isParked()).toBe(false);
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
-    hydrator.dispose();
+    await expect(pageResponse.json()).resolves.toEqual({ id: "aaa", ok: true });
+    expect(parse).toHaveBeenCalledTimes(1);
   });
 });
 

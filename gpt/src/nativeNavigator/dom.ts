@@ -10,7 +10,12 @@ const OFFICIAL_ROOT_SELECTOR = [
 const OFFICIAL_CONTAINER_TOKENS = ["fixed", "inset-e-4", "top-1/2", "z-20", "-translate-y-1/2"];
 const SENTINEL_SELECTOR = '[data-testid="conversation-pagination-sentinel"]';
 
-export type NativePromptState = { found: number; visible: number };
+export type NativePromptState = {
+  found: number;
+  visible: number;
+  root: HTMLElement | null;
+  container: HTMLElement | null;
+};
 export type ReadingPosition = {
   identity: { attribute: string; value: string } | null;
   element: HTMLElement;
@@ -41,23 +46,30 @@ export function viewportTop(scroller: HTMLElement): number {
 
 export function readNativePrompts(root: ParentNode = document): NativePromptState {
   const candidates = [...root.querySelectorAll<HTMLElement>(OFFICIAL_ROOT_SELECTOR)];
-  if (candidates.length !== 1) return { found: 0, visible: 0 };
+  if (candidates.length !== 1) return emptyNativePromptState();
   const container = [...candidates[0]!.children].find((child): child is HTMLElement =>
     child instanceof HTMLElement
     && OFFICIAL_CONTAINER_TOKENS.every((token) => child.classList.contains(token))
     && !child.closest("[data-yada-root]")
   );
-  if (!container) return { found: 0, visible: 0 };
+  if (!container || !layoutVisible(candidates[0]!, false) || !layoutVisible(container, true)) {
+    return emptyNativePromptState();
+  }
 
   const buttons = [...container.querySelectorAll<HTMLButtonElement>("button")];
   const indexes = buttons.map(readPromptIndex);
-  if (!indexes.length || indexes.some((index) => index === null)) return { found: 0, visible: 0 };
+  if (!indexes.length || indexes.some((index) => index === null)) return emptyNativePromptState();
   const numeric = indexes as number[];
-  if (new Set(numeric).size !== numeric.length) return { found: 0, visible: 0 };
+  if (new Set(numeric).size !== numeric.length) return emptyNativePromptState();
   const first = Math.min(...numeric);
   const ordered = [...numeric].map((index) => index - (first === 1 ? 1 : 0)).sort((left, right) => left - right);
-  if (!ordered.every((index, position) => index === position)) return { found: 0, visible: 0 };
-  return { found: buttons.length, visible: buttons.filter(elementVisible).length };
+  if (!ordered.every((index, position) => index === position)) return emptyNativePromptState();
+  return {
+    found: buttons.length,
+    visible: buttons.filter((button) => layoutVisible(button, true)).length,
+    root: candidates[0]!,
+    container
+  };
 }
 
 export function saveReadingPosition(): ReadingPosition | null {
@@ -150,10 +162,23 @@ function readPromptIndex(button: HTMLButtonElement): number | null {
   return null;
 }
 
-function elementVisible(element: HTMLElement): boolean {
-  if (!element.isConnected || element.getClientRects().length === 0) return false;
-  const style = getComputedStyle(element);
-  if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) return false;
+function emptyNativePromptState(): NativePromptState {
+  return { found: 0, visible: 0, root: null, container: null };
+}
+
+function layoutVisible(element: HTMLElement, requireRectangle: boolean): boolean {
+  if (!element.isConnected || (requireRectangle && element.getClientRects().length === 0)) return false;
+  let ancestor: HTMLElement | null = element;
+  while (ancestor) {
+    const style = getComputedStyle(ancestor);
+    if (ancestor.hidden
+      || ancestor.getAttribute("aria-hidden") === "true"
+      || style.visibility === "hidden"
+      || style.display === "none"
+      || (style.opacity !== "" && Number(style.opacity) === 0)) return false;
+    ancestor = ancestor.parentElement;
+  }
+  if (!requireRectangle) return true;
   const rectangle = element.getBoundingClientRect();
   return rectangle.width > 0
     && rectangle.height > 0

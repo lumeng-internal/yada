@@ -6,6 +6,7 @@ import {
   safeDesktopLayout,
   saveReadingPosition,
   stableLayoutAvailable,
+  type NativePromptState,
   type ReadingPosition
 } from "./dom";
 import {
@@ -13,50 +14,60 @@ import {
   PREPARE_ACK_WAIT_MS,
   PREPARE_HEARTBEAT_MS,
   conversationIdFromUrl,
-  emptyHistory,
+  emptyTransportState,
   isMessageDeepLink,
-  isNativeHistoryState,
+  isNativeTransportState,
   record,
-  type NativeHistoryState
+  type NativeTransportState
 } from "./protocol";
 
 const ACTIVE_LIMIT_MS = 60_000;
 const ADDITIONAL_PAGE_LIMIT = 20;
 const PAGE_PROGRESS_LIMIT_MS = 12_000;
-const NATIVE_APPEARANCE_WAIT_MS = 2_500;
+const READY_STABILITY_MS = 300;
 const RECOVERY_IDLE_MS = 2_500;
 const MAX_RECOVERIES = 3;
 const DEBUG_KEY = "chatgpt-yada:native-nav-debug";
 
+type NavigatorPhase = "waiting" | "preparing" | "sleeping" | "ready" | "stopped";
+type AttemptOutcome =
+  | { kind: "match" }
+  | { kind: "sleep"; reason: string }
+  | { kind: "interrupted"; reason: string }
+  | { kind: "stopped"; reason: string }
+  | { kind: "changed" };
+
 export type NativeNavigatorDiagnostics = {
-  phase: string;
+  phase: NavigatorPhase;
   conversationId: string | null;
-  pages: number;
-  messages: number;
-  capturedPrompts: number;
   expectedPrompts: number;
   nativeFound: number;
   nativeVisible: number;
-  boundary: NativeHistoryState["boundary"];
-  cursorPresent: boolean;
-  boosted: boolean;
+  historyRequests: number;
+  olderRequests: number;
+  requestInFlight: boolean;
+  lastRequestKind: NativeTransportState["lastRequestKind"];
+  lastHttpStatus: number | null;
+  lastRequestDurationMs: number;
+  lastRequestAt: number | null;
+  lastRequestError: NativeTransportState["lastRequestError"];
   prepareActive: boolean;
-  issue: string | null;
-  lastOutcome: string | null;
+  boosted: boolean;
   recoveryCount: number;
   elapsedActiveMs: number;
   maxObservedDriftPx: number;
+  sleepReason: string | null;
+  readyStableChecks: number;
 };
 
 export function officialNavigatorReadiness(
-  native: { found: number; visible: number },
-  waitedMs: number,
-  waitLimitMs = NATIVE_APPEARANCE_WAIT_MS
-): "ready-complete" | "hidden" | "waiting-native" | "loaded-no-native" {
-  if (native.found > 0 && native.visible > 0) return "ready-complete";
-  if (native.found > 0) return "hidden";
-  if (waitedMs < waitLimitMs) return "waiting-native";
-  return "loaded-no-native";
+  native: Pick<NativePromptState, "found" | "visible">,
+  expectedPrompts: number,
+  stableChecks: number
+): "waiting" | "incomplete" | "stabilizing" | "ready" {
+  if (expectedPrompts <= 0) return "waiting";
+  if (native.found !== expectedPrompts || native.visible <= 0) return "incomplete";
+  return stableChecks >= 2 ? "ready" : "stabilizing";
 }
 
 declare global {
@@ -64,20 +75,22 @@ declare global {
 }
 
 export class OfficialNavigatorHydrator {
-  private state = emptyHistory(conversationIdFromUrl(location.href));
+  private state = emptyTransportState(conversationIdFromUrl(location.href));
   private expectedPrompts = 0;
+  private connected = false;
   private context = "";
-  private firstPage = 0;
+  private firstOlderRequest = 0;
   private activeMs = 0;
   private recoveries = 0;
   private peakDrift = 0;
-  private completeSince = 0;
-  private connected = false;
-  private terminal = false;
-  private phase = "waiting";
-  private issue: string | null = null;
+  private phase: NavigatorPhase = "waiting";
+  private sleepReason: string | null = null;
+  private readyStableChecks = 0;
+  private stableRoot: HTMLElement | null = null;
+  private stableContainer: HTMLElement | null = null;
+  private stableFound = 0;
+  private stableCheckedAt = 0;
   private lastUserInput = performance.now() - RECOVERY_IDLE_MS;
-  private lastOutcome: string | null = null;
   private prepareEnabled = false;
   private heartbeat = 0;
   private operation: AbortController | null = null;
@@ -85,19 +98,27 @@ export class OfficialNavigatorHydrator {
   private mutations: MutationObserver | null = null;
   private unsubscribe: (() => void) | null = null;
   private disposed = false;
-  private parked = false;
   private heavyArmed = false;
 
   constructor(private readonly sync: ConversationSync) {}
 
   mount(): void {
     this.unsubscribe = this.sync.subscribe((snapshot) => {
-      this.expectedPrompts = snapshot?.conversationId === this.state.conversationId
+      const nextExpected = snapshot?.conversationId === this.state.conversationId
         ? snapshot.activeTurns.length
         : 0;
-      this.schedule();
+      const changed = nextExpected !== this.expectedPrompts;
+      this.expectedPrompts = nextExpected;
+      if (this.phase === "stopped") {
+        this.publishDiagnostics();
+        return;
+      }
+      if (this.phase === "sleeping" || (this.phase === "ready" && changed)) this.wake("snapshot");
+      else if (this.phase !== "ready") this.schedule();
+      this.publishDiagnostics();
     });
     addEventListener("message", this.onMessage);
+    document.addEventListener("visibilitychange", this.onVisibility);
     this.armHeavyWork();
     this.requestState();
     this.schedule(600);
@@ -105,10 +126,13 @@ export class OfficialNavigatorHydrator {
 
   resetRoute(): void {
     this.cancel("route");
-    this.state = emptyHistory(conversationIdFromUrl(location.href), this.state.generation + 1);
+    const current = conversationIdFromUrl(location.href);
+    this.state = emptyTransportState(current, this.state.generation);
     this.connected = false;
-    this.expectedPrompts = 0;
-    this.resetContext("", 0);
+    this.expectedPrompts = this.sync.getSnapshot()?.conversationId === current
+      ? this.sync.getSnapshot()!.activeTurns.length
+      : 0;
+    this.resetContext("");
     this.setPhase("waiting");
     this.armHeavyWork();
     this.requestState();
@@ -116,11 +140,11 @@ export class OfficialNavigatorHydrator {
   }
 
   isHeavyWorkArmed(): boolean {
-    return this.heavyArmed && this.mutations != null && !this.parked;
+    return this.heavyArmed && this.mutations != null;
   }
 
   isParked(): boolean {
-    return this.parked;
+    return !this.heavyArmed && (this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped");
   }
 
   dispose(): void {
@@ -129,49 +153,59 @@ export class OfficialNavigatorHydrator {
     this.cancel("dispose");
     clearTimeout(this.timer);
     this.timer = 0;
-    this.parkHeavyWork(false);
+    this.parkHeavyWork();
     this.unsubscribe?.();
     this.unsubscribe = null;
     removeEventListener("message", this.onMessage);
+    document.removeEventListener("visibilitychange", this.onVisibility);
     delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
   }
 
   private readonly onMessage = (event: MessageEvent): void => {
     if (event.source !== window || event.origin !== location.origin) return;
     const message = record(event.data);
-    if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state" || !isNativeHistoryState(message.state)) return;
+    if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state" || !isNativeTransportState(message.state)) return;
     const incoming = message.state;
     if (incoming.conversationId !== conversationIdFromUrl(location.href)) return;
     if (incoming.generation < this.state.generation) return;
     if (incoming.generation === this.state.generation && incoming.revision < this.state.revision) return;
 
-    const incomingContext = `${incoming.conversationId ?? ""}:${incoming.generation}:${incoming.initialVersion}`;
+    const incomingContext = `${incoming.conversationId ?? ""}:${incoming.generation}`;
     if (incomingContext !== this.context) {
       this.cancel("context");
-      this.resetContext(incomingContext, incoming.pages);
+      this.resetContext(incomingContext, incoming.olderRequests);
     }
+    const hasNewEvidence = incoming.revision > this.state.revision;
     this.state = incoming;
     this.connected = true;
-    this.schedule();
+    if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
+    else if (this.phase !== "ready" && this.phase !== "stopped") this.schedule();
+    this.publishDiagnostics();
   };
 
   private readonly onUserInput = (): void => {
     this.lastUserInput = performance.now();
-    if (this.operation) {
-      this.cancel("user");
-      this.setPhase("interrupted");
-    } else {
-      this.schedule(RECOVERY_IDLE_MS);
-    }
+    if (this.operation) this.cancel("user");
+    else this.schedule(RECOVERY_IDLE_MS);
   };
 
   private readonly onEnvironment = (): void => {
-    if (document.visibilityState !== "visible") this.cancel("hidden");
-    this.schedule(document.visibilityState === "visible" ? RECOVERY_IDLE_MS : 800);
+    if (this.operation) this.cancel("layout");
+    else this.schedule(180);
+  };
+
+  private readonly onVisibility = (): void => {
+    if (document.visibilityState === "visible") {
+      if (this.phase === "sleeping") this.wake("visible");
+      return;
+    }
+    if (this.phase === "ready" || this.phase === "stopped") return;
+    if (this.operation) this.cancel("hidden");
+    else this.sleep("hidden");
   };
 
   private schedule(delayMs = 180): void {
-    if (this.disposed || this.parked) return;
+    if (this.disposed || this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped") return;
     clearTimeout(this.timer);
     this.timer = window.setTimeout(() => {
       this.timer = 0;
@@ -180,60 +214,74 @@ export class OfficialNavigatorHydrator {
   }
 
   private async evaluate(): Promise<void> {
-    if (this.disposed || this.operation) return;
+    if (this.disposed || this.operation || this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped") return;
     const native = readNativePrompts();
-    if (!this.connected || !this.state.conversationId || this.state.initialVersion === 0 || this.state.pending > 0) {
+    if (!this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
+      this.resetReadyStability();
       this.setPhase("waiting");
       return;
     }
     if (isMessageDeepLink()) {
-      this.markTerminal("deep-link");
+      this.stop("deep-link");
       return;
     }
-    if (this.state.boundary === "complete") {
-      this.finishWithNativeState(native);
+    if (this.checkReady(native)) return;
+    if (this.limitReached()) {
+      this.stop("limit");
       return;
     }
-    if (this.terminal) {
-      this.publishDiagnostics();
-      return;
-    }
-    const recoverableStalled = this.state.issue === "stalled" && this.state.boundary === "more";
-    if (!recoverableStalled && (this.state.issue || this.state.boundary === "unknown")) {
-      this.markTerminal("unverified", this.state.issue ?? "unverified-history");
+    if (document.visibilityState !== "visible") {
+      this.sleep("hidden");
       return;
     }
     if (!safeDesktopLayout()) {
-      this.setPhase("deferred");
-      this.schedule(800);
+      this.setPhase("waiting");
       return;
     }
     const idleFor = performance.now() - this.lastUserInput;
     if (idleFor < RECOVERY_IDLE_MS) {
-      this.setPhase("deferred");
+      this.setPhase("waiting");
       this.schedule(RECOVERY_IDLE_MS - idleFor);
-      return;
-    }
-    if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
-      this.markTerminal("limit", "limit");
       return;
     }
     await this.launchAttempt();
   }
 
-  private finishWithNativeState(native: ReturnType<typeof readNativePrompts>): void {
-    if (this.completeSince === 0) this.completeSince = performance.now();
-    const readiness = officialNavigatorReadiness(
-      native,
-      performance.now() - this.completeSince,
-      NATIVE_APPEARANCE_WAIT_MS
-    );
-    if (readiness === "waiting-native") {
-      this.setPhase("waiting-native");
-      this.schedule(NATIVE_APPEARANCE_WAIT_MS - (performance.now() - this.completeSince));
-      return;
+  private checkReady(native: NativePromptState): boolean {
+    const readiness = officialNavigatorReadiness(native, this.expectedPrompts, this.readyStableChecks);
+    if (readiness === "waiting" || readiness === "incomplete") {
+      this.resetReadyStability();
+      return false;
     }
-    this.markTerminal(readiness);
+
+    const now = performance.now();
+    const same = this.stableRoot === native.root
+      && this.stableContainer === native.container
+      && this.stableFound === native.found
+      && native.root?.isConnected === true
+      && native.container?.isConnected === true;
+    if (!same) {
+      this.stableRoot = native.root;
+      this.stableContainer = native.container;
+      this.stableFound = native.found;
+      this.readyStableChecks = 1;
+      this.stableCheckedAt = now;
+      this.setPhase("waiting");
+      this.schedule(READY_STABILITY_MS);
+      return true;
+    }
+    if (this.readyStableChecks < 2) {
+      const remaining = READY_STABILITY_MS - (now - this.stableCheckedAt);
+      if (remaining > 0) {
+        this.setPhase("waiting");
+        this.schedule(remaining);
+        return true;
+      }
+      this.readyStableChecks = 2;
+    }
+    this.parkHeavyWork();
+    this.setPhase("ready");
+    return true;
   }
 
   private async launchAttempt(): Promise<void> {
@@ -241,16 +289,17 @@ export class OfficialNavigatorHydrator {
     const attemptContext = this.context;
     const started = performance.now();
     this.operation = controller;
-    this.setPhase("automatic-loading");
-    let outcome: string;
+    this.setPhase("preparing");
+    let outcome: AttemptOutcome;
     try {
       this.startPrepare();
       await this.waitForBoostedAck(controller.signal);
       outcome = await this.hydrate(controller.signal, attemptContext);
     } catch {
-      outcome = controller.signal.reason === "user" || controller.signal.reason === "hidden"
-        ? "interrupted"
-        : "changed";
+      const reason = String(controller.signal.reason ?? "changed");
+      outcome = reason === "user" || reason === "hidden" || reason === "layout"
+        ? { kind: "interrupted", reason }
+        : { kind: "changed" };
     } finally {
       this.stopPrepare();
       this.activeMs += Math.max(0, performance.now() - started);
@@ -258,37 +307,32 @@ export class OfficialNavigatorHydrator {
     }
 
     if (this.disposed || attemptContext !== this.context) return;
-    this.lastOutcome = outcome;
-    if (outcome === "complete") {
-      this.completeSince = 0;
+    if (outcome.kind === "match") {
+      this.setPhase("waiting");
       this.schedule(0);
       return;
     }
-    if (outcome === "interrupted") {
-      if (this.recoveries < MAX_RECOVERIES && this.activeMs < ACTIVE_LIMIT_MS) {
-        this.recoveries += 1;
-        this.setPhase("recovering");
-        this.schedule(RECOVERY_IDLE_MS);
-      } else {
-        this.markTerminal("recovery-limit", "recovery-limit");
-      }
+    if (outcome.kind === "changed") return;
+    if (outcome.kind === "stopped") {
+      this.stop(outcome.reason);
       return;
     }
-    if (outcome === "stalled") {
-      if (this.activeMs >= ACTIVE_LIMIT_MS || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) {
-        this.markTerminal("limit", "limit");
+    if (outcome.kind === "interrupted" && outcome.reason === "user") {
+      if (this.recoveries >= MAX_RECOVERIES || this.limitReached()) {
+        this.stop("recovery-limit");
         return;
       }
-      this.setPhase("stalled", "stalled");
-      this.schedule(180);
+      this.recoveries += 1;
+      this.setPhase("waiting");
+      this.schedule(RECOVERY_IDLE_MS);
       return;
     }
-    this.markTerminal(outcome, outcome);
+    this.sleep(outcome.reason);
   }
 
-  private async hydrate(signal: AbortSignal, context: string): Promise<string> {
+  private async hydrate(signal: AbortSignal, context: string): Promise<AttemptOutcome> {
     const position = saveReadingPosition();
-    if (!position || !stableLayoutAvailable()) return "incompatible-layout";
+    if (!position || !stableLayoutAvailable()) return { kind: "sleep", reason: "layout-unavailable" };
     const activeDeadline = performance.now() + Math.max(0, ACTIVE_LIMIT_MS - this.activeMs);
     let exposure: ReturnType<typeof exposePaginationSentinel> = null;
     const release = (): void => {
@@ -303,14 +347,13 @@ export class OfficialNavigatorHydrator {
     );
     signal.addEventListener("abort", release, { once: true });
 
-    const problem = (): string | null => {
+    const problem = (): AttemptOutcome | null => {
       if (signal.aborted) throw signal.reason;
-      if (context !== this.context || this.state.conversationId !== conversationIdFromUrl(location.href)) return "changed";
-      if (watch.problem()) return watch.problem();
-      if (document.visibilityState !== "visible") return "interrupted";
-      if (this.state.issue) return this.state.issue;
-      if (this.state.boundary === "unknown") return "unverified";
-      if (performance.now() >= activeDeadline || this.state.pages - this.firstPage >= ADDITIONAL_PAGE_LIMIT) return "limit";
+      if (context !== this.context || this.state.conversationId !== conversationIdFromUrl(location.href)) return { kind: "changed" };
+      const layoutProblem = watch.problem();
+      if (layoutProblem) return { kind: "sleep", reason: layoutProblem };
+      if (document.visibilityState !== "visible") return { kind: "interrupted", reason: "hidden" };
+      if (performance.now() >= activeDeadline || this.limitReached()) return { kind: "stopped", reason: "limit" };
       return null;
     };
 
@@ -318,48 +361,49 @@ export class OfficialNavigatorHydrator {
       for (;;) {
         const currentProblem = problem();
         if (currentProblem) return currentProblem;
-        if (this.state.pending > 0) {
-          await abortableDelay(40, signal);
+        const native = readNativePrompts();
+        if (officialNavigatorReadiness(native, this.expectedPrompts, 0) === "stabilizing") {
+          return { kind: "match" };
+        }
+
+        if (this.state.requestInFlight) {
+          const waitingFor = this.state.historyRequests;
+          while (this.state.requestInFlight && this.state.historyRequests === waitingFor) {
+            const requestProblem = problem();
+            if (requestProblem) return requestProblem;
+            await abortableDelay(40, signal);
+          }
+          if (this.state.lastRequestError) return { kind: "sleep", reason: this.state.lastRequestError };
+          await abortableDelay(240, signal);
           continue;
         }
-        if (this.state.boundary === "complete") return "complete";
 
-        const pageAtStart = this.state.pages;
-        const pendingAtStart = this.state.pending;
+        const requestsAtStart = this.state.historyRequests;
         exposure = exposePaginationSentinel(position.scroller);
-        if (!exposure) return "incompatible-layout";
+        if (!exposure) return { kind: "sleep", reason: "sentinel-unavailable" };
         const pageDeadline = Math.min(activeDeadline, performance.now() + PAGE_PROGRESS_LIMIT_MS);
-        let hostStarted = false;
-        while (performance.now() < pageDeadline) {
+        while (performance.now() < pageDeadline && this.state.historyRequests === requestsAtStart) {
           await abortableDelay(20, signal);
           const waitProblem = problem();
           if (waitProblem) return waitProblem;
-          if (
-            this.state.pending > pendingAtStart
-            || this.state.pages !== pageAtStart
-            || (this.state as NativeHistoryState).boundary === "complete"
-          ) {
-            hostStarted = true;
-            release();
-            break;
-          }
           const rectangle = exposure.element.getBoundingClientRect();
           const top = position.scroller === document.scrollingElement
             ? 0
             : position.scroller.getBoundingClientRect().top + position.scroller.clientTop;
           if (!exposure.element.isConnected || rectangle.bottom < top || rectangle.top > top + position.scroller.clientHeight) {
-            return "incompatible-layout";
+            return { kind: "sleep", reason: "layout-changed" };
           }
         }
         release();
-        if (!hostStarted) return "stalled";
+        if (this.state.historyRequests === requestsAtStart) return { kind: "sleep", reason: "no-host-request" };
 
-        while (this.state.pending > 0 || this.state.pages === pageAtStart) {
+        while (this.state.requestInFlight) {
           const completionProblem = problem();
           if (completionProblem) return completionProblem;
-          if (performance.now() >= pageDeadline) return "stalled";
+          if (performance.now() >= pageDeadline) return { kind: "sleep", reason: "request-timeout" };
           await abortableDelay(40, signal);
         }
+        if (this.state.lastRequestError) return { kind: "sleep", reason: this.state.lastRequestError };
         await abortableDelay(240, signal);
       }
     } finally {
@@ -367,6 +411,11 @@ export class OfficialNavigatorHydrator {
       watch.dispose();
       signal.removeEventListener("abort", release);
     }
+  }
+
+  private limitReached(): boolean {
+    return this.activeMs >= ACTIVE_LIMIT_MS
+      || this.state.olderRequests - this.firstOlderRequest >= ADDITIONAL_PAGE_LIMIT;
   }
 
   private cancel(reason: string): void {
@@ -382,8 +431,7 @@ export class OfficialNavigatorHydrator {
 
   private stopPrepare(): void {
     this.clearHeartbeat();
-    if (!this.prepareEnabled) return;
-    this.sendPrepare(false);
+    if (this.prepareEnabled) this.sendPrepare(false);
   }
 
   private sendPrepare(enabled: boolean): void {
@@ -409,27 +457,39 @@ export class OfficialNavigatorHydrator {
 
   private async waitForBoostedAck(signal: AbortSignal): Promise<void> {
     const until = performance.now() + PREPARE_ACK_WAIT_MS;
-    while (!this.state.boosted && performance.now() < until) {
-      await abortableDelay(40, signal);
-    }
+    while (!this.state.boosted && performance.now() < until) await abortableDelay(40, signal);
   }
 
-  private markTerminal(phase: string, issue: string | null = null): void {
-    this.terminal = true;
-    this.setPhase(phase, issue);
-    this.parkHeavyWork(true);
+  private sleep(reason: string): void {
+    if (this.phase === "ready" || this.phase === "stopped") return;
+    this.sleepReason = reason;
+    this.parkHeavyWork();
+    this.setPhase("sleeping");
+  }
+
+  private wake(_reason: string): void {
+    if (this.disposed || this.phase === "stopped") return;
+    this.sleepReason = null;
+    this.resetReadyStability();
+    this.setPhase("waiting");
+    this.armHeavyWork();
+    this.schedule(0);
+  }
+
+  private stop(reason: string): void {
+    this.sleepReason = reason;
+    this.parkHeavyWork();
+    this.setPhase("stopped");
   }
 
   private armHeavyWork(): void {
     if (this.disposed) return;
-    this.parked = false;
     if (!this.heavyArmed) {
       addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
       addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
       addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
       addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
       addEventListener("resize", this.onEnvironment, { passive: true });
-      document.addEventListener("visibilitychange", this.onEnvironment);
       this.heavyArmed = true;
     }
     if (!this.mutations) {
@@ -438,51 +498,41 @@ export class OfficialNavigatorHydrator {
     }
   }
 
-  private parkHeavyWork(notifyMain: boolean): void {
+  private parkHeavyWork(): void {
     clearTimeout(this.timer);
     this.timer = 0;
     this.stopPrepare();
     this.mutations?.disconnect();
     this.mutations = null;
-    if (this.heavyArmed) {
-      removeEventListener("wheel", this.onUserInput, true);
-      removeEventListener("touchstart", this.onUserInput, true);
-      removeEventListener("pointerdown", this.onUserInput, true);
-      removeEventListener("keydown", this.onUserInput, true);
-      removeEventListener("resize", this.onEnvironment);
-      document.removeEventListener("visibilitychange", this.onEnvironment);
-      this.heavyArmed = false;
-    }
-    if (this.parked) return;
-    this.parked = true;
-    if (notifyMain) this.sendPark();
+    if (!this.heavyArmed) return;
+    removeEventListener("wheel", this.onUserInput, true);
+    removeEventListener("touchstart", this.onUserInput, true);
+    removeEventListener("pointerdown", this.onUserInput, true);
+    removeEventListener("keydown", this.onUserInput, true);
+    removeEventListener("resize", this.onEnvironment);
+    this.heavyArmed = false;
   }
 
-  private sendPark(): void {
-    if (!this.state.conversationId) return;
-    window.postMessage({
-      channel: NATIVE_NAV_CHANNEL,
-      kind: "park",
-      conversationId: this.state.conversationId,
-      generation: this.state.generation
-    }, location.origin);
-  }
-
-  private resetContext(context: string, firstPage: number): void {
+  private resetContext(context: string, firstOlderRequest = 0): void {
     this.context = context;
-    this.firstPage = firstPage;
+    this.firstOlderRequest = firstOlderRequest;
     this.activeMs = 0;
     this.recoveries = 0;
     this.peakDrift = 0;
-    this.completeSince = 0;
-    this.terminal = false;
-    this.issue = null;
-    this.lastOutcome = null;
+    this.sleepReason = null;
+    this.resetReadyStability();
   }
 
-  private setPhase(phase: string, issue: string | null = null): void {
+  private resetReadyStability(): void {
+    this.readyStableChecks = 0;
+    this.stableRoot = null;
+    this.stableContainer = null;
+    this.stableFound = 0;
+    this.stableCheckedAt = 0;
+  }
+
+  private setPhase(phase: NavigatorPhase): void {
     this.phase = phase;
-    this.issue = issue;
     this.publishDiagnostics();
   }
 
@@ -495,21 +545,24 @@ export class OfficialNavigatorHydrator {
     globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__ = {
       phase: this.phase,
       conversationId: this.state.conversationId,
-      pages: this.state.pages,
-      messages: this.state.messages,
-      capturedPrompts: this.state.prompts,
       expectedPrompts: this.expectedPrompts,
       nativeFound: native.found,
       nativeVisible: native.visible,
-      boundary: this.state.boundary,
-      cursorPresent: this.state.cursorPresent,
-      boosted: this.state.boosted,
+      historyRequests: this.state.historyRequests,
+      olderRequests: this.state.olderRequests,
+      requestInFlight: this.state.requestInFlight,
+      lastRequestKind: this.state.lastRequestKind,
+      lastHttpStatus: this.state.lastHttpStatus,
+      lastRequestDurationMs: this.state.lastRequestDurationMs,
+      lastRequestAt: this.state.lastRequestAt,
+      lastRequestError: this.state.lastRequestError,
       prepareActive: this.prepareEnabled,
-      issue: this.issue ?? this.state.issue,
-      lastOutcome: this.lastOutcome,
+      boosted: this.state.boosted,
       recoveryCount: this.recoveries,
       elapsedActiveMs: Math.round(this.activeMs),
-      maxObservedDriftPx: Math.round(this.peakDrift * 10) / 10
+      maxObservedDriftPx: Math.round(this.peakDrift * 10) / 10,
+      sleepReason: this.sleepReason,
+      readyStableChecks: this.readyStableChecks
     };
   }
 

@@ -4,22 +4,22 @@ export const PREPARE_LEASE_MS = 10_000;
 export const PREPARE_HEARTBEAT_MS = 4_000;
 export const PREPARE_ACK_WAIT_MS = 1_000;
 
-export type HistoryBoundary = "unknown" | "more" | "complete";
-export type HistoryIssue = "http-error" | "capture-unavailable" | "unlinked" | "stalled" | "limit" | null;
+export type HistoryRequestKind = "initial" | "older";
+export type HistoryRequestError = "http-error" | "aborted" | "fetch-error" | null;
 
-export type NativeHistoryState = {
+export type NativeTransportState = {
   conversationId: string | null;
   generation: number;
-  initialVersion: number;
   revision: number;
-  pending: number;
-  pages: number;
-  messages: number;
-  prompts: number;
-  boundary: HistoryBoundary;
-  cursorPresent: boolean;
+  historyRequests: number;
+  olderRequests: number;
+  requestInFlight: boolean;
+  lastRequestKind: HistoryRequestKind | null;
+  lastHttpStatus: number | null;
+  lastRequestDurationMs: number;
+  lastRequestAt: number | null;
+  lastRequestError: HistoryRequestError;
   boosted: boolean;
-  issue: HistoryIssue;
 };
 
 export type PrepareHandshake = {
@@ -37,34 +37,28 @@ export type PrepareLease = {
 
 export type HistoryRequest = {
   conversationId: string;
-  kind: "initial" | "older";
+  kind: HistoryRequestKind;
   before: string | null;
   plural: boolean;
 };
 
-const HISTORY_ISSUES = new Set<HistoryIssue>([
-  null,
-  "http-error",
-  "capture-unavailable",
-  "unlinked",
-  "stalled",
-  "limit"
-]);
-
-export function emptyHistory(conversationId: string | null, generation = 0): NativeHistoryState {
+export function emptyTransportState(
+  conversationId: string | null,
+  generation = 0
+): NativeTransportState {
   return {
     conversationId,
     generation,
-    initialVersion: 0,
     revision: 0,
-    pending: 0,
-    pages: 0,
-    messages: 0,
-    prompts: 0,
-    boundary: "unknown",
-    cursorPresent: false,
-    boosted: false,
-    issue: null
+    historyRequests: 0,
+    olderRequests: 0,
+    requestInFlight: false,
+    lastRequestKind: null,
+    lastHttpStatus: null,
+    lastRequestDurationMs: 0,
+    lastRequestAt: null,
+    lastRequestError: null,
+    boosted: false
   };
 }
 
@@ -185,11 +179,6 @@ export type RouteEvent = {
   generation: number;
 };
 
-export type ParkHandshake = {
-  conversationId: string;
-  generation: number;
-};
-
 export function parsePrepareHandshake(value: unknown): PrepareHandshake | null {
   const message = record(value);
   if (!message || message.kind !== "prepare" || typeof message.enabled !== "boolean") return null;
@@ -209,21 +198,6 @@ export function parseRouteEvent(value: unknown): RouteEvent | null {
   if (message.conversationId != null && !conversationId) return null;
   if (!Number.isSafeInteger(message.generation) || (message.generation as number) < 0) return null;
   return { conversationId, generation: message.generation as number };
-}
-
-export function parseParkHandshake(value: unknown): ParkHandshake | null {
-  const message = record(value);
-  if (!message || message.kind !== "park") return null;
-  const conversationId = identifier(message.conversationId);
-  if (!conversationId || !Number.isSafeInteger(message.generation) || (message.generation as number) < 0) return null;
-  return { conversationId, generation: message.generation as number };
-}
-
-export function acceptParkHandshake(
-  handshake: ParkHandshake,
-  context: { conversationId: string | null; generation: number }
-): boolean {
-  return handshake.conversationId === context.conversationId && handshake.generation === context.generation;
 }
 
 export function acceptPrepareHandshake(
@@ -274,16 +248,23 @@ export function requestCloneInit(request: Request): RequestInit {
   };
 }
 
-export function isNativeHistoryState(value: unknown): value is NativeHistoryState {
+export function isNativeTransportState(value: unknown): value is NativeTransportState {
   const candidate = record(value);
   if (!candidate) return false;
   if (candidate.conversationId !== null && !identifier(candidate.conversationId)) return false;
-  if (candidate.boundary !== "unknown" && candidate.boundary !== "more" && candidate.boundary !== "complete") return false;
-  if (!HISTORY_ISSUES.has(candidate.issue as HistoryIssue) || typeof candidate.cursorPresent !== "boolean") return false;
-  if (typeof candidate.boosted !== "boolean") return false;
-  for (const key of ["generation", "initialVersion", "revision", "pending", "pages", "messages", "prompts"] as const) {
+  if (typeof candidate.requestInFlight !== "boolean" || typeof candidate.boosted !== "boolean") return false;
+  if (candidate.lastRequestKind !== null && candidate.lastRequestKind !== "initial" && candidate.lastRequestKind !== "older") return false;
+  if (candidate.lastRequestError !== null
+    && candidate.lastRequestError !== "http-error"
+    && candidate.lastRequestError !== "aborted"
+    && candidate.lastRequestError !== "fetch-error") return false;
+  if (candidate.lastHttpStatus !== null
+    && (!Number.isSafeInteger(candidate.lastHttpStatus) || (candidate.lastHttpStatus as number) < 100 || (candidate.lastHttpStatus as number) > 599)) return false;
+  if (candidate.lastRequestAt !== null
+    && (!Number.isSafeInteger(candidate.lastRequestAt) || (candidate.lastRequestAt as number) < 0)) return false;
+  for (const key of ["generation", "revision", "historyRequests", "olderRequests", "lastRequestDurationMs"] as const) {
     const number = candidate[key];
-    if (!Number.isSafeInteger(number) || (number as number) < 0 || (number as number) > 1_000_000) return false;
+    if (!Number.isSafeInteger(number) || (number as number) < 0 || (number as number) > Number.MAX_SAFE_INTEGER) return false;
   }
-  return true;
+  return (candidate.olderRequests as number) <= (candidate.historyRequests as number);
 }

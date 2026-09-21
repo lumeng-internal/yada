@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.0.3**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.0.4**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
@@ -12,9 +12,9 @@ Runtime is subtractive: BOOT work may use CPU/network; STEADY must sleep; heavy 
 
 ## Architecture
 
-- `ConversationSync`: the one current-conversation snapshot for Copy All and current-conversation quota turns. Mutation batches coalesce for 250ms; hidden tabs still detect answer completion.
-- `nativeNavigator/mainHook.ts`: narrow document-start MAIN-world fetch wrapper, route events, bounded prepare lease, and parked fast-pass; no `chrome.*` API.
-- `nativeNavigator/hydrator.ts`: isolated PrepareSession that exposes the host pagination sentinel; terminal states park heavy observers until the next route change.
+- `ConversationSync`: the only complete current-conversation truth for Copy All, current-conversation quota turns, and Navigator `expectedPrompts`. Mutation batches coalesce for 250ms; hidden tabs defer only their idle initial read and still detect answer completion.
+- `nativeNavigator/mainHook.ts`: thin document-start MAIN-world fetch wrapper for route events, bounded prepare lease, `num_turns` boost, and request lifecycle signals; it never reads a history response body and has no `chrome.*` API.
+- `nativeNavigator/hydrator.ts`: isolated official-UI loader. It exposes the host pagination sentinel, compares official DOM count with ConversationSync, sleeps on transient unavailability, and parks heavy work after two stable matching checks.
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
 - `QuotaTracker`: live ledger delta + last-known-good baseline + 10-minute stale-only reconciliation; Web Locks so only one tab runs a full 7-day scan; a started scan is not aborted on hidden.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
@@ -35,9 +35,18 @@ Runtime is subtractive: BOOT work may use CPU/network; STEADY must sleep; heavy 
 
 Route 变化只走已有 MAIN `postMessage`。不要新增 `chrome.webNavigation` / tabs 轮询。
 
+Navigator 长期原则：
+
+1. 一个 conversation 只能有一个完整数据真相来源：`ConversationSync`。
+2. MAIN world 不解析完整 ChatGPT history response body。
+3. Navigator 不重建 ConversationSync 已经拥有的数据。
+4. transient unavailable 不等于 terminal。
+5. success 后 complete-and-sleep。
+6. 失败恢复必须事件驱动，不使用固定轮询。
+
 ## Required safety boundaries
 
-- Preserve the original fetch Promise/Response; inspect only a clone. After Navigator parks, history fetch must return to native passthrough.
+- Preserve the exact original fetch Promise/Response. MAIN may observe fulfillment status and timing but must never clone, read, decode, or parse a history response body.
 - Never bridge or persist message bodies, auth data, Cookie, Token, or full payloads.
 - Never scroll, restore-scroll, reload, rewrite a deep link, or manipulate ChatGPT's official Navigator UI.
 - Stop on uncertainty, user input, drift over 8px, unstable layout, streaming, hidden page, route change, or budget exhaustion.

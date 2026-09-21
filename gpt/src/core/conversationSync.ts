@@ -13,6 +13,8 @@ export class ConversationSync {
   private lastError: Error | null = null;
   private readonly listeners = new Set<ConversationListener>();
   private observer: MutationObserver | null = null;
+  private visibilityListening = false;
+  private initialSyncDeferred = false;
   private signalTimer = 0;
   private lastStreamingState = false;
   private readonly seenAssistantMessageIds = new Set<string>();
@@ -32,6 +34,7 @@ export class ConversationSync {
 
   requestSync(_reason: string): Promise<void> {
     if (this.disposed) return Promise.reject(abortError());
+    this.initialSyncDeferred = false;
     this.dirty = true;
     if (this.runningPromise) return this.runningPromise;
     this.runningPromise = Promise.resolve().then(() => this.runLoop());
@@ -47,11 +50,17 @@ export class ConversationSync {
     this.activeConversationId = conversationId;
     this.seenAssistantMessageIds.clear();
     this.lastStreamingState = false;
+    this.initialSyncDeferred = false;
     this.latestSnapshot = null;
     this.lastError = null;
     if (!conversationId) {
       this.dirty = false;
       void this.publish(null);
+      return;
+    }
+    if (document.visibilityState === "hidden") {
+      this.dirty = false;
+      this.initialSyncDeferred = true;
       return;
     }
     this.dirty = true;
@@ -71,6 +80,10 @@ export class ConversationSync {
   }
 
   mountPageObserver(root: ParentNode = document.documentElement): void {
+    if (!this.visibilityListening) {
+      document.addEventListener("visibilitychange", this.onVisibility);
+      this.visibilityListening = true;
+    }
     if (this.observer || typeof MutationObserver === "undefined") return;
     this.observer = new MutationObserver((records) => {
       for (const record of records) {
@@ -99,6 +112,11 @@ export class ConversationSync {
     this.dirty = false;
     this.observer?.disconnect();
     this.observer = null;
+    if (this.visibilityListening) {
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.visibilityListening = false;
+    }
+    this.initialSyncDeferred = false;
     this.listeners.clear();
     this.latestSnapshot = null;
     this.runningPromise = null;
@@ -179,14 +197,24 @@ export class ConversationSync {
     this.lastStreamingState = streaming;
     if (streaming) return;
 
-    if (wasStreaming) void this.requestSync("streaming-end");
+    if (wasStreaming) {
+      this.initialSyncDeferred = false;
+      void this.requestSync("streaming-end");
+    }
 
     for (const id of collectStableAssistantMessageIds()) {
       if (this.seenAssistantMessageIds.has(id)) continue;
       this.seenAssistantMessageIds.add(id);
+      this.initialSyncDeferred = false;
       void this.requestSync("new-assistant");
     }
   }
+
+  private readonly onVisibility = (): void => {
+    if (document.visibilityState !== "visible" || !this.initialSyncDeferred || !this.activeConversationId) return;
+    this.initialSyncDeferred = false;
+    void this.requestSync("visible");
+  };
 }
 
 export { ConversationSync as ConversationRepository };

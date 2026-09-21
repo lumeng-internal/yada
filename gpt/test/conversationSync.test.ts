@@ -181,6 +181,28 @@ describe("ConversationSync", () => {
     sync.dispose();
   });
 
+  it("defers only the initial hidden-tab read until visibility or explicit demand", async () => {
+    let reads = 0;
+    let visibility: DocumentVisibilityState = "hidden";
+    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+    const sync = new ConversationSync({
+      async readConversation(id) {
+        reads += 1;
+        return snapshotFor(id);
+      }
+    });
+    sync.mountPageObserver(document.body);
+    sync.setActiveConversation("conversation-1");
+    await flushMicrotasks(8);
+    expect(reads).toBe(0);
+    visibility = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await flushMicrotasks(8);
+    expect(reads).toBe(1);
+    sync.dispose();
+    delete (document as unknown as { visibilityState?: DocumentVisibilityState }).visibilityState;
+  });
+
   it("syncs once when streaming ends and ignores already seen assistant ids", async () => {
     vi.useFakeTimers();
     let reads = 0;

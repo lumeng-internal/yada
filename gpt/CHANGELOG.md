@@ -1,5 +1,16 @@
 # Changelog
 
+## v4.0.4 - 2026-09-22
+
+- Navigator 收口为单一完整对话真相：`ConversationSync.activeTurns.length` 是唯一 `expectedPrompts`；删除 Navigator 自建的 message/branch/cursor/boundary/explicit-root `HistoryChain` 与 `metadata.ts`。
+- MAIN hook 收敛为 route、合法 history GET 的 `num_turns` boost 与 start/end/error lifecycle；不再 clone、读取、decode 或 `JSON.parse` history Response，页面继续得到原始 Promise/Response。
+- 删除 `captureActive` 与 park handshake。普通 HTTP、DOM、count mismatch 或 sentinel 暂时无请求进入 event-driven sleeping；同 conversation 新 transport event、snapshot、重新可见或 route reset 可自动恢复。
+- ready 合同改为 `expectedPrompts > 0`、official count 精确匹配、真实可见，并在同 root/container 上间隔约 300ms 稳定两次；`expectedPrompts=0` 永远 waiting。
+- 完整 conversation 单请求默认 timeout 从 10 秒提高到 30 秒；429 仍只等待后重试一次，5xx/timeout 不增加无限重试。
+- hidden idle tab 不主动执行首次完整 snapshot；streaming end、新 stable assistant、Copy All、额度手动刷新或重新 visible 仍通过 ConversationSync 读取。
+- Quota、Prompt、Copy All、Toolbar 与 Theme 冻结；不加入 Heatmap 或新依赖。
+- 测试包 `ChatGPT-Yada-v4.0.4-official-only-UNVERIFIED.zip`；MacBook 固定 10 个长对话真实验收待执行。
+
 ## v4.0.3 - 2026-09-20
 
 - 减法式性能收口：BOOT 完成官方 Navigator 准备后进入 STEADY 休眠；提示词与额度详情改为第一次点击才创建。

@@ -1,4 +1,4 @@
-# ChatGPT Yada 4.0.3 验收
+# ChatGPT Yada 4.0.4 验收
 
 ## 本轮工程门禁
 
@@ -18,21 +18,31 @@ npm audit --omit=dev
 
 ```text
 MAC_MINI_PRODUCT_TEST = NOT_RUN_BY_DESIGN
-MACBOOK_15_TAB_ACCEPTANCE = PENDING
+MACBOOK_10_CHAT_NAV_ACCEPTANCE = PENDING
 ```
 
 ## MacBook 手工验收
 
-15 标签性能：
+固定 10 个长对话与多标签性能：
 
-1. 更新至 4.0.3。
-2. 打开 10～15 个 GPT。
-3. 刷新一个长对话，确认 Navigator 正常出现。
-4. Navigator 出现后继续正常工作、滚动、输入，确认无感。
-5. 让 3 个标签同时生成回答，当前操作标签仍然顺畅。
-6. 快速切换多个标签 3～5 分钟，之后确认「上次完整同步」最终可以回到最近时间。
-7. 打开三环，确认新 UI：健康状态只有三组预计剩余和上次完整同步，没有「本地估算」或「历史同步完整」。
-8. 提示词 / 复制全部回归。
+1. 更新至 4.0.4。
+2. 固定同一批 10 个真实长对话，每个只刷新一次；不要主动滚动。
+3. 逐个记录第一次刷新是否出现 Navigator、是否需要第二次刷新、最终是否失败，以及大致出现时间。
+4. 逐个记录是否出现由 Yada 引起的“页面没有响应”；目标为 0。
+5. 同时保留 10～15 个 GPT 标签，确认没有明显额外卡顿；Navigator ready 后继续正常工作、滚动、输入。
+6. 让 3 个标签同时生成回答，当前操作标签仍然顺畅；hidden streaming 完成后数据仍会同步。
+7. 快速切换多个标签 3～5 分钟，之后确认「上次完整同步」最终可以回到最近时间。
+8. 三环、提示词与复制全部回归；Quota 行为应与 4.0.3 一致。
+
+记录表：
+
+```text
+第一次刷新成功：N/10
+需要第二次刷新：N
+最终失败：N
+页面“无响应”：N
+Navigator 平均出现时间：约 N 秒
+```
 
 导航：
 
@@ -64,4 +74,4 @@ MACBOOK_15_TAB_ACCEPTANCE = PENDING
 
 1. 复制当前活动分支 Markdown 与真实时间戳仍正常。
 
-验收前不要生成正式 `ChatGPT-Yada-v4.0.3-dist_chrome.zip`。
+验收前不要生成正式 `ChatGPT-Yada-v4.0.4-dist_chrome.zip`，不要 merge main。
