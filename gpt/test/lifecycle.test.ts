@@ -319,14 +319,14 @@ describe("quota popover lazy and hidden dirty", () => {
     expect(text).toContain("GPT-6 Pro");
     expect(text).toContain("7days");
     expect(text).toContain("86%");
-    expect(text).toContain("预计剩余 172 / 200");
+    expect(text).toContain("已用 28 / 200");
     expect(text).toContain("GPT-5.6 Sol Pro");
     expect(text).toContain("24h");
     expect(text).toContain("76%");
-    expect(text).toContain("预计剩余 129 / 170");
+    expect(text).toContain("已用 41 / 170");
     expect(text).toContain("GPT-6 Pro+5.6 Sol Pro");
     expect(text).toContain("79%");
-    expect(text).toContain("预计剩余 158 / 200");
+    expect(text).toContain("已用 69 / 200");
     expect(text).toContain("上次完整同步：刚刚");
     expect(text).not.toContain("本地估算，不是 ChatGPT 官方余额");
     expect(text).not.toContain("只统计个人 Chat，不统计 Work 和 Codex");

@@ -8,8 +8,8 @@ import { GPT6_PRO, SOL_PRO } from "../src/quota/vibebar/allowances";
 import { QUOTA_INDICATOR_DEBOUNCE_MS, QUOTA_POPOVER_HOST_ID, QuotaIndicator, type QuotaStateSender } from "../src/ui/quotaIndicator";
 import { HEATMAP_CELL_SIZE, HEATMAP_GAP, HEATMAP_RADIUS } from "../src/ui/quotaHeatmap";
 
-const NOW = new Date(2026, 8, 21, 20, 5, 0, 0).getTime();
-const ANCHOR = new Date(2026, 8, 21, 21, 0, 0, 0).getTime();
+const NOW = new Date(2026, 8, 22, 20, 5, 0, 0).getTime();
+const ANCHOR = new Date(2026, 8, 22, 21, 0, 0, 0).getTime();
 
 function event(id: string, createdAt: number, model: string, classification: QuotaUsageEvent["classification"] = "personal"): QuotaUsageEvent {
   return { id, accountKey: "account", createdAt, model, classification };
@@ -126,6 +126,12 @@ describe("on-demand quota heatmap UI", () => {
     expect(root.querySelectorAll('[data-quota-heatmap="pro_daily"] g[data-heatmap-row]')).toHaveLength(1);
     expect(root.querySelector('[data-quota-heatmap="gpt6_pro_weekly"] [data-heatmap-axis][data-heatmap-column="0"]')?.textContent).toBe("21");
     expect(root.querySelectorAll('[data-quota-heatmap="gpt6_pro_weekly"] [data-heatmap-axis]')).toHaveLength(5);
+    expect([...root.querySelectorAll('[data-quota-heatmap="gpt6_pro_weekly"] [data-heatmap-row-label]')]
+      .map((label) => label.textContent)).toEqual(["09/16", "09/17", "09/18", "09/19", "09/20", "09/21", "09/22"]);
+    expect([...root.querySelectorAll('[data-quota-heatmap="sol_pro_daily"] [data-heatmap-row-label]')]
+      .map((label) => label.textContent)).toEqual(["09/22"]);
+    expect([...root.querySelectorAll('[data-quota-heatmap="pro_daily"] [data-heatmap-row-label]')]
+      .map((label) => label.textContent)).toEqual(["09/22"]);
     expect(root.textContent).not.toMatch(/1–2|3–5|6–10|11\+|少\s*→\s*多|Low|High|Legend/);
     expect(root.querySelector("[data-heatmap-legend]")).toBeNull();
     const first = root.querySelector<SVGRectElement>('[data-quota-heatmap="gpt6_pro_weekly"] [data-heatmap-cell]')!;
@@ -149,7 +155,7 @@ describe("on-demand quota heatmap UI", () => {
     const cell = root.querySelector<SVGRectElement>('[data-quota-heatmap="gpt6_pro_weekly"] [data-heatmap-cell]')!;
     cell.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
     expect(tooltip.hidden).toBe(false);
-    expect(tooltip.textContent).toBe("9月14日 周一 21:00 使用12次");
+    expect(tooltip.textContent).toBe("9月15日 周二 21:00 使用12次");
     expect(tooltip.textContent).not.toContain("\n");
     cell.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
     expect(tooltip.hidden).toBe(true);

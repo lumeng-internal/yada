@@ -79,8 +79,7 @@
   // src/quota/presentation.ts
   function metricRemainingLabel(metric) {
     if (!metric) return "当前套餐无此桶";
-    if (metric.estimatedRemaining == null) return `已记录 ${metric.used} / ${metric.limit}`;
-    return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+    return `已用 ${metric.used} / ${metric.limit}`;
   }
   function metricPercentLabel(metric) {
     if (!metric || metric.remainingRatio == null) return "—";
@@ -235,7 +234,7 @@
       root.append(metricBlock("GPT-5.6 Sol Pro · 过去 24 小时估算", snapshot.solProDaily, snapshot));
       root.append(metricBlock("GPT-6 Pro+5.6 Sol Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
     }
-    if (snapshot.syncStatus === "ready") root.append(el("p", "note", "预计剩余"));
+    if (snapshot.syncStatus === "ready") root.append(el("p", "note", "已用"));
     else root.append(el("p", "note", "历史补齐前不估算剩余"));
     root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
     root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));

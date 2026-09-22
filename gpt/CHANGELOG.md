@@ -1,5 +1,11 @@
 # Changelog
 
+## v4.1.1 - 2026-09-22
+
+- 7×24 热力图左侧日期改为对应行的历史使用日期；滚动起点、小时列、Tooltip、颜色与两张 24h 图保持不变。
+- 三组额度文案统一为“已用 X / 上限”，X 直接使用现有 `metric.used`；环形与百分比继续显示剩余比例。
+- 测试包 `ChatGPT-Yada-v4.1.1-official-only-UNVERIFIED.zip`；不执行 PR、CI、merge 或 Release。
+
 ## v4.1.0 - 2026-09-22
 
 - 新增 Pro 使用量滚动热力图：GPT-6 Pro 为 7×24，Sol Pro 与组合桶为 1×24；第一格固定从下一个本地完整小时开始，Tooltip 显示对应历史使用小时和精确次数。

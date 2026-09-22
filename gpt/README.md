@@ -1,8 +1,8 @@
 # ChatGPT Yada
 
-ChatGPT Yada 4.1.0 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
+ChatGPT Yada 4.1.1 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
 
-4.1.0 保持 4.0.4 的 Navigator 与多标签运行方式：ConversationSync 提供唯一完整对话真相，MAIN 只发请求生命周期信号，isolated hydrator 只驱动 ChatGPT 官方分页并验证官方 UI；成功后自动休眠。hidden idle tab 不主动发起首次完整对话读取；完整额度历史同一时间最多一个标签校准。
+4.1.1 保持 4.1.0 的 Navigator、额度算法与多标签运行方式，只调整 7×24 热力图日期标签与已用额度文案。
 
 Yada 不再绘制右侧导航条，也没有导航预览、绿色模式点或代理跳转。页面工具栏只有：`Pro 额度三环 | 复制全部 | 提示词`。
 
@@ -22,7 +22,7 @@ message / messageId 深链保持原样，Yada 不介入 hydration。普通网络
 
 需要已登录 ChatGPT 的 Chrome 或 Edge。
 
-1. 加载 `gpt/dist_chrome`，或解压 `ChatGPT-Yada-v4.1.0-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
+1. 加载 `gpt/dist_chrome`，或解压 `ChatGPT-Yada-v4.1.1-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
 2. 刷新 ChatGPT 标签页。
 
 该包是手工验收包，不是正式 Release。Mac mini 不执行产品测试；MacBook Edge 与真实 10～15 标签的验收状态见 `QA.md`。
@@ -42,7 +42,7 @@ git diff --check
 npm run package
 ```
 
-旧 4.0.3 与 4.0.4 测试包保留，新的 4.1.0 包不覆盖旧包。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
+旧测试包保留，新的 4.1.1 包不覆盖旧包。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
 
 不运行 Mac mini 浏览器验收、GitHub Actions、PR 或 Release。
 

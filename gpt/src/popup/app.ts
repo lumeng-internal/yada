@@ -125,7 +125,7 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
     root.append(metricBlock("GPT-6 Pro+5.6 Sol Pro · 过去 24 小时合计估算", snapshot.combinedDaily, snapshot));
   }
 
-  if (snapshot.syncStatus === "ready") root.append(el("p", "note", "预计剩余"));
+  if (snapshot.syncStatus === "ready") root.append(el("p", "note", "已用"));
   else root.append(el("p", "note", "历史补齐前不估算剩余"));
   root.append(el("p", "note", `已记录 ${snapshot.recordedCount}`));
   root.append(el("p", "note", `未分类轮次 ${snapshot.unclassifiedTurns}`));

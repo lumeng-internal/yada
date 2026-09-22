@@ -55,6 +55,5 @@ export async function applyQuotaIcon(snapshot: QuotaSnapshot): Promise<void> {
 
 function metricLine(label: string, metric: QuotaSnapshot["gpt6ProWeekly"]): string {
   if (!metric) return `${label}：当前套餐无此桶`;
-  if (metric.estimatedRemaining == null) return `${label}：已记录 ${metric.used}，历史同步不完整`;
-  return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  return `${label}：已用 ${metric.used} / ${metric.limit}`;
 }

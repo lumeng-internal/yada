@@ -8,8 +8,7 @@ export type QuotaBucketView = {
 
 export function metricRemainingLabel(metric: QuotaMetric | null): string {
   if (!metric) return "当前套餐无此桶";
-  if (metric.estimatedRemaining == null) return `已记录 ${metric.used} / ${metric.limit}`;
-  return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+  return `已用 ${metric.used} / ${metric.limit}`;
 }
 
 export function metricPercentLabel(metric: QuotaMetric | null): string {

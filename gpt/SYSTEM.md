@@ -1,6 +1,6 @@
 # ChatGPT Yada 系统
 
-版本：**4.1.0**。
+版本：**4.1.1**。
 
 ```text
 ChatGPT Host
@@ -107,7 +107,7 @@ Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts�
 - Ledger 仍保留 14 天事件；Calculator 依 now 的 24h / 7d 滚动筛选，chrome.alarms / nextAlarmAt 保持原路径。滚动恢复不依赖 full reconcile。
 - 账号不明的临时网络错误不会被当成账号切换；真正 identity 变化重置 baseline。账本缺失、结构损坏或不兼容版本不沿用完整状态。
 
-额度状态仍为 `loading | backfill | ready | partial | error`，仅 first baseline 未建立时使用补齐/错误显示。健康详情只显示三组预计剩余和上次完整同步；异常状态仍说明首次同步、失败或不完整原因。三环 Canvas 常驻；详情 Portal 第一次点击才创建。
+额度状态仍为 `loading | backfill | ready | partial | error`，仅 first baseline 未建立时使用补齐/错误显示。健康详情只显示三组已用次数、剩余百分比和上次完整同步；异常状态仍说明首次同步、失败或不完整原因。三环 Canvas 常驻；详情 Portal 第一次点击才创建。
 
 `quota/get-heatmap` 只在健康、已知套餐、个人 Pro 可计费的详情打开状态请求。Service Worker 读取现有 Ledger，复用 `allowances(plan)` 的模型、周期与 Pro / ProLite 桶，在内存中按下一本地整点聚合；content 只接收 release hour、对应 usage hour、count 与 bucket 元数据，最多 216 cells，不接收 raw events。SVG renderer、共享 Tooltip 和整点 timer 在详情关闭时销毁。
 

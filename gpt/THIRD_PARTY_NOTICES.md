@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 4.1.0
+# Third-party notices — ChatGPT Yada 4.1.1
 
 ## Vibe Bar
 
@@ -83,7 +83,7 @@ Reference only for MV3 service-worker icon updates and popup/background synchron
 
 ## Historical LunaTOC note
 
-LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.1.0.
+LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.1.1.
 
 ## SortableJS
 

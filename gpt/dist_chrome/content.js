@@ -5105,8 +5105,7 @@ ${timestamp ? `${timestamp}
   // src/quota/presentation.ts
   function metricRemainingLabel(metric) {
     if (!metric) return "当前套餐无此桶";
-    if (metric.estimatedRemaining == null) return `已记录 ${metric.used} / ${metric.limit}`;
-    return `预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+    return `已用 ${metric.used} / ${metric.limit}`;
   }
   function metricPercentLabel(metric) {
     if (!metric || metric.remainingRatio == null) return "—";
@@ -5176,8 +5175,7 @@ ${timestamp ? `${timestamp}
   }
   function metricLine(label, metric) {
     if (!metric) return `${label}：当前套餐无此桶`;
-    if (metric.estimatedRemaining == null) return `${label}：已记录 ${metric.used}，历史同步不完整`;
-    return `${label}：预计剩余 ${metric.estimatedRemaining} / ${metric.limit}`;
+    return `${label}：已用 ${metric.used} / ${metric.limit}`;
   }
 
   // src/quota/types.ts
@@ -5342,7 +5340,7 @@ ${timestamp ? `${timestamp}
     const grid = svgElement("g");
     grid.setAttribute("transform", `translate(${ROW_LABEL_WIDTH}, ${AXIS_HEIGHT})`);
     for (let row = 0; row < bucket.rows; row += 1) {
-      const labelDate = new Date(bucket.firstReleaseHour + row * 24 * HOUR_MS);
+      const labelDate = new Date(bucket.rows === 7 ? bucket.cells[(row + 1) * bucket.columns - 1]?.usageHourStart ?? bucket.firstReleaseHour + row * 24 * HOUR_MS : bucket.firstReleaseHour + row * 24 * HOUR_MS);
       const rowLabel = svgElement("text");
       rowLabel.dataset.heatmapRowLabel = "true";
       rowLabel.setAttribute("x", String(-HEATMAP_GAP));

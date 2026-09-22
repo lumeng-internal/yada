@@ -186,7 +186,9 @@ function renderSvg(bucket: QuotaHeatmapBucket): SVGSVGElement {
   const grid = svgElement("g");
   grid.setAttribute("transform", `translate(${ROW_LABEL_WIDTH}, ${AXIS_HEIGHT})`);
   for (let row = 0; row < bucket.rows; row += 1) {
-    const labelDate = new Date(bucket.firstReleaseHour + row * 24 * HOUR_MS);
+    const labelDate = new Date(bucket.rows === 7
+      ? bucket.cells[(row + 1) * bucket.columns - 1]?.usageHourStart ?? bucket.firstReleaseHour + row * 24 * HOUR_MS
+      : bucket.firstReleaseHour + row * 24 * HOUR_MS);
     const rowLabel = svgElement("text");
     rowLabel.dataset.heatmapRowLabel = "true";
     rowLabel.setAttribute("x", String(-HEATMAP_GAP));

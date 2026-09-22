@@ -155,6 +155,7 @@ describe("inline toolbar quota rings", () => {
     expect(mounted.canvas.dataset.quotaInner).toBe(String(rings.inner));
     expect(mounted.canvas.dataset.quotaCenter).toBe(rings.center ?? "");
     expect(mounted.button.title).toBe(snapshotTitle(snapshot));
+    expect(mounted.button.title).toContain(`GPT-6 Pro：已用 ${snapshot.gpt6ProWeekly?.used} / ${snapshot.gpt6ProWeekly?.limit}`);
     expect(document.getElementById(QUOTA_POPOVER_HOST_ID)).toBeNull();
     mounted.button.click();
     const popover = popoverOf()!;
@@ -164,9 +165,9 @@ describe("inline toolbar quota rings", () => {
     expect(popover.textContent).toContain("GPT-5.6 Sol Pro");
     expect(popover.textContent).toContain("GPT-6 Pro+5.6 Sol Pro");
     expect(popover.textContent).not.toContain("两个 Pro");
-    expect(popover.textContent).toContain(`预计剩余 ${snapshot.gpt6ProWeekly?.estimatedRemaining} / ${snapshot.gpt6ProWeekly?.limit}`);
-    expect(popover.textContent).toContain(`预计剩余 ${snapshot.solProDaily?.estimatedRemaining} / ${snapshot.solProDaily?.limit}`);
-    expect(popover.textContent).toContain(`预计剩余 ${snapshot.combinedDaily?.estimatedRemaining} / ${snapshot.combinedDaily?.limit}`);
+    expect(popover.textContent).toContain(`已用 ${snapshot.gpt6ProWeekly?.used} / ${snapshot.gpt6ProWeekly?.limit}`);
+    expect(popover.textContent).toContain(`已用 ${snapshot.solProDaily?.used} / ${snapshot.solProDaily?.limit}`);
+    expect(popover.textContent).toContain(`已用 ${snapshot.combinedDaily?.used} / ${snapshot.combinedDaily?.limit}`);
     expect(popover.textContent).not.toContain("本地估算，不是 ChatGPT 官方余额");
     expect(popover.textContent).not.toContain("只统计个人 Chat，不统计 Work 和 Codex");
     expect(popover.textContent).not.toContain("历史同步完整");
