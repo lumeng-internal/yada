@@ -1,5 +1,15 @@
 # Changelog
 
+## v4.1.2 - 2026-09-24
+
+- 工具栏 Shell 最先出现。额度、Navigator、ConversationSync 或提示词任一模块失败，不再让整个 Yada 消失。
+- 新回答优先只读最近 16 turns；完整分页只用于首次快照、复制全部、手动刷新和无法安全合并的增量。
+- 长对话打开时先等 ChatGPT history 传输完成和一次空闲，再读完整快照，然后 Navigator 才挂重型 observer。
+- 删除每 10 分钟的七天历史完整核对。已有基线后自动核对不少于 24 小时，每次只跑一个 detail budget 为 6 的 slice，并持久化阶段 cache。
+- `quota/get-state` 改为纯读。相同账本、相同 limits、相同三环展示不再重复写 storage 或重画图标。
+- 网页和 popup 三环直接画在 HTML Canvas 上；浏览器 Action 图标仍用 OffscreenCanvas。
+- 测试包 `ChatGPT-Yada-v4.1.2-official-only-UNVERIFIED.zip`。MacBook 真机性能验收仍为 PENDING。不执行 PR、CI、merge 或 Release。
+
 ## v4.1.1 - 2026-09-22
 
 - 7×24 热力图左侧日期改为对应行的历史使用日期；滚动起点、小时列、Tooltip、颜色与两张 24h 图保持不变。

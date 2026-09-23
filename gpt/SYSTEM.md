@@ -1,6 +1,6 @@
 # ChatGPT Yada 系统
 
-版本：**4.1.1**。
+版本：**4.1.2**。
 
 ```text
 ChatGPT Host
@@ -91,19 +91,24 @@ Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts�
 
 ## 当前对话与额度
 
-`ConversationSync` 是完整 current conversation 的唯一真相，同时服务 Navigator expectedPrompts、Copy All 与当前会话 quota turns。完整 conversation 单请求默认 timeout 为 30 秒；route/abort signal 立即 abort，429 仍最多等待后重试一次，5xx/timeout 不建立无限重试。额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。MutationObserver 仍挂在 `document.documentElement`，但 callback 只调度 250ms debounce；streaming 中不读完整 Conversation API，streaming 结束或出现新的 stable assistant id 才 `requestSync()`。hidden idle tab 不主动执行首次完整 snapshot；streaming end、新 stable assistant、Copy All、额度手动刷新或重新 visible 仍会读取。
+`ConversationSync` 是完整 current conversation 的唯一真相，同时服务 Navigator expectedPrompts、Copy All 与当前会话 quota turns。普通新回答走最近增量（`num_turns=16` 的一页，不翻旧页）；只有首次快照、复制全部、手动刷新、合并无法证明连续时才完整分页。同一时刻只有一个读取，多个 recent 合并，full 进行中覆盖 recent，recent 进行中最多追加一次 full。route 变化 abort 旧 generation，旧结果不发布。`publish` 立即更新 snapshot，listener 互相隔离，不等待对方的 Promise。完整请求的 timeout 覆盖 `fetch`、body 下载和 `response.json()`；外部 abort 在 body 阶段仍然有效。429 最多重试一次，5xx/timeout 不走 legacy endpoint，也不无限重试。
 
-`QuotaTracker` 直接维护 history timer / flight / abort。账号/套餐内存缓存 30 分钟，model limits 内存缓存 10 分钟；手动刷新 bypass。实时 quotaTurns 仍然每次回答完成后立即写 Ledger。
+页面打开顺序是：Toolbar Shell 立即可见，然后等待当前对话 history resource 的 `responseEnd` 和一次 idle，再做首次 Full；15 秒内没有传输完成信号时只 fallback 一次。复制全部不等待这个 Boot Gate。`expectedPrompts <= 0` 时 Navigator 不挂 whole-document observer。虚拟列表重新挂载已知 assistant id 不发请求。
 
-- 实时路径：ConversationSync → 当前聊天 quota turns → Ledger → Calculator → QuotaSnapshot，写入 live events 后才读取可选 model limits。Copy All 与 ConversationSync 不变。
-- 首次没有 complete + success timestamp 时同步最近 7 天。已有旧版 complete、但缺少时间戳时保留数字并校准；不伪造上次成功时间。
-- fresh mount/reload 只读取持久状态，不调用完整 history reader；`lastHistorySuccessAt + 10min` 到期后后台校准。hidden 不能启动新的完整 history scan；已经拿到 Web Lock 并开始的 scan 不因 hidden abort。失败后约 10 分钟再试，manual refresh 忽略 TTL 并立即同步当前会话。
-- 跨标签使用 `navigator.locks` 独占锁 `chatgpt-yada:quota-history-reconcile`，`ifAvailable: true`。拿不到锁时不报错、不清 last-good，把 `nextHistoryAt` 推后 60 秒。没有 Web Locks 时回退为只有 visible tab 能开始完整校准。
+额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。MutationObserver 仍挂在 `document.documentElement`，但 callback 只调度 250ms debounce。hidden 页面不启动首次 Full；没有 baseline 时，回答完成仍允许一次 Full，避免后台回答漏记。
+
+`QuotaTracker` 直接维护一个可取消的 slice timer / flight / abort。账号/套餐内存缓存 30 分钟，model limits 内存缓存 10 分钟；这不是历史扫描周期。手动刷新 bypass 当前对话缓存。实时 quotaTurns 仍然每次回答完成后立即写 Ledger，不依赖七天历史。
+
+- 实时路径：Recent 或 Full → 当前聊天 quota turns → Ledger → Calculator → QuotaSnapshot。写入 live events 后才读取可选 model limits；limits 与上次指纹相同则不再写第二次。
+- 自动日常核对最短 24 小时，且只在可见、非 streaming、Navigator 不在 preparing/heavy、没有刚发生的用户输入时启动。默认只扫非归档列表，沿用 per-conversation `updatedAt`；revision 未变不读详情。
+- 首次没有 baseline、账号变化、账本或 cache 不兼容、用户手动刷新，才同时扫描普通和 archived。不每 24 小时强制扫 archived。
+- 一次调度机会只跑一个 slice。浏览器 detail budget 是 6。命中 budget 立即停止本 slice，保存已验证 cache，不把主动停止记成永久失败，也不在 1.5 秒后连跑 20 轮。
+- 不完整 slice 持久化 history cache 和很小的 maintenance 状态，不覆盖 `historyComplete`、`lastHistorySuccessAt` 或正式完整 events。完整范围成功后一次提交 events、cache 和 success 状态。
+- hidden 取消尚未开始的 slice。已经开始的小 slice 只在 dispose 时 abort。Web Lock 仍保证多个标签只有一个维护任务。
+- `quota/get-state` 只读 Snapshot，不重画图标、不重建 alarm、不广播。图标和广播还有一层展示指纹；rings、标题和下一 alarm 时间都不变时不重复 setIcon / setTitle / broadcast。
+- 跨标签使用 `navigator.locks` 独占锁 `chatgpt-yada:quota-history-reconcile`，`ifAvailable: true`。拿不到锁时不报错、不清 last-good，把下一次机会推后 60 秒。
 - `historyComplete` 表达可信 baseline 是否已建立；已建立后 syncStatus 保持 ready。后台失败仅更新 `lastHistoryAttemptAt` / `lastHistoryError`，保留最后完整数据与 success time。
-- 各 slice 复用内存 staging cache；完整成功后由 service worker 串行账本写入一次 `chrome.storage.local.set`，同时提交合并后的 events、history cache、history-wide unclassified 与三个时间/错误字段。并发 live events 保留，按 accountKey + eventId 去重；失败不发布部分结果。
-- `lastHistorySuccessAt` 是完整提交时间；`lastHistoryAttemptAt` 是该轮开始时间；`lastHistoryError` 成功清空。get-state / popup / render 不写这三个字段。updatedLabel 显示真实上次完整同步时间与最近失败提示。
-- 保持 7 天窗口、pageSize 50、maxPages 4、detailBudget 24、25 秒 reader 调度预算、history list 45 秒超时、其他 API 15 秒超时和原 detail 逻辑。
-- budget/deadline 且成功读取了新 detail 才允许下一个数据 slice，最多 20 pass。timeout/network/408/500/502/503/504 单独最多两次 retry，退避 1.5 秒和 5 秒；永久错误立即结束。
+- 保持 7 天窗口、pageSize 50、maxPages 4、25 秒 reader 调度预算、history list 45 秒超时、其他 API 15 秒超时。手动刷新先等当前对话账本写完，再把 full repair 排成后续 slice，不假装几十秒内扫完七天。
 - Ledger 仍保留 14 天事件；Calculator 依 now 的 24h / 7d 滚动筛选，chrome.alarms / nextAlarmAt 保持原路径。滚动恢复不依赖 full reconcile。
 - 账号不明的临时网络错误不会被当成账号切换；真正 identity 变化重置 baseline。账本缺失、结构损坏或不兼容版本不沿用完整状态。
 

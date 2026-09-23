@@ -1,4 +1,4 @@
-# ChatGPT Yada 4.1.1 验收
+# ChatGPT Yada 4.1.2 验收
 
 ## 本轮工程门禁
 
@@ -25,7 +25,7 @@ MACBOOK_10_CHAT_NAV_ACCEPTANCE = PENDING
 
 固定 10 个长对话与多标签性能：
 
-1. 更新至 4.1.1。
+1. 更新至 4.1.2。
 2. 固定同一批 10 个真实长对话，每个只刷新一次；不要主动滚动。
 3. 逐个记录第一次刷新是否出现 Navigator、是否需要第二次刷新、最终是否失败，以及大致出现时间。
 4. 逐个记录是否出现由 Yada 引起的“页面没有响应”；目标为 0。
@@ -60,8 +60,8 @@ Navigator 平均出现时间：约 N 秒
 3. 点击三环应出现约 312px 的精简详情卡，不得被 Header 裁成白条。
 4. Escape、外部点击、route change 均可关闭详情。
 5. 完整同步后立即 reload，不应再次进入“正在补齐”，数字继续显示。
-6. 保持页面打开超过 10 分钟，旧额度持续显示，后台静默校准；hidden 不启动新的完整扫描，已开始的扫描可完成。
-7. 刷新失败不隐藏已用次数；显示上次完整同步时间与最近失败提示。手动刷新忽略 10 分钟 TTL。
+6. 保持页面打开超过 10 分钟，不应再出现大约 10 分钟一次的规律卡顿；旧额度持续显示。hidden 不启动新的历史 slice。
+7. 刷新失败不隐藏已用次数；显示上次完整同步时间与最近失败提示。手动刷新只表示完整修复已开始，不表示七天扫描已经结束。
 8. 不点击三环时正常使用多个 GPT，确认没有热力图 SVG、Tooltip、小时 timer 或新增卡顿。
 9. 点击三环，健康 Pro 状态应显示 168 + 24 + 24 个格子；当前时间若为 20:05，第一列小时应为 21。
 10. 7×24 图左侧日期必须与各行 Tooltip 的历史使用日期一致；两张 24h 图保持原显示。Hover 任一格，Tooltip 必须只有一行：`9月18日 周五 20:00 使用12次`；不得显示模型、释放说明或第二行。
@@ -80,4 +80,9 @@ Navigator 平均出现时间：约 N 秒
 
 1. 复制当前活动分支 Markdown 与真实时间戳仍正常。
 
-本轮只使用 `ChatGPT-Yada-v4.1.1-official-only-UNVERIFIED.zip`，不要生成正式 Release 包，不要 merge main。
+本轮只使用 `ChatGPT-Yada-v4.1.2-official-only-UNVERIFIED.zip`，不要生成正式 Release 包，不要 merge main。
+
+```text
+MAC_MINI_ENGINEERING = COMPLETE
+MACBOOK_REAL_PERFORMANCE_ACCEPTANCE = PENDING
+```
