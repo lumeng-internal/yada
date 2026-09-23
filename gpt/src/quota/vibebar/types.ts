@@ -70,6 +70,7 @@ export type ChatGPTChatHistorySummary = {
   cancelled: boolean;
   hitDetailBudget: boolean;
   hitDeadline: boolean;
+  needsContinuation?: boolean;
 };
 
 export type ChatGPTChatHistoryCache = {

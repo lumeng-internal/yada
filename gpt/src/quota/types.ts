@@ -4,6 +4,15 @@ export type QuotaCoverage = "partial" | "complete-local" | "degraded";
 
 export type QuotaClassification = "personal" | "work" | "unknown" | "temporary";
 export type QuotaSyncStatus = "loading" | "backfill" | "ready" | "partial" | "error";
+export type HistoryMaintenanceMode = "daily" | "full";
+
+export type HistoryMaintenance = {
+  pending: boolean;
+  mode: HistoryMaintenanceMode;
+  attemptStartedAt?: number;
+  lastIncrementalSuccessAt?: number;
+  lastFullSuccessAt?: number;
+};
 
 export type QuotaUsageEvent = {
   id: string;
@@ -45,6 +54,7 @@ export type QuotaSnapshot = {
   lastHistorySuccessAt?: number;
   lastHistoryAttemptAt?: number;
   lastHistoryError?: string | null;
+  historyMaintenance?: HistoryMaintenance;
   coverageLabel: "完整" | "历史估算" | "数据不完整";
   tightestRemainingPercent: number | null;
   personalProEligible: boolean;
@@ -92,6 +102,7 @@ export type QuotaPersistedState = {
   lastHistoryError?: string | null;
   // History-wide unresolved turns; only a completed reader pass may update this count.
   unclassifiedTurns: number;
+  historyMaintenance?: HistoryMaintenance;
   lastSnapshot?: QuotaSnapshot;
   writeError?: string;
 };

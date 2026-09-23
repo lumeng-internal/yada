@@ -52,14 +52,27 @@ export function ringGeometry(size: number): Array<{ radius: number; width: numbe
   ];
 }
 
-export function renderQuotaIcon(
-  size: IconSize,
+type RingDrawContext = {
+  clearRect(x: number, y: number, w: number, h: number): void;
+  beginPath(): void;
+  stroke(): void;
+  arc(x: number, y: number, radius: number, start: number, end: number): void;
+  fillText(text: string, x: number, y: number): void;
+  strokeStyle: string | CanvasGradient | CanvasPattern;
+  fillStyle: string | CanvasGradient | CanvasPattern;
+  lineWidth: number;
+  lineCap: CanvasLineCap;
+  font: string;
+  textAlign: CanvasTextAlign;
+  textBaseline: CanvasTextBaseline;
+};
+
+export function drawQuotaRings(
+  ctx: RingDrawContext,
+  size: number,
   rings: RingValues,
   palette: QuotaIconPalette = DARK_ICON_PALETTE
-): ImageData {
-  const canvas = new OffscreenCanvas(size, size);
-  const ctx = canvas.getContext("2d");
-  if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+): void {
   ctx.clearRect(0, 0, size, size);
   const cx = size / 2;
   const cy = size / 2;
@@ -78,6 +91,17 @@ export function renderQuotaIcon(
     ctx.textBaseline = "middle";
     ctx.fillText(rings.center, cx, cy + size * 0.02);
   }
+}
+
+export function renderQuotaIcon(
+  size: IconSize,
+  rings: RingValues,
+  palette: QuotaIconPalette = DARK_ICON_PALETTE
+): ImageData {
+  const canvas = new OffscreenCanvas(size, size);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+  drawQuotaRings(ctx, size, rings, palette);
   return ctx.getImageData(0, 0, size, size);
 }
 
@@ -86,9 +110,7 @@ export function paintQuotaCanvas(
   rings: RingValues,
   palette: QuotaIconPalette = DARK_ICON_PALETTE
 ): void {
-  const image = renderQuotaIcon(32, rings, palette);
-  canvas.width = 32;
-  canvas.height = 32;
+  const size = canvas.width || 32;
   let ctx: CanvasRenderingContext2D | null = null;
   try {
     ctx = canvas.getContext("2d");
@@ -96,11 +118,7 @@ export function paintQuotaCanvas(
     return;
   }
   if (!ctx) return;
-  try {
-    ctx.putImageData(image, 0, 0);
-  } catch {
-    // jsdom and some test canvases cannot paint ImageData.
-  }
+  drawQuotaRings(ctx, size, rings, palette);
 }
 
 export function renderQuotaIcons(rings: RingValues): Record<IconSize, ImageData> {
@@ -113,7 +131,7 @@ export function renderQuotaIcons(rings: RingValues): Record<IconSize, ImageData>
 }
 
 function drawTrack(
-  ctx: OffscreenCanvasRenderingContext2D,
+  ctx: RingDrawContext,
   cx: number,
   cy: number,
   radius: number,
@@ -129,7 +147,7 @@ function drawTrack(
 }
 
 function drawArc(
-  ctx: OffscreenCanvasRenderingContext2D,
+  ctx: RingDrawContext,
   cx: number,
   cy: number,
   radius: number,

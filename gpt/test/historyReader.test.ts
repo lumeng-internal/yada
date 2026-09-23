@@ -93,7 +93,8 @@ describe("history reader", () => {
     });
     expect(result.summary.hitDetailBudget).toBe(true);
     expect(result.summary.complete).toBe(false);
-    expect(result.summary.failedConversations).toBeGreaterThan(0);
+    expect(result.summary.failedConversations).toBe(0);
+    expect(result.summary.needsContinuation).toBe(true);
   });
 
   it("converges across bounded passes by reusing the persistent detail cache", async () => {

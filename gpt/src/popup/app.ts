@@ -1,4 +1,4 @@
-import { remainingToRatio, renderQuotaIcon } from "../quota/iconRenderer";
+import { paintQuotaCanvas, remainingToRatio } from "../quota/iconRenderer";
 import { snapshotToRings } from "../quota/iconState";
 import {
   historySyncLabel,
@@ -103,14 +103,7 @@ function renderPopup(root: HTMLElement, snapshot: QuotaSnapshot): void {
   const canvas = document.createElement("canvas");
   canvas.width = 148;
   canvas.height = 148;
-  const image = renderQuotaIcon(128, snapshotToRings(snapshot));
-  const ctx = canvas.getContext("2d");
-  if (ctx) {
-    const offscreen = new OffscreenCanvas(128, 128);
-    const offCtx = offscreen.getContext("2d");
-    offCtx?.putImageData(image, 0, 0);
-    ctx.drawImage(offscreen, 0, 0, 148, 148);
-  }
+  paintQuotaCanvas(canvas, snapshotToRings(snapshot));
   rings.append(canvas);
   root.append(rings);
 

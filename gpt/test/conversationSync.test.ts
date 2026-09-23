@@ -120,8 +120,11 @@ describe("ConversationSync", () => {
       if (snapshot) published.push(snapshot.conversationId);
     });
     sync.setActiveConversation("first");
+    const firstRun = sync.requestFull("boot");
     await flushMicrotasks();
+    void firstRun;
     sync.setActiveConversation("second");
+    void sync.requestFull("boot");
     first.resolve(snapshotFor("first", 3));
     await flushMicrotasks();
     second.resolve(snapshotFor("second", 1));
@@ -132,9 +135,9 @@ describe("ConversationSync", () => {
     sync.dispose();
   });
 
-  it("waits for ledger listeners before manual refresh returns", async () => {
+  it("does not wait for an async listener before the snapshot is readable", async () => {
     const ledger = deferred<void>();
-    let released = false;
+    let second = false;
     const sync = new ConversationSync({
       async readConversation(id) {
         return snapshotFor(id);
@@ -143,15 +146,16 @@ describe("ConversationSync", () => {
     sync.subscribe(async (snapshot) => {
       if (!snapshot) return;
       await ledger.promise;
-      released = true;
+    });
+    sync.subscribe((snapshot) => {
+      if (snapshot) second = true;
     });
     sync.setActiveConversation("conversation-1");
     const refresh = sync.requestSync("popup");
-    await flushMicrotasks();
-    expect(released).toBe(false);
-    ledger.resolve();
     await refresh;
-    expect(released).toBe(true);
+    expect(sync.getSnapshot()?.conversationId).toBe("conversation-1");
+    expect(second).toBe(true);
+    ledger.resolve();
     sync.dispose();
   });
 
@@ -198,6 +202,8 @@ describe("ConversationSync", () => {
     visibility = "visible";
     document.dispatchEvent(new Event("visibilitychange"));
     await flushMicrotasks(8);
+    expect(reads).toBe(0);
+    await sync.requestFull("boot");
     expect(reads).toBe(1);
     sync.dispose();
     delete (document as unknown as { visibilityState?: DocumentVisibilityState }).visibilityState;

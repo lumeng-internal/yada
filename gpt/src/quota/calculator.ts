@@ -1,7 +1,7 @@
 import { allowances } from "./vibebar/allowances";
 import { proBuckets } from "./vibebar/conversationParser";
 import type { ChatGPTChatModelLimit, ChatGPTChatTurn, ChatPlan } from "./vibebar/types";
-import type { QuotaCoverage, QuotaMetric, QuotaSnapshot, QuotaSyncStatus, QuotaUsageEvent } from "./types";
+import type { HistoryMaintenance, QuotaCoverage, QuotaMetric, QuotaSnapshot, QuotaSyncStatus, QuotaUsageEvent } from "./types";
 
 export function calculateQuotaSnapshot(input: {
   accountKey: string;
@@ -15,6 +15,7 @@ export function calculateQuotaSnapshot(input: {
   lastHistoryAttemptAt?: number;
   lastHistoryError?: string | null;
   unclassifiedTurns: number;
+  historyMaintenance?: HistoryMaintenance;
   now?: number;
   writeError?: string;
 }): QuotaSnapshot {
@@ -68,6 +69,7 @@ export function calculateQuotaSnapshot(input: {
     lastHistorySuccessAt: input.lastHistorySuccessAt,
     lastHistoryAttemptAt: input.lastHistoryAttemptAt,
     lastHistoryError: input.lastHistoryError ?? null,
+    historyMaintenance: input.historyMaintenance,
     coverageLabel,
     tightestRemainingPercent: ratios.length ? Math.round(Math.min(...ratios) * 100) : null,
     personalProEligible: input.workspaceKind !== "work" && input.plan != null,

@@ -31,10 +31,7 @@
       { radius: innerRadius, width: innerWidth }
     ];
   }
-  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
-    const canvas = new OffscreenCanvas(size, size);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+  function drawQuotaRings(ctx, size, rings, palette = DARK_ICON_PALETTE) {
     ctx.clearRect(0, 0, size, size);
     const cx = size / 2;
     const cy = size / 2;
@@ -53,7 +50,17 @@
       ctx.textBaseline = "middle";
       ctx.fillText(rings.center, cx, cy + size * 0.02);
     }
-    return ctx.getImageData(0, 0, size, size);
+  }
+  function paintQuotaCanvas(canvas, rings, palette = DARK_ICON_PALETTE) {
+    const size = canvas.width || 32;
+    let ctx = null;
+    try {
+      ctx = canvas.getContext("2d");
+    } catch {
+      return;
+    }
+    if (!ctx) return;
+    drawQuotaRings(ctx, size, rings, palette);
   }
   function drawTrack(ctx, cx, cy, radius, width, color) {
     ctx.beginPath();
@@ -214,14 +221,7 @@
     const canvas = document.createElement("canvas");
     canvas.width = 148;
     canvas.height = 148;
-    const image = renderQuotaIcon(128, snapshotToRings(snapshot));
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      const offscreen = new OffscreenCanvas(128, 128);
-      const offCtx = offscreen.getContext("2d");
-      offCtx?.putImageData(image, 0, 0);
-      ctx.drawImage(offscreen, 0, 0, 148, 148);
-    }
+    paintQuotaCanvas(canvas, snapshotToRings(snapshot));
     rings.append(canvas);
     root.append(rings);
     const planNote = planStatusNote(snapshot);

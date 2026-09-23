@@ -77,6 +77,7 @@ export async function readChatHistory(input: {
   deadlineMs?: number;
   clock?: () => number;
   fetchDetail?: (id: string, signal?: AbortSignal) => Promise<unknown>;
+  includeArchived?: boolean;
 }): Promise<HistoryReadResult> {
   const windowSeconds = input.windowSeconds ?? HISTORY_WINDOW_SECONDS;
   const pageSize = input.pageSize ?? HISTORY_PAGE_SIZE;
@@ -107,7 +108,9 @@ export async function readChatHistory(input: {
   let cancelled = false;
   let hitDeadline = false;
   let hitDetailBudget = false;
+  let stopSlice = false;
   const turns: ChatGPTChatTurn[] = [];
+  const streams = input.includeArchived === false ? [false] : [false, true];
 
   const aborted = (): boolean => Boolean(input.signal?.aborted);
   const recordFailure = (error: unknown): void => {
@@ -117,14 +120,15 @@ export async function readChatHistory(input: {
   };
 
   try {
-    for (const archived of [false, true]) {
+    streamLoop: for (const archived of streams) {
       let offset = 0;
       let reachedEnd = false;
-      for (let page = 0; page < maxPages; page++) {
+      for (let page = 0; page < maxPages && !stopSlice; page++) {
         if (aborted()) throw abortError();
         if (clock() >= deadline) {
           hitDeadline = true;
-          break;
+          stopSlice = true;
+          break streamLoop;
         }
         const path = `/backend-api/conversations?offset=${offset}&limit=${pageSize}&order=updated&is_archived=${archived}`;
         const data = await input.transport.request(path, input.signal);
@@ -154,23 +158,23 @@ export async function readChatHistory(input: {
           const key = await identity(id);
           let parsed: ChatGPTChatConversation | undefined = cache.conversations[key];
           if (parsed?.updatedAt !== updated) {
-            if (fetched < detailBudget && clock() < deadline) {
-              fetched += 1;
-              try {
-                const detail = await (input.fetchDetail
-                  ? input.fetchDetail(id, input.signal)
-                  : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
-                parsed = await parseConversation(detail, id, updated, cutoff);
-                cache.conversations[key] = parsed;
-                fetchedSuccessfully += 1;
-              } catch (error) {
-                if (isAbortError(error)) throw error;
-                recordFailure(error);
-              }
-            } else {
+            if (fetched >= detailBudget || clock() >= deadline) {
               if (fetched >= detailBudget) hitDetailBudget = true;
               if (clock() >= deadline) hitDeadline = true;
-              failures += 1;
+              stopSlice = true;
+              break streamLoop;
+            }
+            fetched += 1;
+            try {
+              const detail = await (input.fetchDetail
+                ? input.fetchDetail(id, input.signal)
+                : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
+              parsed = await parseConversation(detail, id, updated, cutoff);
+              cache.conversations[key] = parsed;
+              fetchedSuccessfully += 1;
+            } catch (error) {
+              if (isAbortError(error)) throw error;
+              recordFailure(error);
             }
           }
           if (parsed) {
@@ -189,6 +193,7 @@ export async function readChatHistory(input: {
           break;
         }
       }
+      if (stopSlice) break;
       if (reachedEnd) streamsFinished += 1;
     }
   } catch (error) {
@@ -198,11 +203,13 @@ export async function readChatHistory(input: {
 
   if (!cancelled) await input.store.save(cache, input.identity);
   const recent = turns.filter((turn) => turn.createdAt >= cutoff && turn.createdAt <= input.now);
-  const complete = streamsFinished === 2
+  const complete = streamsFinished === streams.length
     && failures === 0
     && !cancelled
     && !hitDetailBudget
     && !hitDeadline;
+  const needsContinuation = !complete && !cancelled && permanentFailures === 0 && retryableFailures === 0
+    && (hitDetailBudget || hitDeadline);
   return {
     turns: recent,
     summary: {
@@ -218,7 +225,8 @@ export async function readChatHistory(input: {
       permanentFailures,
       cancelled,
       hitDetailBudget,
-      hitDeadline
+      hitDeadline,
+      needsContinuation
     }
   };
 }

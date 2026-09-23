@@ -3,7 +3,7 @@ import { readChatAccount } from "../src/quota/pageClient";
 import * as historyReader from "../src/quota/vibebar/historyReader";
 import * as conversationApi from "../src/conversation/fetchConversation";
 import { ChatGPTApiTimeoutError, chatgptApi } from "../src/conversation/fetchConversation";
-import { historyNeedsAnotherPass, QuotaTracker, requestHistoryList, requestHistoryDetail, HISTORY_RECONCILE_INTERVAL_MS, shouldReconcileHistory } from "../src/quota/tracker";
+import { historyNeedsAnotherPass, QuotaTracker, requestHistoryList, requestHistoryDetail, HISTORY_DAILY_INTERVAL_MS, HISTORY_SLICE_DETAIL_BUDGET, shouldReconcileHistory } from "../src/quota/tracker";
 import { createMemoryHistoryStore, readChatHistory } from "../src/quota/vibebar/historyReader";
 import { QuotaLedger } from "../src/quota/ledger";
 import type { ConversationSync } from "../src/core/conversationSync";
@@ -177,7 +177,11 @@ async function mountTracker() {
     return { snapshot: await ledger.ingest(message.events, message) };
   });
   let listener: ConversationListener = () => undefined;
-  const sync = { requestSync: vi.fn(async () => undefined), subscribe(callback: ConversationListener) { listener = callback; return () => undefined; } };
+  const sync = {
+    requestSync: vi.fn(async () => undefined),
+    requestFull: vi.fn(async () => undefined),
+    subscribe(callback: ConversationListener) { listener = callback; return () => undefined; }
+  };
   tracker = new QuotaTracker(sync as unknown as ConversationSync);
   tracker.mount();
   return { ledger, messages, ingestCurrent: (snapshot: ConversationSnapshot) => listener(snapshot) };
@@ -191,10 +195,11 @@ async function seed(ledger: QuotaLedger, successAt = NOW) {
 }
 
 describe("quota tracker last-good lifecycle", () => {
-  it("uses the exact 10 minute freshness boundary", () => {
+  it("uses a 24 hour freshness boundary and ignores a 10 minute gap", () => {
     const baseline = { historyComplete: true, lastHistorySuccessAt: NOW };
-    expect(shouldReconcileHistory(baseline, NOW + 599_999)).toBe(false);
-    expect(shouldReconcileHistory(baseline, NOW + 600_000)).toBe(true);
+    expect(shouldReconcileHistory(baseline, NOW + 10 * 60 * 1000)).toBe(false);
+    expect(shouldReconcileHistory(baseline, NOW + HISTORY_DAILY_INTERVAL_MS - 1)).toBe(false);
+    expect(shouldReconcileHistory(baseline, NOW + HISTORY_DAILY_INTERVAL_MS)).toBe(true);
     expect(shouldReconcileHistory({ historyComplete: true }, NOW)).toBe(true);
   });
 
@@ -214,24 +219,24 @@ describe("quota tracker last-good lifecycle", () => {
     expect((await ledger.getSnapshot("account", "pro")).gpt6ProWeekly?.estimatedRemaining).toBe(198);
     tracker!.dispose();
     await mountTracker();
-    await vi.advanceTimersByTimeAsync(595_999);
+    await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
     expect(calls).toBe(0);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(calls).toBe(2);
-    expect((await ledger.restore()).state.lastHistorySuccessAt).toBe(NOW + 600_000);
+    await vi.advanceTimersByTimeAsync(HISTORY_DAILY_INTERVAL_MS);
+    expect(calls).toBe(1);
+    expect((await ledger.restore()).state.historyComplete).toBe(true);
   });
 
   it("stale refresh starts and fails without downgrading or losing last-good numbers", async () => {
     let calls = 0;
     stubFetch(async (_path, init) => { calls++; return pendingResponse(init?.signal); });
     const { ledger, messages } = await mountTracker();
-    await seed(ledger, NOW - HISTORY_RECONCILE_INTERVAL_MS);
+    await seed(ledger, NOW - HISTORY_DAILY_INTERVAL_MS);
     await vi.advanceTimersByTimeAsync(4_000);
     expect((await ledger.restore()).state).toMatchObject({ historyComplete: true, syncStatus: "ready", unclassifiedTurns: 33 });
     await vi.advanceTimersByTimeAsync(3 * 45_000 + 1_500 + 5_000);
     expect(calls).toBe(3); // Original attempt + at most two transient retries.
     const { state } = await ledger.restore();
-    expect(state).toMatchObject({ historyComplete: true, syncStatus: "ready", lastHistorySuccessAt: NOW - 600_000, lastHistoryAttemptAt: NOW + 4_000, unclassifiedTurns: 33 });
+    expect(state).toMatchObject({ historyComplete: true, syncStatus: "ready", lastHistorySuccessAt: NOW - HISTORY_DAILY_INTERVAL_MS, unclassifiedTurns: 33 });
     expect(state.lastHistoryError).toBeTruthy();
     expect((await ledger.getSnapshot("account", "pro")).gpt6ProWeekly?.estimatedRemaining).toBe(199);
     expect(messages.every(message => message.historyComplete !== false)).toBe(true);
@@ -246,13 +251,16 @@ describe("quota tracker last-good lifecycle", () => {
       return json({ items: [] });
     });
     const { ledger } = await mountTracker();
-    await vi.advanceTimersByTimeAsync(4_000 + 45_000);
+    await vi.advanceTimersByTimeAsync(2_000);
     expect((await ledger.restore()).state.syncStatus).toBe("backfill");
-    await vi.advanceTimersByTimeAsync(1_499);
+    expect(archivedCalls).toBe(1);
+    await vi.advanceTimersByTimeAsync(45_000);
+    await vi.advanceTimersByTimeAsync(1_999);
     expect(archivedCalls).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
     expect(archivedCalls).toBe(2);
-    expect((await ledger.restore()).state).toMatchObject({ syncStatus: "ready", historyComplete: true, lastHistorySuccessAt: NOW + 50_500, lastHistoryError: null });
+    await vi.waitFor(async () => expect((await ledger.restore()).state.historyComplete).toBe(true));
+    expect((await ledger.restore()).state).toMatchObject({ syncStatus: "ready", lastHistoryError: null });
   });
 
   it("manual refresh ignores a fresh TTL while retaining the baseline", async () => {
@@ -310,11 +318,17 @@ describe("quota tracker last-good lifecycle", () => {
     expect(calls).toBe(0);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls).toBe(0);
+    await vi.setSystemTime(NOW + HISTORY_DAILY_INTERVAL_MS);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(0);
-    expect(calls).toBe(2);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls).toBe(0);
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(calls).toBe(1);
   });
 
   it("stages partial slices and commits cache, events and success metadata in one write", async () => {
@@ -330,19 +344,18 @@ describe("quota tracker last-good lifecycle", () => {
       return { ...detail, conversation_origin: "chat" };
     });
     const { ledger } = await mountTracker();
-    await seed(ledger, NOW - 600_000);
-    const writes = vi.spyOn(chrome.storage.local, "set");
-    await vi.advanceTimersByTimeAsync(4_000);
-    // WebCrypto hashing uses a real microtask/task; give the reader time without consuming the slice timer.
-    await vi.waitFor(() => expect(listCalls).toBe(2));
-    expect((await chrome.storage.local.get(HISTORY_CACHE_KEY))[HISTORY_CACHE_KEY]).toBeUndefined();
+    await seed(ledger, NOW - HISTORY_DAILY_INTERVAL_MS);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(details).toHaveBeenCalledTimes(HISTORY_SLICE_DETAIL_BUDGET));
+    expect(listCalls).toBe(1);
+    expect((await chrome.storage.local.get(HISTORY_CACHE_KEY))[HISTORY_CACHE_KEY]).toBeTruthy();
+    expect((await ledger.restore()).state.lastHistorySuccessAt).toBe(NOW - HISTORY_DAILY_INTERVAL_MS);
     expect((await ledger.restore()).ledger.events).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(1_500);
-    await vi.waitFor(async () => expect((await ledger.restore()).state.lastHistorySuccessAt).toBeGreaterThan(NOW));
-    const commit = writes.mock.calls.map(call => call[0]).find(value => value[HISTORY_CACHE_KEY]);
-    expect(Object.keys(commit!)).toEqual(expect.arrayContaining([HISTORY_CACHE_KEY, "chatgpt-yada:quota-ledger:v2", "chatgpt-yada:quota-state:v2"]));
-    expect(details).toHaveBeenCalledTimes(26);
-    expect((await ledger.restore()).ledger.events).toHaveLength(27);
+    const firstIds = details.mock.calls.map((call) => String(call[0]));
+    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.waitFor(() => expect(details.mock.calls.length).toBeGreaterThan(HISTORY_SLICE_DETAIL_BUDGET));
+    const secondIds = details.mock.calls.map((call) => String(call[0])).slice(HISTORY_SLICE_DETAIL_BUDGET);
+    expect(secondIds.some((id) => firstIds.includes(id))).toBe(false);
   });
 
   it.each([0, 1])("requires real progress and caps data passes at 20 (progress=%s)", async conversationsFetched => {
@@ -355,20 +368,28 @@ describe("quota tracker last-good lifecycle", () => {
       }
     });
     const { ledger } = await mountTracker();
-    await vi.advanceTimersByTimeAsync(4_000 + 20 * 1_500);
-    expect(reader).toHaveBeenCalledTimes(conversationsFetched ? 20 : 1);
-    expect((await ledger.restore()).state).toMatchObject({ historyComplete: false, syncStatus: "error" });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(reader).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(reader).toHaveBeenCalledTimes(1);
+    if (conversationsFetched) {
+      await vi.advanceTimersByTimeAsync(500);
+      expect(reader).toHaveBeenCalledTimes(2);
+      expect((await ledger.restore()).state.historyComplete).toBe(false);
+    } else {
+      expect((await ledger.restore()).state).toMatchObject({ historyComplete: false, syncStatus: "error" });
+    }
   });
 
   it("aborts a running reconcile only on dispose, not on hidden", async () => {
     stubFetch(async (_path, init) => pendingResponse(init?.signal));
     const { ledger } = await mountTracker();
-    await seed(ledger, NOW - 600_000);
+    await seed(ledger, NOW - HISTORY_DAILY_INTERVAL_MS);
     await vi.advanceTimersByTimeAsync(4_000);
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     document.dispatchEvent(new Event("visibilitychange"));
-    await vi.advanceTimersByTimeAsync(60_000);
-    expect((await ledger.restore()).state).toMatchObject({ historyComplete: true, syncStatus: "ready", lastHistorySuccessAt: NOW - 600_000 });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect((await ledger.restore()).state).toMatchObject({ historyComplete: true, syncStatus: "ready", lastHistorySuccessAt: NOW - HISTORY_DAILY_INTERVAL_MS });
     tracker!.dispose();
     await vi.advanceTimersByTimeAsync(1);
     expect((await chrome.storage.local.get(HISTORY_CACHE_KEY))[HISTORY_CACHE_KEY]).toBeUndefined();

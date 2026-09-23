@@ -4,6 +4,7 @@ import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import { YADA_ACCENT, YADA_ACCENT_SOFT, YADA_TOOLBAR_HOST_ID } from "../styles";
+import { paintQuotaCanvas } from "../quota/iconRenderer";
 import { QuotaIndicator } from "./quotaIndicator";
 import { detectYadaTheme, observeYadaTheme } from "./theme";
 
@@ -22,7 +23,11 @@ export class YadaToolbar {
   private quota: QuotaIndicator | null = null;
   private observedTarget: Element | null = null;
   private observedParent: Element | null = null;
-  constructor(private readonly sync: ConversationSync | null = null) {}
+  constructor(private sync: ConversationSync | null = null) {}
+
+  setConversationSync(sync: ConversationSync | null): void {
+    this.sync = sync;
+  }
 
   closePanels(): void {
     this.prompts?.close();
@@ -30,6 +35,16 @@ export class YadaToolbar {
   }
 
   mount(): void {
+    this.mountShell();
+    try {
+      this.attachQuotaIndicator();
+    } catch (error) {
+      console.error("ChatGPT Yada: quota indicator failed", error);
+      this.showQuotaFault();
+    }
+  }
+
+  mountShell(): void {
     if (this.host?.isConnected) return;
     document.getElementById(YADA_TOOLBAR_HOST_ID)?.remove();
 
@@ -47,7 +62,6 @@ export class YadaToolbar {
       void this.copyAll();
     });
 
-    this.quota = new QuotaIndicator(this.query<HTMLButtonElement>("[data-quota]")!);
     this.query<HTMLButtonElement>("[data-prompts]")?.addEventListener("click", this.onPromptsClick);
 
     this.disposeTheme = observeYadaTheme((theme) => {
@@ -56,6 +70,35 @@ export class YadaToolbar {
 
     window.addEventListener("resize", this.handleViewportChange, { passive: true });
     this.ensurePlacement();
+  }
+
+  attachQuotaIndicator(): void {
+    if (this.quota) return;
+    const button = this.query<HTMLButtonElement>("[data-quota]");
+    if (!button) throw new Error("Quota button is missing");
+    this.quota = new QuotaIndicator(button);
+  }
+
+  showQuotaFault(): void {
+    const button = this.query<HTMLButtonElement>("[data-quota]");
+    if (!button) return;
+    button.setAttribute("aria-label", "Pro 额度：异常");
+    button.title = "Pro 额度：异常";
+    const canvas = button.querySelector("canvas");
+    if (!(canvas instanceof HTMLCanvasElement)) return;
+    try {
+      paintQuotaCanvas(canvas, { outer: 0, middle: 0, inner: 0, center: "!" });
+    } catch {
+      button.textContent = "!";
+    }
+  }
+
+  isMounted(): boolean {
+    return Boolean(this.host?.isConnected);
+  }
+
+  hasQuotaIndicator(): boolean {
+    return this.quota !== null;
   }
 
   setVisible(visible: boolean): void {
@@ -215,8 +258,8 @@ export class YadaToolbar {
       const id = getConversationIdFromUrl();
       if (id && this.sync && this.sync.getActiveConversationId() !== id) this.sync.setActiveConversation(id);
       let snapshot = this.sync?.getSnapshot() ?? null;
-      if (!snapshot && this.sync) {
-        await this.sync.requestSync("copy");
+      if (this.sync) {
+        await this.sync.requestFull("copy");
         snapshot = this.sync.getSnapshot();
       }
       if (!snapshot) throw new Error("No conversation snapshot");
@@ -262,7 +305,12 @@ export class YadaToolbar {
     const button = this.query<HTMLButtonElement>("[data-prompts]");
     if (!button) return;
     if (!this.prompts) {
-      this.prompts = new PromptPanel(button);
+      try {
+        this.prompts = new PromptPanel(button);
+      } catch (error) {
+        console.error("ChatGPT Yada: prompt panel failed", error);
+        return;
+      }
       void this.prompts.toggle();
     }
   };

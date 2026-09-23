@@ -53,7 +53,9 @@ const chromeMock = {
   },
   runtime: {
     sendMessage: async () => ({}),
-    onMessage: { addListener() {}, removeListener() {} }
+    onMessage: { addListener() {}, removeListener() {} },
+    onInstalled: { addListener() {} },
+    onStartup: { addListener() {} }
   },
   action: {
     setIcon: async () => undefined,

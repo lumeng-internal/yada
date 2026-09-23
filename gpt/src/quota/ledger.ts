@@ -1,5 +1,5 @@
 import { calculateQuotaSnapshot } from "./calculator";
-import { EVENT_TTL_MS, LEDGER_KEY, MAX_EVENTS, STATE_KEY, type QuotaLedgerState, type QuotaPersistedState, type QuotaSnapshot, type QuotaSyncStatus, type QuotaUsageEvent } from "./types";
+import { EVENT_TTL_MS, LEDGER_KEY, MAX_EVENTS, STATE_KEY, type HistoryMaintenance, type QuotaLedgerState, type QuotaPersistedState, type QuotaSnapshot, type QuotaSyncStatus, type QuotaUsageEvent } from "./types";
 import { HISTORY_CACHE_KEY } from "./vibebar/historyReader";
 import type { ChatGPTChatHistoryCache, ChatGPTChatModelLimit, ChatPlan } from "./vibebar/types";
 
@@ -30,7 +30,14 @@ export function createChromeQuotaStorage(): QuotaStorage {
 
 export class QuotaLedger {
   private queue: Promise<void> = Promise.resolve();
+  private changed = false;
   constructor(private readonly storage: QuotaStorage = createChromeQuotaStorage()) {}
+
+  takeChanged(): boolean {
+    const changed = this.changed;
+    this.changed = false;
+    return changed;
+  }
 
   ingest(events: readonly QuotaUsageEvent[], extras: {
     now?: number;
@@ -45,9 +52,11 @@ export class QuotaLedger {
     limits?: readonly ChatGPTChatModelLimit[];
     workspaceKind?: QuotaSnapshot["workspaceKind"];
     accountKey?: string;
+    historyMaintenance?: HistoryMaintenance;
   } = {}): Promise<QuotaSnapshot | null> {
     return this.serialize(async () => {
       const { ledger, state } = await this.read();
+      const before = materialKey(ledger, state, await this.cacheFor(state.accountKey));
       const byId = new Map(ledger.events.map((event) => [`${event.accountKey}:${event.id}`, event]));
       for (const event of events) {
         byId.set(`${event.accountKey}:${event.id}`, event);
@@ -72,6 +81,7 @@ export class QuotaLedger {
       if (extras.lastHistoryAttemptAt !== undefined) state.lastHistoryAttemptAt = extras.lastHistoryAttemptAt;
       if (extras.lastHistoryError !== undefined) state.lastHistoryError = extras.lastHistoryError;
       if (extras.unclassifiedTurns !== undefined) state.unclassifiedTurns = extras.unclassifiedTurns;
+      if (extras.historyMaintenance !== undefined) state.historyMaintenance = extras.historyMaintenance;
       if (accountKey) state.accountKey = accountKey;
       const snapshot = accountKey
         ? calculateQuotaSnapshot({
@@ -86,12 +96,27 @@ export class QuotaLedger {
           lastHistoryAttemptAt: state.lastHistoryAttemptAt,
           lastHistoryError: state.lastHistoryError,
           unclassifiedTurns: state.unclassifiedTurns,
+          historyMaintenance: state.historyMaintenance,
           now: extras.now,
           writeError: state.writeError
         })
         : null;
+      const after = materialKey(
+        ledger,
+        state,
+        extras.historyCache ?? await this.cacheFor(state.accountKey),
+        {
+          limits: extras.limits ?? state.lastSnapshot?.serverLimits ?? [],
+          workspaceKind: extras.workspaceKind ?? state.lastSnapshot?.workspaceKind ?? null
+        }
+      );
+      if (before === after) {
+        this.changed = false;
+        return snapshot;
+      }
       if (snapshot) state.lastSnapshot = snapshot;
       await this.write(ledger, state, extras.historyCache);
+      this.changed = true;
       return snapshot;
     });
   }
@@ -121,6 +146,7 @@ export class QuotaLedger {
       lastHistoryAttemptAt: state.accountKey === accountKey ? state.lastHistoryAttemptAt : undefined,
       lastHistoryError: state.accountKey === accountKey ? state.lastHistoryError : null,
       unclassifiedTurns: state.accountKey === accountKey ? extras.unclassifiedTurns ?? state.unclassifiedTurns : 0,
+      historyMaintenance: state.accountKey === accountKey ? state.historyMaintenance : undefined,
       now: extras.now,
       writeError: state.writeError
     });
@@ -144,6 +170,13 @@ export class QuotaLedger {
       ledger: parseLedger(data[LEDGER_KEY]),
       state: parseState(validLedger ? data[STATE_KEY] : undefined)
     };
+  }
+
+  private async cacheFor(accountKey?: string): Promise<ChatGPTChatHistoryCache | undefined> {
+    if (!accountKey) return undefined;
+    const data = await this.storage.get([HISTORY_CACHE_KEY]);
+    const all = data[HISTORY_CACHE_KEY] as Record<string, ChatGPTChatHistoryCache> | undefined;
+    return all?.[accountKey];
   }
 
   private async write(ledger: QuotaLedgerState, state: QuotaPersistedState, cache?: ChatGPTChatHistoryCache): Promise<void> {
@@ -197,9 +230,55 @@ function parseState(value: unknown): QuotaPersistedState {
     lastHistoryAttemptAt: validTime(record.lastHistoryAttemptAt),
     lastHistoryError: typeof record.lastHistoryError === "string" ? record.lastHistoryError : null,
     unclassifiedTurns: record.unclassifiedTurns ?? 0,
+    historyMaintenance: parseMaintenance(record.historyMaintenance),
     writeError: record.writeError,
     lastSnapshot: record.lastSnapshot
   };
+}
+
+function parseMaintenance(value: unknown): HistoryMaintenance | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as HistoryMaintenance;
+  if (record.mode !== "daily" && record.mode !== "full") return undefined;
+  return {
+    pending: record.pending === true,
+    mode: record.mode,
+    attemptStartedAt: validTime(record.attemptStartedAt),
+    lastIncrementalSuccessAt: validTime(record.lastIncrementalSuccessAt),
+    lastFullSuccessAt: validTime(record.lastFullSuccessAt)
+  };
+}
+
+function materialKey(
+  ledger: QuotaLedgerState,
+  state: QuotaPersistedState,
+  cache: ChatGPTChatHistoryCache | undefined,
+  view: {
+    limits: readonly { model: string; resetsAt: number | null; fallbackModel: string | null }[];
+    workspaceKind: QuotaSnapshot["workspaceKind"] | null;
+  } = {
+    limits: state.lastSnapshot?.serverLimits ?? [],
+    workspaceKind: state.lastSnapshot?.workspaceKind ?? null
+  }
+): string {
+  const events = ledger.events
+    .map((event) => `${event.accountKey}\0${event.id}\0${event.createdAt}\0${event.model}\0${event.classification}`)
+    .sort();
+  return JSON.stringify({
+    events,
+    plan: state.plan,
+    historyComplete: state.historyComplete,
+    syncStatus: state.syncStatus,
+    lastHistorySuccessAt: state.lastHistorySuccessAt ?? null,
+    lastHistoryAttemptAt: state.lastHistoryAttemptAt ?? null,
+    lastHistoryError: state.lastHistoryError ?? null,
+    unclassifiedTurns: state.unclassifiedTurns,
+    limits: view.limits,
+    workspaceKind: view.workspaceKind,
+    accountKey: state.accountKey ?? null,
+    historyMaintenance: state.historyMaintenance ?? null,
+    cache: cache ?? null
+  });
 }
 
 function isSyncStatus(value: unknown): value is QuotaSyncStatus {

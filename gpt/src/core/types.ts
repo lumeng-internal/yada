@@ -14,6 +14,8 @@ export type ConversationSnapshot = {
   quotaOrigin: string | null;
   quotaTemporary: boolean;
   title?: string;
+  /** full is the only publishable conversation truth. recent is a tail awaiting merge. */
+  coverage?: "full" | "recent";
 };
 
 export type ConversationListener = (snapshot: ConversationSnapshot | null) => void | Promise<void>;

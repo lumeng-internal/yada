@@ -99,6 +99,7 @@ export class OfficialNavigatorHydrator {
   private unsubscribe: (() => void) | null = null;
   private disposed = false;
   private heavyArmed = false;
+  private awaitingSnapshot = false;
 
   constructor(private readonly sync: ConversationSync) {}
 
@@ -113,15 +114,15 @@ export class OfficialNavigatorHydrator {
         this.publishDiagnostics();
         return;
       }
+      if (snapshot) this.awaitingSnapshot = false;
       if (this.phase === "sleeping" || (this.phase === "ready" && changed)) this.wake("snapshot");
-      else if (this.phase !== "ready") this.schedule();
+      else if (this.phase !== "ready") this.maybeArmHeavyWork();
+      if (this.heavyArmed && this.phase !== "ready") this.schedule();
       this.publishDiagnostics();
     });
     addEventListener("message", this.onMessage);
     document.addEventListener("visibilitychange", this.onVisibility);
-    this.armHeavyWork();
     this.requestState();
-    this.schedule(600);
   }
 
   resetRoute(): void {
@@ -133,10 +134,14 @@ export class OfficialNavigatorHydrator {
       ? this.sync.getSnapshot()!.activeTurns.length
       : 0;
     this.resetContext("");
+    this.awaitingSnapshot = true;
+    this.parkHeavyWork();
     this.setPhase("waiting");
-    this.armHeavyWork();
     this.requestState();
-    this.schedule(300);
+  }
+
+  isMaintenanceBlocked(): boolean {
+    return this.phase === "preparing" || this.heavyArmed;
   }
 
   isHeavyWorkArmed(): boolean {
@@ -178,8 +183,9 @@ export class OfficialNavigatorHydrator {
     const hasNewEvidence = incoming.revision > this.state.revision;
     this.state = incoming;
     this.connected = true;
+    this.maybeArmHeavyWork();
     if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
-    else if (this.phase !== "ready" && this.phase !== "stopped") this.schedule();
+    else if (this.heavyArmed && this.phase !== "ready" && this.phase !== "stopped") this.schedule();
     this.publishDiagnostics();
   };
 
@@ -216,11 +222,12 @@ export class OfficialNavigatorHydrator {
   private async evaluate(): Promise<void> {
     if (this.disposed || this.operation || this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped") return;
     const native = readNativePrompts();
-    if (!this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
+    if (this.awaitingSnapshot || !this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
       this.resetReadyStability();
       this.setPhase("waiting");
       return;
     }
+    this.maybeArmHeavyWork();
     if (isMessageDeepLink()) {
       this.stop("deep-link");
       return;
@@ -472,14 +479,21 @@ export class OfficialNavigatorHydrator {
     this.sleepReason = null;
     this.resetReadyStability();
     this.setPhase("waiting");
-    this.armHeavyWork();
-    this.schedule(0);
+    this.maybeArmHeavyWork();
+    if (this.heavyArmed) this.schedule(0);
   }
 
   private stop(reason: string): void {
     this.sleepReason = reason;
     this.parkHeavyWork();
     this.setPhase("stopped");
+  }
+
+  private maybeArmHeavyWork(): void {
+    if (this.disposed || this.awaitingSnapshot) return;
+    if (this.phase === "ready" || this.phase === "sleeping" || this.phase === "stopped") return;
+    if (this.expectedPrompts <= 0 || !this.connected) return;
+    this.armHeavyWork();
   }
 
   private armHeavyWork(): void {

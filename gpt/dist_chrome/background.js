@@ -107,6 +107,7 @@
       lastHistorySuccessAt: input.lastHistorySuccessAt,
       lastHistoryAttemptAt: input.lastHistoryAttemptAt,
       lastHistoryError: input.lastHistoryError ?? null,
+      historyMaintenance: input.historyMaintenance,
       coverageLabel,
       tightestRemainingPercent: ratios.length ? Math.round(Math.min(...ratios) * 100) : null,
       personalProEligible: input.workspaceKind !== "work" && input.plan != null,
@@ -173,9 +174,16 @@
       this.storage = storage;
     }
     queue = Promise.resolve();
+    changed = false;
+    takeChanged() {
+      const changed = this.changed;
+      this.changed = false;
+      return changed;
+    }
     ingest(events, extras = {}) {
       return this.serialize(async () => {
         const { ledger: ledger2, state } = await this.read();
+        const before = materialKey(ledger2, state, await this.cacheFor(state.accountKey));
         const byId = new Map(ledger2.events.map((event) => [`${event.accountKey}:${event.id}`, event]));
         for (const event of events) {
           byId.set(`${event.accountKey}:${event.id}`, event);
@@ -200,6 +208,7 @@
         if (extras.lastHistoryAttemptAt !== void 0) state.lastHistoryAttemptAt = extras.lastHistoryAttemptAt;
         if (extras.lastHistoryError !== void 0) state.lastHistoryError = extras.lastHistoryError;
         if (extras.unclassifiedTurns !== void 0) state.unclassifiedTurns = extras.unclassifiedTurns;
+        if (extras.historyMaintenance !== void 0) state.historyMaintenance = extras.historyMaintenance;
         if (accountKey) state.accountKey = accountKey;
         const snapshot = accountKey ? calculateQuotaSnapshot({
           accountKey,
@@ -213,11 +222,26 @@
           lastHistoryAttemptAt: state.lastHistoryAttemptAt,
           lastHistoryError: state.lastHistoryError,
           unclassifiedTurns: state.unclassifiedTurns,
+          historyMaintenance: state.historyMaintenance,
           now: extras.now,
           writeError: state.writeError
         }) : null;
+        const after = materialKey(
+          ledger2,
+          state,
+          extras.historyCache ?? await this.cacheFor(state.accountKey),
+          {
+            limits: extras.limits ?? state.lastSnapshot?.serverLimits ?? [],
+            workspaceKind: extras.workspaceKind ?? state.lastSnapshot?.workspaceKind ?? null
+          }
+        );
+        if (before === after) {
+          this.changed = false;
+          return snapshot;
+        }
         if (snapshot) state.lastSnapshot = snapshot;
         await this.write(ledger2, state, extras.historyCache);
+        this.changed = true;
         return snapshot;
       });
     }
@@ -235,6 +259,7 @@
         lastHistoryAttemptAt: state.accountKey === accountKey ? state.lastHistoryAttemptAt : void 0,
         lastHistoryError: state.accountKey === accountKey ? state.lastHistoryError : null,
         unclassifiedTurns: state.accountKey === accountKey ? extras.unclassifiedTurns ?? state.unclassifiedTurns : 0,
+        historyMaintenance: state.accountKey === accountKey ? state.historyMaintenance : void 0,
         now: extras.now,
         writeError: state.writeError
       });
@@ -255,6 +280,12 @@
         ledger: parseLedger(data[LEDGER_KEY]),
         state: parseState(validLedger ? data[STATE_KEY] : void 0)
       };
+    }
+    async cacheFor(accountKey) {
+      if (!accountKey) return void 0;
+      const data = await this.storage.get([HISTORY_CACHE_KEY]);
+      const all = data[HISTORY_CACHE_KEY];
+      return all?.[accountKey];
     }
     async write(ledger2, state, cache) {
       try {
@@ -298,9 +329,43 @@
       lastHistoryAttemptAt: validTime(record.lastHistoryAttemptAt),
       lastHistoryError: typeof record.lastHistoryError === "string" ? record.lastHistoryError : null,
       unclassifiedTurns: record.unclassifiedTurns ?? 0,
+      historyMaintenance: parseMaintenance(record.historyMaintenance),
       writeError: record.writeError,
       lastSnapshot: record.lastSnapshot
     };
+  }
+  function parseMaintenance(value) {
+    if (!value || typeof value !== "object") return void 0;
+    const record = value;
+    if (record.mode !== "daily" && record.mode !== "full") return void 0;
+    return {
+      pending: record.pending === true,
+      mode: record.mode,
+      attemptStartedAt: validTime(record.attemptStartedAt),
+      lastIncrementalSuccessAt: validTime(record.lastIncrementalSuccessAt),
+      lastFullSuccessAt: validTime(record.lastFullSuccessAt)
+    };
+  }
+  function materialKey(ledger2, state, cache, view = {
+    limits: state.lastSnapshot?.serverLimits ?? [],
+    workspaceKind: state.lastSnapshot?.workspaceKind ?? null
+  }) {
+    const events = ledger2.events.map((event) => `${event.accountKey}\0${event.id}\0${event.createdAt}\0${event.model}\0${event.classification}`).sort();
+    return JSON.stringify({
+      events,
+      plan: state.plan,
+      historyComplete: state.historyComplete,
+      syncStatus: state.syncStatus,
+      lastHistorySuccessAt: state.lastHistorySuccessAt ?? null,
+      lastHistoryAttemptAt: state.lastHistoryAttemptAt ?? null,
+      lastHistoryError: state.lastHistoryError ?? null,
+      unclassifiedTurns: state.unclassifiedTurns,
+      limits: view.limits,
+      workspaceKind: view.workspaceKind,
+      accountKey: state.accountKey ?? null,
+      historyMaintenance: state.historyMaintenance ?? null,
+      cache: cache ?? null
+    });
   }
   function isSyncStatus(value) {
     return value === "loading" || value === "backfill" || value === "ready" || value === "partial" || value === "error";
@@ -345,10 +410,7 @@
       { radius: innerRadius, width: innerWidth }
     ];
   }
-  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
-    const canvas = new OffscreenCanvas(size, size);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+  function drawQuotaRings(ctx, size, rings, palette = DARK_ICON_PALETTE) {
     ctx.clearRect(0, 0, size, size);
     const cx = size / 2;
     const cy = size / 2;
@@ -367,6 +429,12 @@
       ctx.textBaseline = "middle";
       ctx.fillText(rings.center, cx, cy + size * 0.02);
     }
+  }
+  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
+    const canvas = new OffscreenCanvas(size, size);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+    drawQuotaRings(ctx, size, rings, palette);
     return ctx.getImageData(0, 0, size, size);
   }
   function renderQuotaIcons(rings) {
@@ -544,6 +612,16 @@
   // src/background/serviceWorker.ts
   var ALARM_NAME = "chatgpt-yada-quota-window";
   var ledger = new QuotaLedger();
+  var presentationKey = null;
+  function resetQuotaPresentationForTests() {
+    presentationKey = null;
+  }
+  async function handleQuotaRequest(message) {
+    return handle(message);
+  }
+  async function restoreQuotaPresentation() {
+    await restore();
+  }
   chrome.runtime.onInstalled.addListener(() => {
     void restore();
   });
@@ -605,16 +683,16 @@
       unclassifiedTurns: message.unclassifiedTurns,
       limits: message.limits,
       workspaceKind: message.workspaceKind,
-      accountKey: message.accountKey
+      accountKey: message.accountKey,
+      historyMaintenance: message.historyMaintenance
     });
-    if (snapshot) await publish(snapshot);
+    if (snapshot && ledger.takeChanged()) await publish(snapshot);
     return { snapshot };
   }
   async function getState(message) {
     const restored = await ledger.restore();
     const accountKey = message.accountKey ?? restored.state.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "chat-unknown";
     const snapshot = await ledger.getSnapshot(accountKey, message.plan ?? null);
-    await publish(snapshot);
     return { snapshot };
   }
   async function restore() {
@@ -636,7 +714,21 @@
     });
     await publish(snapshot);
   }
+  function presentationFingerprint(snapshot) {
+    const rings = snapshotToRings(snapshot);
+    return JSON.stringify({
+      outer: rings.outer,
+      middle: rings.middle,
+      inner: rings.inner,
+      center: rings.center,
+      title: snapshotTitle(snapshot),
+      alarm: nextAlarmAt(snapshot)
+    });
+  }
   async function publish(snapshot) {
+    const fingerprint = presentationFingerprint(snapshot);
+    if (fingerprint === presentationKey) return;
+    presentationKey = fingerprint;
     await applyQuotaIcon(snapshot);
     const when = nextAlarmAt(snapshot);
     if (when) await chrome.alarms.create(ALARM_NAME, { when });

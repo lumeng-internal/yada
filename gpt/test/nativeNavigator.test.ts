@@ -228,7 +228,7 @@ describe("official Navigator contract", () => {
     internals.connected = true;
     await internals.evaluate();
     expect(internals.phase).toBe("waiting");
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
     hydrator.dispose();
   });
 
@@ -317,7 +317,7 @@ describe("official Navigator contract", () => {
     hydrator.resetRoute();
     expect(internals.phase).toBe("waiting");
     expect(internals.activeMs).toBe(0);
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
     hydrator.dispose();
   });
 });
@@ -368,6 +368,11 @@ describe("prepare session interruption", () => {
     vi.spyOn(window, "postMessage").mockImplementation((data: unknown) => { posted.push(data); });
     const hydrator = new OfficialNavigatorHydrator(mockSync(1));
     hydrator.mount();
+    window.dispatchEvent(new MessageEvent("message", {
+      data: { channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...emptyTransportState("current", 4), revision: 1 } },
+      origin: location.origin,
+      source: window
+    }));
     const internals = hydrator as unknown as {
       state: ReturnType<typeof emptyTransportState>;
       operation: AbortController | null;

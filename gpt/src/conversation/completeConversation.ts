@@ -13,6 +13,7 @@ type ConversationResponse = ApiConversation & {
   pageInfo?: PageInfo;
 };
 const PAGE_NUM_TURNS = 100;
+export const RECENT_TURN_BATCH = 16;
 const MAX_PAGES = 500;
 
 function unwrap(data: ConversationResponse): ConversationResponse { return data.conversation ?? data; }
@@ -31,12 +32,12 @@ export function isCompleteConversationMapping(raw: ConversationResponse): boolea
   }
   return true;
 }
-export function getPaginatedConversationApiUrl(conversationId: string, before = ''): string {
+export function getPaginatedConversationApiUrl(conversationId: string, before = '', numTurns = PAGE_NUM_TURNS): string {
   const id = encodeURIComponent(conversationId);
   const path = before ? `/backend-api/conversations/${id}/messages` : `/backend-api/conversations/${id}`;
   const params = new URLSearchParams();
   if (before) params.set('before', before);
-  params.set('include_has_versions', 'true'); params.set('num_turns', String(PAGE_NUM_TURNS));
+  params.set('include_has_versions', 'true'); params.set('num_turns', String(numTurns));
   return `${path}?${params}`;
 }
 function getPaginatedConversationCursor(data: ConversationResponse): string {
@@ -86,7 +87,7 @@ export function isTransientTransportError(error: unknown): boolean {
 
 export function shouldFallbackToLegacyConversation(error: unknown): boolean {
   if (isAbortError(error) || isTransientTransportError(error)) return false;
-  if (error instanceof Error && /API failed: \d+/.test(error.message)) return false;
+  if (error instanceof Error && (/API failed: \d+/.test(error.message) || /invalid JSON/i.test(error.message))) return false;
   return true;
 }
 
@@ -106,6 +107,121 @@ async function wait(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+type ConversationPayload = { status: number; data: ConversationResponse | null };
+
+async function readJsonBody(
+  response: Response,
+  controller: AbortController,
+  external?: AbortSignal
+): Promise<unknown> {
+  return await new Promise((resolve, reject) => {
+    const fail = (): void => {
+      if (external?.aborted) reject(abortError());
+      else reject(new Error("ChatGPT conversation API timed out"));
+    };
+    if (controller.signal.aborted) {
+      fail();
+      return;
+    }
+    const onAbort = (): void => fail();
+    controller.signal.addEventListener("abort", onAbort, { once: true });
+    response.json().then((data) => {
+      controller.signal.removeEventListener("abort", onAbort);
+      if (controller.signal.aborted) {
+        fail();
+        return;
+      }
+      resolve(data);
+    }, (error: unknown) => {
+      controller.signal.removeEventListener("abort", onAbort);
+      if (external?.aborted) reject(abortError());
+      else if (controller.signal.aborted || isAbortError(error)) reject(new Error("ChatGPT conversation API timed out"));
+      else reject(new Error("Conversation API returned invalid JSON"));
+    });
+  });
+}
+
+function createConversationRequest(
+  headers: HeadersInit,
+  signal: AbortSignal | undefined,
+  requestTimeoutMs: number,
+  rateLimitWaitMs: number
+): (url: string) => Promise<ConversationResponse> {
+  const once = async (): Promise<ConversationPayload> => {
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = (): void => controller.abort();
+    const onTimeout = (): void => {
+      timedOut = true;
+      controller.abort();
+    };
+    signal?.addEventListener("abort", abort);
+    if (signal?.aborted) controller.abort();
+    const timer = setTimeout(onTimeout, requestTimeoutMs);
+    try {
+      if (signal?.aborted) throw abortError();
+      const response = await fetch(urlFrom(controller), { credentials: "include", cache: "no-store", headers, signal: controller.signal });
+      if (signal?.aborted) throw abortError();
+      if (timedOut || controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
+      if (response.status === 429) return { status: 429, data: null };
+      if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+      const data = await readJsonBody(response, controller, signal);
+      if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
+      return { status: response.status, data: data as ConversationResponse };
+    } catch (error) {
+      if (signal?.aborted) throw abortError();
+      if (timedOut || controller.signal.aborted || (isAbortError(error) && !signal?.aborted)) {
+        throw new Error("ChatGPT conversation API timed out");
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", abort);
+    }
+  };
+  const urlHolder: { current: string } = { current: "" };
+  function urlFrom(_controller: AbortController): string {
+    return urlHolder.current;
+  }
+  return async (url: string): Promise<ConversationResponse> => {
+    urlHolder.current = url;
+    let payload = await once();
+    if (payload.status === 429) {
+      await wait(rateLimitWaitMs, signal);
+      payload = await once();
+    }
+    if (payload.status === 429 || !payload.data) throw new Error(`ChatGPT conversation API failed: ${payload.status}`);
+    return payload.data;
+  };
+}
+
+export async function fetchRecentConversation(
+  id: string,
+  headers: HeadersInit,
+  signal?: AbortSignal,
+  options: CompleteConversationOptions = {}
+): Promise<ApiConversation> {
+  const request = createConversationRequest(
+    headers,
+    signal,
+    options.requestTimeoutMs ?? 30_000,
+    options.rateLimitWaitMs ?? 1_000
+  );
+  const first = unwrap(await request(getPaginatedConversationApiUrl(id, "", RECENT_TURN_BATCH)));
+  if (Array.isArray(first.messages)) {
+    const messages = mergePaginatedConversationMessages([], first.messages);
+    if (!messages.length) throw new Error("Recent conversation page is empty");
+    const current = first.current_node ?? first.current_node_id ?? "";
+    const rebuilt = buildConversationMappingFromMessages(messages, id, current);
+    return { ...first, ...rebuilt, messages };
+  }
+  if (isCompleteConversationMapping(first)) {
+    const data = unwrap(first);
+    return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
+  }
+  throw new Error("Recent conversation API returned no messages");
+}
+
 export async function fetchCompleteConversation(
   id: string,
   headers: HeadersInit,
@@ -114,40 +230,7 @@ export async function fetchCompleteConversation(
 ): Promise<ApiConversation> {
   const requestTimeoutMs = options.requestTimeoutMs ?? 30_000;
   const rateLimitWaitMs = options.rateLimitWaitMs ?? 1_000;
-  const request = async (url: string): Promise<ConversationResponse> => {
-    const once = async (): Promise<Response> => {
-      const controller = new AbortController();
-      const abort = (): void => controller.abort();
-      signal?.addEventListener("abort", abort, { once: true });
-      if (signal?.aborted) controller.abort();
-      const timer = setTimeout(abort, requestTimeoutMs);
-      try {
-        if (signal?.aborted || controller.signal.aborted) throw abortError();
-        const response = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
-        if (signal?.aborted) throw abortError();
-        if (controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
-        return response;
-      } catch (error) {
-        if (signal?.aborted) throw abortError();
-        if (controller.signal.aborted || (isAbortError(error) && !signal?.aborted)) {
-          throw new Error("ChatGPT conversation API timed out");
-        }
-        throw error;
-      } finally {
-        clearTimeout(timer);
-        signal?.removeEventListener("abort", abort);
-      }
-    };
-    let response = await once();
-    if (response.status === 429) {
-      await wait(rateLimitWaitMs, signal);
-      response = await once();
-    }
-    if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
-    const data = await response.json();
-    if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
-    return data as ConversationResponse;
-  };
+  const request = createConversationRequest(headers, signal, requestTimeoutMs, rateLimitWaitMs);
   const complete = (raw: ConversationResponse): ApiConversation => {
     const data = unwrap(raw);
     if (!isCompleteConversationMapping(raw)) throw new Error('Incomplete active conversation path');

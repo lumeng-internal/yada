@@ -1,74 +1,101 @@
-import { abortError, isAbortError, readConversation as readConversationFromApi } from "../conversation/readConversation";
+import { abortError, isAbortError, readConversation as readConversationFromApi, readRecentConversation as readRecentFromApi } from "../conversation/readConversation";
+import { mergeRecentSnapshot } from "../conversation/mergeRecent";
 import type { ConversationListener, ConversationSnapshot, ReadConversation } from "./types";
 
 export const SIGNAL_INSPECTION_DEBOUNCE_MS = 250;
+const FALLBACK_IDLE_MS = 1_000;
+
+export type SyncDemand = "recent" | "full";
+
+type FullWaiter = {
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
 
 export class ConversationSync {
   private activeConversationId: string | null = null;
   private generation = 0;
   private runningPromise: Promise<void> | null = null;
-  private dirty = false;
+  private desired: SyncDemand | null = null;
+  private active: SyncDemand | null = null;
   private abortController: AbortController | null = null;
   private latestSnapshot: ConversationSnapshot | null = null;
+  private fullStale = false;
   private lastError: Error | null = null;
   private readonly listeners = new Set<ConversationListener>();
+  private readonly fullWaiters: FullWaiter[] = [];
   private observer: MutationObserver | null = null;
   private visibilityListening = false;
-  private initialSyncDeferred = false;
   private signalTimer = 0;
+  private fallbackTimer = 0;
+  private fallbackIdle = 0;
   private lastStreamingState = false;
   private readonly seenAssistantMessageIds = new Set<string>();
   private disposed = false;
   private published = 0;
-  private readonly read: ReadConversation;
+  private readonly readFull: ReadConversation;
+  private readonly readRecent: ReadConversation | null;
 
-  constructor(options: { readConversation?: ReadConversation } = {}) {
-    this.read = options.readConversation ?? readConversationFromApi;
+  constructor(options: { readConversation?: ReadConversation; readRecentConversation?: ReadConversation | null } = {}) {
+    this.readFull = options.readConversation ?? readConversationFromApi;
+    this.readRecent = options.readRecentConversation === undefined
+      ? (options.readConversation ? null : readRecentFromApi)
+      : options.readRecentConversation;
   }
 
   subscribe(listener: ConversationListener): () => void {
     this.listeners.add(listener);
-    void listener(this.latestSnapshot);
+    this.deliver(listener, this.latestSnapshot);
     return () => this.listeners.delete(listener);
   }
 
-  requestSync(_reason: string): Promise<void> {
-    if (this.disposed) return Promise.reject(abortError());
-    this.initialSyncDeferred = false;
-    this.dirty = true;
-    if (this.runningPromise) return this.runningPromise;
-    this.runningPromise = Promise.resolve().then(() => this.runLoop());
-    return this.runningPromise;
+  requestSync(reason: string): Promise<void> {
+    return this.request(this.modeForReason(reason));
+  }
+
+  requestRecent(reason: string): Promise<void> {
+    void reason;
+    return this.request("recent");
+  }
+
+  requestFull(reason: string): Promise<void> {
+    void reason;
+    return this.request("full");
   }
 
   setActiveConversation(conversationId: string | null): void {
     if (this.activeConversationId === conversationId) return;
     this.generation += 1;
     this.clearSignalTimer();
+    this.clearFallback();
     this.abortController?.abort();
     this.abortController = null;
     this.activeConversationId = conversationId;
     this.seenAssistantMessageIds.clear();
     this.lastStreamingState = false;
-    this.initialSyncDeferred = false;
+    this.fullStale = false;
     this.latestSnapshot = null;
     this.lastError = null;
+    this.desired = null;
+    this.rejectFullWaiters(abortError());
     if (!conversationId) {
-      this.dirty = false;
-      void this.publish(null);
+      this.publish(null);
       return;
     }
-    if (document.visibilityState === "hidden") {
-      this.dirty = false;
-      this.initialSyncDeferred = true;
-      return;
-    }
-    this.dirty = true;
-    void this.requestSync("route");
+    this.seedRenderedAssistants();
   }
 
   getSnapshot(): ConversationSnapshot | null {
     return this.latestSnapshot;
+  }
+
+  hasUsableFullSnapshot(conversationId: string | null = this.activeConversationId): boolean {
+    return Boolean(
+      conversationId
+      && this.latestSnapshot?.conversationId === conversationId
+      && !this.fullStale
+      && this.latestSnapshot.coverage !== "recent"
+    );
   }
 
   getLastError(): Error | null {
@@ -107,61 +134,105 @@ export class ConversationSync {
     this.disposed = true;
     this.generation += 1;
     this.clearSignalTimer();
+    this.clearFallback();
     this.abortController?.abort();
     this.abortController = null;
-    this.dirty = false;
+    this.desired = null;
     this.observer?.disconnect();
     this.observer = null;
     if (this.visibilityListening) {
       document.removeEventListener("visibilitychange", this.onVisibility);
       this.visibilityListening = false;
     }
-    this.initialSyncDeferred = false;
+    this.rejectFullWaiters(abortError());
     this.listeners.clear();
     this.latestSnapshot = null;
     this.runningPromise = null;
     this.seenAssistantMessageIds.clear();
   }
 
-  private async runLoop(): Promise<void> {
-    try {
-      while (this.dirty && !this.disposed) {
-        this.dirty = false;
-        const conversationId = this.activeConversationId;
-        const generation = this.generation;
-        if (!conversationId) {
-          await this.publish(null);
-          continue;
-        }
-        this.abortController?.abort();
-        this.abortController = new AbortController();
-        const signal = this.abortController.signal;
-        try {
-          const snapshot = await this.read(conversationId, signal);
-          if (this.disposed || signal.aborted) throw abortError();
-          if (this.activeConversationId === conversationId && this.generation === generation) {
-            snapshot.revision = ++this.published;
-            this.lastError = null;
-            await this.publish(snapshot);
-          }
-        } catch (error) {
-          if (this.disposed) return;
-          if (isAbortError(error) || this.generation !== generation) continue;
-          if (this.activeConversationId === conversationId) {
-            this.lastError = error instanceof Error ? error : new Error(String(error));
-            if (!this.latestSnapshot) await this.publish(null);
-          }
-        }
+  private modeForReason(reason: string): SyncDemand {
+    if (reason === "streaming-end" || reason === "new-assistant") return this.liveMode();
+    return "full";
+  }
+
+  private liveMode(): SyncDemand {
+    return this.hasUsableFullSnapshot() ? "recent" : "full";
+  }
+
+  private request(mode: SyncDemand): Promise<void> {
+    if (this.disposed) return Promise.reject(abortError());
+    const effective: SyncDemand = mode === "recent" && !this.hasUsableFullSnapshot() ? "full" : mode;
+    this.desired = this.desired === "full" || effective === "full" ? "full" : "recent";
+    const waitForTrailingFull = effective === "full" && this.active === "recent";
+    if (!this.runningPromise) {
+      this.runningPromise = Promise.resolve().then(() => this.pump()).finally(() => {
+        this.runningPromise = null;
+        this.active = null;
+        if (this.desired && !this.disposed) void this.request(this.desired);
+      });
+    }
+    if (waitForTrailingFull) {
+      return new Promise((resolve, reject) => {
+        this.fullWaiters.push({ resolve, reject });
+      });
+    }
+    return this.runningPromise;
+  }
+
+  private async pump(): Promise<void> {
+    while (this.desired && !this.disposed) {
+      const mode = this.desired;
+      this.desired = null;
+      this.active = mode;
+      const conversationId = this.activeConversationId;
+      const generation = this.generation;
+      if (!conversationId) {
+        this.publish(null);
+        this.settleFullWaiters();
+        continue;
       }
-    } finally {
-      this.runningPromise = null;
-      if (this.dirty && !this.disposed) {
-        await this.requestSync("drain");
+      this.abortController?.abort();
+      this.abortController = new AbortController();
+      const signal = this.abortController.signal;
+      try {
+        const raw = mode === "recent" && this.readRecent
+          ? await this.readRecent(conversationId, signal)
+          : await this.readFull(conversationId, signal);
+        if (this.disposed || signal.aborted || this.generation !== generation) throw abortError();
+        if (this.activeConversationId !== conversationId) throw abortError();
+        if (mode === "recent" && this.readRecent && this.latestSnapshot) {
+          const merged = await mergeRecentSnapshot(this.latestSnapshot, { ...raw, coverage: "recent" });
+          if (!merged) {
+            this.fullStale = true;
+            this.scheduleIdleFull();
+            continue;
+          }
+          merged.revision = ++this.published;
+          this.fullStale = false;
+          this.lastError = null;
+          this.publish(merged);
+        } else {
+          raw.revision = ++this.published;
+          raw.coverage = "full";
+          this.fullStale = false;
+          this.lastError = null;
+          this.publish(raw);
+        }
+        if (mode === "full") this.settleFullWaiters();
+      } catch (error) {
+        if (this.disposed) return;
+        if (isAbortError(error) || this.generation !== generation) continue;
+        if (this.activeConversationId === conversationId) {
+          this.lastError = error instanceof Error ? error : new Error(String(error));
+          if (!this.latestSnapshot) this.publish(null);
+          if (mode === "full") this.settleFullWaiters(this.lastError);
+        }
       }
     }
   }
 
-  private async publish(snapshot: ConversationSnapshot | null): Promise<void> {
+  private publish(snapshot: ConversationSnapshot | null): void {
     this.latestSnapshot = snapshot;
     if (snapshot) {
       for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
@@ -169,7 +240,30 @@ export class ConversationSync {
         if (turn.assistantMessageId) this.seenAssistantMessageIds.add(turn.assistantMessageId);
       }
     }
-    await Promise.all([...this.listeners].map((listener) => listener(snapshot)));
+    for (const listener of [...this.listeners]) this.deliver(listener, snapshot);
+  }
+
+  private deliver(listener: ConversationListener, snapshot: ConversationSnapshot | null): void {
+    try {
+      const result = listener(snapshot);
+      if (result && typeof (result as Promise<void>).then === "function") {
+        void Promise.resolve(result).catch(() => undefined);
+      }
+    } catch {
+      // One listener cannot block the toolbar, navigator, or quota ledger.
+    }
+  }
+
+  private settleFullWaiters(error?: unknown): void {
+    const waiters = this.fullWaiters.splice(0);
+    for (const waiter of waiters) {
+      if (error) waiter.reject(error);
+      else waiter.resolve();
+    }
+  }
+
+  private rejectFullWaiters(error: unknown): void {
+    this.settleFullWaiters(error);
   }
 
   private scheduleSignalInspection(): void {
@@ -189,31 +283,62 @@ export class ConversationSync {
     this.signalTimer = 0;
   }
 
+  private seedRenderedAssistants(): void {
+    for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+  }
+
   private inspectPageSignals(): void {
     if (this.disposed || !this.activeConversationId) return;
-
     const streaming = isAssistantStreaming();
     const wasStreaming = this.lastStreamingState;
     this.lastStreamingState = streaming;
     if (streaming) return;
 
     if (wasStreaming) {
-      this.initialSyncDeferred = false;
-      void this.requestSync("streaming-end");
+      for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+      void this.request(this.liveMode());
+      return;
     }
 
+    let unseen = false;
     for (const id of collectStableAssistantMessageIds()) {
       if (this.seenAssistantMessageIds.has(id)) continue;
       this.seenAssistantMessageIds.add(id);
-      this.initialSyncDeferred = false;
-      void this.requestSync("new-assistant");
+      unseen = true;
     }
+    if (unseen) void this.request(this.liveMode());
+  }
+
+  private scheduleIdleFull(): void {
+    if (this.fallbackTimer || this.fallbackIdle || this.disposed || !this.fullStale) return;
+    const generation = this.generation;
+    const run = (): void => {
+      this.fallbackTimer = 0;
+      this.fallbackIdle = 0;
+      if (this.disposed || this.generation !== generation || !this.fullStale) return;
+      if (document.visibilityState === "hidden" || isAssistantStreaming()) {
+        this.scheduleIdleFull();
+        return;
+      }
+      void this.requestFull("fallback");
+    };
+    if (typeof requestIdleCallback === "function") {
+      this.fallbackIdle = requestIdleCallback(() => run(), { timeout: FALLBACK_IDLE_MS });
+      return;
+    }
+    this.fallbackTimer = window.setTimeout(run, FALLBACK_IDLE_MS);
+  }
+
+  private clearFallback(): void {
+    if (this.fallbackTimer) window.clearTimeout(this.fallbackTimer);
+    this.fallbackTimer = 0;
+    if (this.fallbackIdle && typeof cancelIdleCallback === "function") cancelIdleCallback(this.fallbackIdle);
+    this.fallbackIdle = 0;
   }
 
   private readonly onVisibility = (): void => {
-    if (document.visibilityState !== "visible" || !this.initialSyncDeferred || !this.activeConversationId) return;
-    this.initialSyncDeferred = false;
-    void this.requestSync("visible");
+    if (document.visibilityState !== "visible" || !this.fullStale) return;
+    this.scheduleIdleFull();
   };
 }
 

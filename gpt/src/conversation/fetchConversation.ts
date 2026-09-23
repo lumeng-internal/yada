@@ -1,4 +1,4 @@
-import { fetchCompleteConversation } from "./completeConversation";
+import { fetchCompleteConversation, fetchRecentConversation } from "./completeConversation";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 
 export type ApiAuthorRole = "system" | "assistant" | "user" | "tool";
@@ -63,6 +63,73 @@ export class ChatGPTApiTimeoutError extends Error {
   }
 }
 
+export async function chatgptApiJson(
+  path: string,
+  init: RequestInit = {},
+  options: { timeoutMs?: number } = {}
+): Promise<unknown> {
+  const headers = new Headers(init.headers);
+  headers.set("Accept", headers.get("Accept") ?? "application/json");
+  const accessToken = await getAccessToken();
+  if (accessToken && !headers.has("Authorization")) {
+    headers.set("Authorization", `Bearer ${accessToken}`);
+    headers.set("X-Authorization", `Bearer ${accessToken}`);
+  }
+  const accountId = getChatGptAccountId();
+  if (accountId && !headers.has("Chatgpt-Account-Id")) {
+    headers.set("Chatgpt-Account-Id", accountId);
+  }
+  const controller = new AbortController();
+  let timedOut = false;
+  const abort = (): void => controller.abort();
+  init.signal?.addEventListener("abort", abort);
+  if (init.signal?.aborted) controller.abort();
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, options.timeoutMs ?? 15_000);
+  try {
+    if (init.signal?.aborted) throw abortError();
+    const response = await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
+    if (init.signal?.aborted) throw abortError();
+    if (timedOut || controller.signal.aborted) throw new ChatGPTApiTimeoutError();
+    if (!response.ok) throw new Error(`API failed: ${response.status}`);
+    return await new Promise((resolve, reject) => {
+      const fail = (): void => {
+        if (init.signal?.aborted) reject(abortError());
+        else reject(new ChatGPTApiTimeoutError());
+      };
+      if (controller.signal.aborted) {
+        fail();
+        return;
+      }
+      const onAbort = (): void => fail();
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      response.json().then((data) => {
+        controller.signal.removeEventListener("abort", onAbort);
+        if (controller.signal.aborted) fail();
+        else resolve(data);
+      }, (error: unknown) => {
+        controller.signal.removeEventListener("abort", onAbort);
+        if (init.signal?.aborted) reject(abortError());
+        else if (timedOut || controller.signal.aborted || isAbortError(error)) reject(new ChatGPTApiTimeoutError());
+        else reject(error);
+      });
+    });
+  } catch (error) {
+    if (init.signal?.aborted) throw abortError();
+    if (timedOut || error instanceof ChatGPTApiTimeoutError || controller.signal.aborted) throw new ChatGPTApiTimeoutError();
+    throw error;
+  } finally {
+    clearTimeout(timer);
+    init.signal?.removeEventListener("abort", abort);
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return Boolean(error && typeof error === "object" && "name" in error && (error as { name: string }).name === "AbortError");
+}
+
 export async function chatgptApi(
   path: string,
   init: RequestInit = {},
@@ -97,7 +164,7 @@ export async function chatgptApi(
   }
 }
 
-export async function fetchConversation(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {
+async function authorizedHeaders(): Promise<HeadersInit> {
   const headers: HeadersInit = { Accept: "application/json" };
   const accessToken = await getAccessToken();
   if (accessToken) {
@@ -108,7 +175,15 @@ export async function fetchConversation(conversationId: string, signal?: AbortSi
   if (accountId) {
     headers["Chatgpt-Account-Id"] = accountId;
   }
-  return fetchCompleteConversation(conversationId, headers, signal);
+  return headers;
+}
+
+export async function fetchConversation(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {
+  return fetchCompleteConversation(conversationId, await authorizedHeaders(), signal);
+}
+
+export async function fetchRecentConversationPage(conversationId: string, signal?: AbortSignal): Promise<ApiConversation> {
+  return fetchRecentConversation(conversationId, await authorizedHeaders(), signal);
 }
 
 async function getAccessToken(): Promise<string | null> {

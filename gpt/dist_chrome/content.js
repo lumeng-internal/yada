@@ -1,7 +1,199 @@
 "use strict";
 (() => {
+  // src/nativeNavigator/protocol.ts
+  var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
+  var PREPARE_HEARTBEAT_MS = 4e3;
+  var PREPARE_ACK_WAIT_MS = 1e3;
+  function emptyTransportState(conversationId, generation = 0) {
+    return {
+      conversationId,
+      generation,
+      revision: 0,
+      historyRequests: 0,
+      olderRequests: 0,
+      requestInFlight: false,
+      lastRequestKind: null,
+      lastHttpStatus: null,
+      lastRequestDurationMs: 0,
+      lastRequestAt: null,
+      lastRequestError: null,
+      boosted: false
+    };
+  }
+  function record(value) {
+    return value != null && typeof value === "object" && !Array.isArray(value) ? value : null;
+  }
+  function identifier(value) {
+    return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
+  }
+  function conversationIdFromUrl(input) {
+    try {
+      const parts = new URL(input).pathname.split("/").filter(Boolean);
+      const marker = parts.indexOf("c");
+      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
+    } catch {
+      return null;
+    }
+  }
+  function isMessageDeepLink(input = location.href) {
+    try {
+      const params = new URL(input).searchParams;
+      return params.has("message") || params.has("messageId");
+    } catch {
+      return false;
+    }
+  }
+  function isNativeTransportState(value) {
+    const candidate = record(value);
+    if (!candidate) return false;
+    if (candidate.conversationId !== null && !identifier(candidate.conversationId)) return false;
+    if (typeof candidate.requestInFlight !== "boolean" || typeof candidate.boosted !== "boolean") return false;
+    if (candidate.lastRequestKind !== null && candidate.lastRequestKind !== "initial" && candidate.lastRequestKind !== "older") return false;
+    if (candidate.lastRequestError !== null && candidate.lastRequestError !== "http-error" && candidate.lastRequestError !== "aborted" && candidate.lastRequestError !== "fetch-error") return false;
+    if (candidate.lastHttpStatus !== null && (!Number.isSafeInteger(candidate.lastHttpStatus) || candidate.lastHttpStatus < 100 || candidate.lastHttpStatus > 599)) return false;
+    if (candidate.lastRequestAt !== null && (!Number.isSafeInteger(candidate.lastRequestAt) || candidate.lastRequestAt < 0)) return false;
+    for (const key of ["generation", "revision", "historyRequests", "olderRequests", "lastRequestDurationMs"]) {
+      const number = candidate[key];
+      if (!Number.isSafeInteger(number) || number < 0 || number > Number.MAX_SAFE_INTEGER) return false;
+    }
+    return candidate.olderRequests <= candidate.historyRequests;
+  }
+
+  // src/core/bootGate.ts
+  var BOOT_FALLBACK_MS = 15e3;
+  var IDLE_TIMEOUT_MS = 2e3;
+  var ConversationBootGate = class {
+    constructor(sync) {
+      this.sync = sync;
+    }
+    generation = 0;
+    conversationId = null;
+    observer = null;
+    timer = 0;
+    idleTimer = 0;
+    idleId = 0;
+    listening = false;
+    transferSeen = false;
+    launched = false;
+    arm(conversationId) {
+      this.stopWatching();
+      this.conversationId = conversationId;
+      this.transferSeen = false;
+      this.launched = false;
+      if (!conversationId || document.visibilityState === "hidden") return;
+      if (this.sync.hasUsableFullSnapshot(conversationId)) return;
+      const generation = ++this.generation;
+      this.timer = window.setTimeout(() => this.fallback(generation), BOOT_FALLBACK_MS);
+      this.listenMain();
+      this.observeResources(conversationId, generation);
+    }
+    clear() {
+      this.generation += 1;
+      this.stopWatching();
+      this.conversationId = null;
+    }
+    dispose() {
+      this.clear();
+    }
+    observeResources(conversationId, generation) {
+      const existing = performance.getEntriesByType?.("resource") ?? [];
+      if (existing.some((entry) => historyTransferDone(entry, conversationId))) {
+        this.onTransfer(generation);
+        return;
+      }
+      if (typeof PerformanceObserver === "undefined") return;
+      this.observer = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (historyTransferDone(entry, conversationId)) this.onTransfer(generation);
+        }
+      });
+      try {
+        this.observer.observe({ type: "resource", buffered: true });
+      } catch {
+        this.observer.disconnect();
+        this.observer = null;
+      }
+    }
+    listenMain() {
+      if (this.listening) return;
+      window.addEventListener("message", this.onMain);
+      this.listening = true;
+    }
+    onMain = (event) => {
+      if (event.source !== window || event.origin !== location.origin) return;
+      const message = record(event.data);
+      if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state") return;
+      const state = record(message.state);
+      if (!state || state.conversationId !== this.conversationId) return;
+      if (state.requestInFlight !== false || state.lastRequestKind !== "initial") return;
+      if (this.observer) return;
+      this.onTransfer(this.generation);
+    };
+    onTransfer(generation) {
+      if (generation !== this.generation || this.transferSeen || this.launched) return;
+      this.transferSeen = true;
+      const start = () => {
+        this.idleId = 0;
+        this.idleTimer = 0;
+        this.launch(generation);
+      };
+      if (typeof requestIdleCallback === "function") {
+        this.idleId = requestIdleCallback(() => start(), { timeout: IDLE_TIMEOUT_MS });
+        return;
+      }
+      this.idleTimer = window.setTimeout(start, 0);
+    }
+    fallback(generation) {
+      this.timer = 0;
+      if (generation !== this.generation || this.launched) return;
+      this.launch(generation);
+    }
+    launch(generation) {
+      if (generation !== this.generation || this.launched) return;
+      if (!this.canStart()) return;
+      this.launched = true;
+      this.stopWatching();
+      void this.sync.requestFull("boot");
+    }
+    canStart() {
+      if (!this.conversationId || this.sync.getActiveConversationId() !== this.conversationId) return false;
+      if (document.visibilityState === "hidden" || isAssistantStreaming()) return false;
+      if (this.sync.hasUsableFullSnapshot(this.conversationId)) return false;
+      return true;
+    }
+    stopWatching() {
+      this.observer?.disconnect();
+      this.observer = null;
+      if (this.timer) window.clearTimeout(this.timer);
+      this.timer = 0;
+      if (this.idleTimer) window.clearTimeout(this.idleTimer);
+      this.idleTimer = 0;
+      if (this.idleId && typeof cancelIdleCallback === "function") cancelIdleCallback(this.idleId);
+      this.idleId = 0;
+      if (this.listening) {
+        window.removeEventListener("message", this.onMain);
+        this.listening = false;
+      }
+    }
+  };
+  function historyTransferDone(entry, conversationId) {
+    const timing = entry;
+    if (!(timing.responseEnd > 0)) return false;
+    try {
+      const url = new URL(entry.name);
+      const path = url.pathname;
+      return path === `/backend-api/conversations/${conversationId}` || path === `/backend-api/conversation/${conversationId}` || path === `/backend-api/conversations/${conversationId}/messages`;
+    } catch {
+      return false;
+    }
+  }
+  function isAssistantStreaming() {
+    return Boolean(document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming'));
+  }
+
   // src/conversation/completeConversation.ts
   var PAGE_NUM_TURNS = 100;
+  var RECENT_TURN_BATCH = 16;
   var MAX_PAGES = 500;
   function unwrap(data) {
     return data.conversation ?? data;
@@ -24,13 +216,13 @@
     }
     return true;
   }
-  function getPaginatedConversationApiUrl(conversationId, before = "") {
+  function getPaginatedConversationApiUrl(conversationId, before = "", numTurns = PAGE_NUM_TURNS) {
     const id = encodeURIComponent(conversationId);
     const path = before ? `/backend-api/conversations/${id}/messages` : `/backend-api/conversations/${id}`;
     const params = new URLSearchParams();
     if (before) params.set("before", before);
     params.set("include_has_versions", "true");
-    params.set("num_turns", String(PAGE_NUM_TURNS));
+    params.set("num_turns", String(numTurns));
     return `${path}?${params}`;
   }
   function getPaginatedConversationCursor(data) {
@@ -69,7 +261,7 @@
   }
   function shouldFallbackToLegacyConversation(error) {
     if (isAbortError(error) || isTransientTransportError(error)) return false;
-    if (error instanceof Error && /API failed: \d+/.test(error.message)) return false;
+    if (error instanceof Error && (/API failed: \d+/.test(error.message) || /invalid JSON/i.test(error.message))) return false;
     return true;
   }
   async function wait(ms, signal) {
@@ -87,43 +279,106 @@
       signal?.addEventListener("abort", onAbort, { once: true });
     });
   }
+  async function readJsonBody(response, controller, external) {
+    return await new Promise((resolve, reject) => {
+      const fail = () => {
+        if (external?.aborted) reject(abortError());
+        else reject(new Error("ChatGPT conversation API timed out"));
+      };
+      if (controller.signal.aborted) {
+        fail();
+        return;
+      }
+      const onAbort = () => fail();
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+      response.json().then((data) => {
+        controller.signal.removeEventListener("abort", onAbort);
+        if (controller.signal.aborted) {
+          fail();
+          return;
+        }
+        resolve(data);
+      }, (error) => {
+        controller.signal.removeEventListener("abort", onAbort);
+        if (external?.aborted) reject(abortError());
+        else if (controller.signal.aborted || isAbortError(error)) reject(new Error("ChatGPT conversation API timed out"));
+        else reject(new Error("Conversation API returned invalid JSON"));
+      });
+    });
+  }
+  function createConversationRequest(headers, signal, requestTimeoutMs, rateLimitWaitMs) {
+    const once = async () => {
+      const controller = new AbortController();
+      let timedOut = false;
+      const abort = () => controller.abort();
+      const onTimeout = () => {
+        timedOut = true;
+        controller.abort();
+      };
+      signal?.addEventListener("abort", abort);
+      if (signal?.aborted) controller.abort();
+      const timer = setTimeout(onTimeout, requestTimeoutMs);
+      try {
+        if (signal?.aborted) throw abortError();
+        const response = await fetch(urlFrom(controller), { credentials: "include", cache: "no-store", headers, signal: controller.signal });
+        if (signal?.aborted) throw abortError();
+        if (timedOut || controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
+        if (response.status === 429) return { status: 429, data: null };
+        if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
+        const data = await readJsonBody(response, controller, signal);
+        if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
+        return { status: response.status, data };
+      } catch (error) {
+        if (signal?.aborted) throw abortError();
+        if (timedOut || controller.signal.aborted || isAbortError(error) && !signal?.aborted) {
+          throw new Error("ChatGPT conversation API timed out");
+        }
+        throw error;
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      }
+    };
+    const urlHolder = { current: "" };
+    function urlFrom(_controller) {
+      return urlHolder.current;
+    }
+    return async (url) => {
+      urlHolder.current = url;
+      let payload = await once();
+      if (payload.status === 429) {
+        await wait(rateLimitWaitMs, signal);
+        payload = await once();
+      }
+      if (payload.status === 429 || !payload.data) throw new Error(`ChatGPT conversation API failed: ${payload.status}`);
+      return payload.data;
+    };
+  }
+  async function fetchRecentConversation(id, headers, signal, options = {}) {
+    const request = createConversationRequest(
+      headers,
+      signal,
+      options.requestTimeoutMs ?? 3e4,
+      options.rateLimitWaitMs ?? 1e3
+    );
+    const first = unwrap(await request(getPaginatedConversationApiUrl(id, "", RECENT_TURN_BATCH)));
+    if (Array.isArray(first.messages)) {
+      const messages = mergePaginatedConversationMessages([], first.messages);
+      if (!messages.length) throw new Error("Recent conversation page is empty");
+      const current = first.current_node ?? first.current_node_id ?? "";
+      const rebuilt = buildConversationMappingFromMessages(messages, id, current);
+      return { ...first, ...rebuilt, messages };
+    }
+    if (isCompleteConversationMapping(first)) {
+      const data = unwrap(first);
+      return { ...data, id: data.id ?? data.conversation_id ?? id, current_node: data.current_node ?? data.current_node_id };
+    }
+    throw new Error("Recent conversation API returned no messages");
+  }
   async function fetchCompleteConversation(id, headers, signal, options = {}) {
     const requestTimeoutMs = options.requestTimeoutMs ?? 3e4;
     const rateLimitWaitMs = options.rateLimitWaitMs ?? 1e3;
-    const request = async (url) => {
-      const once = async () => {
-        const controller = new AbortController();
-        const abort = () => controller.abort();
-        signal?.addEventListener("abort", abort, { once: true });
-        if (signal?.aborted) controller.abort();
-        const timer = setTimeout(abort, requestTimeoutMs);
-        try {
-          if (signal?.aborted || controller.signal.aborted) throw abortError();
-          const response2 = await fetch(url, { credentials: "include", cache: "no-store", headers, signal: controller.signal });
-          if (signal?.aborted) throw abortError();
-          if (controller.signal.aborted) throw new Error("ChatGPT conversation API timed out");
-          return response2;
-        } catch (error) {
-          if (signal?.aborted) throw abortError();
-          if (controller.signal.aborted || isAbortError(error) && !signal?.aborted) {
-            throw new Error("ChatGPT conversation API timed out");
-          }
-          throw error;
-        } finally {
-          clearTimeout(timer);
-          signal?.removeEventListener("abort", abort);
-        }
-      };
-      let response = await once();
-      if (response.status === 429) {
-        await wait(rateLimitWaitMs, signal);
-        response = await once();
-      }
-      if (!response.ok) throw new Error(`ChatGPT conversation API failed: ${response.status}`);
-      const data = await response.json();
-      if (!data || typeof data !== "object") throw new Error("Conversation API returned an empty response");
-      return data;
-    };
+    const request = createConversationRequest(headers, signal, requestTimeoutMs, rateLimitWaitMs);
     const complete = (raw) => {
       const data = unwrap(raw);
       if (!isCompleteConversationMapping(raw)) throw new Error("Incomplete active conversation path");
@@ -211,6 +466,67 @@
       this.name = "ChatGPTApiTimeoutError";
     }
   };
+  async function chatgptApiJson(path, init = {}, options = {}) {
+    const headers = new Headers(init.headers);
+    headers.set("Accept", headers.get("Accept") ?? "application/json");
+    const accessToken = await getAccessToken();
+    if (accessToken && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${accessToken}`);
+      headers.set("X-Authorization", `Bearer ${accessToken}`);
+    }
+    const accountId = getChatGptAccountId();
+    if (accountId && !headers.has("Chatgpt-Account-Id")) {
+      headers.set("Chatgpt-Account-Id", accountId);
+    }
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = () => controller.abort();
+    init.signal?.addEventListener("abort", abort);
+    if (init.signal?.aborted) controller.abort();
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, options.timeoutMs ?? 15e3);
+    try {
+      if (init.signal?.aborted) throw abortError2();
+      const response = await fetch(path, { credentials: "include", cache: "no-store", ...init, headers, signal: controller.signal });
+      if (init.signal?.aborted) throw abortError2();
+      if (timedOut || controller.signal.aborted) throw new ChatGPTApiTimeoutError();
+      if (!response.ok) throw new Error(`API failed: ${response.status}`);
+      return await new Promise((resolve, reject) => {
+        const fail = () => {
+          if (init.signal?.aborted) reject(abortError2());
+          else reject(new ChatGPTApiTimeoutError());
+        };
+        if (controller.signal.aborted) {
+          fail();
+          return;
+        }
+        const onAbort = () => fail();
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        response.json().then((data) => {
+          controller.signal.removeEventListener("abort", onAbort);
+          if (controller.signal.aborted) fail();
+          else resolve(data);
+        }, (error) => {
+          controller.signal.removeEventListener("abort", onAbort);
+          if (init.signal?.aborted) reject(abortError2());
+          else if (timedOut || controller.signal.aborted || isAbortError2(error)) reject(new ChatGPTApiTimeoutError());
+          else reject(error);
+        });
+      });
+    } catch (error) {
+      if (init.signal?.aborted) throw abortError2();
+      if (timedOut || error instanceof ChatGPTApiTimeoutError || controller.signal.aborted) throw new ChatGPTApiTimeoutError();
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      init.signal?.removeEventListener("abort", abort);
+    }
+  }
+  function isAbortError2(error) {
+    return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
+  }
   async function chatgptApi(path, init = {}, options = {}) {
     const headers = new Headers(init.headers);
     headers.set("Accept", headers.get("Accept") ?? "application/json");
@@ -240,7 +556,7 @@
       init.signal?.removeEventListener("abort", abort);
     }
   }
-  async function fetchConversation(conversationId, signal) {
+  async function authorizedHeaders() {
     const headers = { Accept: "application/json" };
     const accessToken = await getAccessToken();
     if (accessToken) {
@@ -251,7 +567,13 @@
     if (accountId) {
       headers["Chatgpt-Account-Id"] = accountId;
     }
-    return fetchCompleteConversation(conversationId, headers, signal);
+    return headers;
+  }
+  async function fetchConversation(conversationId, signal) {
+    return fetchCompleteConversation(conversationId, await authorizedHeaders(), signal);
+  }
+  async function fetchRecentConversationPage(conversationId, signal) {
+    return fetchRecentConversation(conversationId, await authorizedHeaders(), signal);
   }
   async function getAccessToken() {
     sessionTokenPromise ??= fetchSessionToken().then((token) => {
@@ -864,7 +1186,9 @@ ${text}
     let cancelled = false;
     let hitDeadline = false;
     let hitDetailBudget = false;
+    let stopSlice = false;
     const turns = [];
+    const streams = input.includeArchived === false ? [false] : [false, true];
     const aborted = () => Boolean(input.signal?.aborted);
     const recordFailure = (error) => {
       failures += 1;
@@ -872,14 +1196,15 @@ ${text}
       else permanentFailures += 1;
     };
     try {
-      for (const archived of [false, true]) {
+      streamLoop: for (const archived of streams) {
         let offset = 0;
         let reachedEnd = false;
-        for (let page = 0; page < maxPages; page++) {
+        for (let page = 0; page < maxPages && !stopSlice; page++) {
           if (aborted()) throw abortError3();
           if (clock() >= deadline) {
             hitDeadline = true;
-            break;
+            stopSlice = true;
+            break streamLoop;
           }
           const path = `/backend-api/conversations?offset=${offset}&limit=${pageSize}&order=updated&is_archived=${archived}`;
           const data = await input.transport.request(path, input.signal);
@@ -909,21 +1234,21 @@ ${text}
             const key = await identity(id);
             let parsed = cache.conversations[key];
             if (parsed?.updatedAt !== updated) {
-              if (fetched < detailBudget && clock() < deadline) {
-                fetched += 1;
-                try {
-                  const detail = await (input.fetchDetail ? input.fetchDetail(id, input.signal) : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
-                  parsed = await parseConversation(detail, id, updated, cutoff);
-                  cache.conversations[key] = parsed;
-                  fetchedSuccessfully += 1;
-                } catch (error) {
-                  if (isAbortError2(error)) throw error;
-                  recordFailure(error);
-                }
-              } else {
+              if (fetched >= detailBudget || clock() >= deadline) {
                 if (fetched >= detailBudget) hitDetailBudget = true;
                 if (clock() >= deadline) hitDeadline = true;
-                failures += 1;
+                stopSlice = true;
+                break streamLoop;
+              }
+              fetched += 1;
+              try {
+                const detail = await (input.fetchDetail ? input.fetchDetail(id, input.signal) : input.transport.request(`/backend-api/conversation/${id}`, input.signal));
+                parsed = await parseConversation(detail, id, updated, cutoff);
+                cache.conversations[key] = parsed;
+                fetchedSuccessfully += 1;
+              } catch (error) {
+                if (isAbortError3(error)) throw error;
+                recordFailure(error);
               }
             }
             if (parsed) {
@@ -942,15 +1267,17 @@ ${text}
             break;
           }
         }
+        if (stopSlice) break;
         if (reachedEnd) streamsFinished += 1;
       }
     } catch (error) {
-      if (isAbortError2(error)) cancelled = true;
+      if (isAbortError3(error)) cancelled = true;
       else recordFailure(error);
     }
     if (!cancelled) await input.store.save(cache, input.identity);
     const recent = turns.filter((turn) => turn.createdAt >= cutoff && turn.createdAt <= input.now);
-    const complete = streamsFinished === 2 && failures === 0 && !cancelled && !hitDetailBudget && !hitDeadline;
+    const complete = streamsFinished === streams.length && failures === 0 && !cancelled && !hitDetailBudget && !hitDeadline;
+    const needsContinuation = !complete && !cancelled && permanentFailures === 0 && retryableFailures === 0 && (hitDetailBudget || hitDeadline);
     return {
       turns: recent,
       summary: {
@@ -966,14 +1293,15 @@ ${text}
         permanentFailures,
         cancelled,
         hitDetailBudget,
-        hitDeadline
+        hitDeadline,
+        needsContinuation
       }
     };
   }
   function abortError3() {
     return new DOMException("Aborted", "AbortError");
   }
-  function isAbortError2(error) {
+  function isAbortError3(error) {
     return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
   }
 
@@ -981,7 +1309,7 @@ ${text}
   function abortError4() {
     return new DOMException("Aborted", "AbortError");
   }
-  function isAbortError3(error) {
+  function isAbortError4(error) {
     return Boolean(error && typeof error === "object" && "name" in error && error.name === "AbortError");
   }
   async function readConversation(conversationId, signal) {
@@ -1007,73 +1335,185 @@ ${text}
       quotaUnclassifiedTurns: parsed.unclassifiedTurns,
       quotaOrigin: conversationOrigin(conversation),
       quotaTemporary: isTemporary(conversation),
-      title: conversation.title
+      title: conversation.title,
+      coverage: "full"
     };
+  }
+  async function readRecentConversation(conversationId, signal) {
+    const snapshot = await readConversationWith(conversationId, signal, fetchRecentConversationPage);
+    return { ...snapshot, coverage: "recent" };
+  }
+  async function readConversationWith(conversationId, signal, load) {
+    if (signal?.aborted) throw abortError4();
+    if (!conversationId) throw new Error("No active ChatGPT conversation");
+    const conversation = await load(conversationId, signal);
+    if (signal?.aborted) throw abortError4();
+    const now = Date.now();
+    const parsed = await parseConversation(
+      conversation,
+      conversation.id ?? conversation.conversation_id ?? conversationId,
+      now,
+      now - HISTORY_WINDOW_SECONDS * 1e3
+    );
+    return {
+      conversationId: conversation.id ?? conversation.conversation_id ?? conversationId,
+      revision: 0,
+      capturedAt: now,
+      activeTurns: normalizeConversation(conversation),
+      quotaTurns: parsed.turns,
+      quotaIsWork: parsed.isWork,
+      quotaUnclassifiedTurns: parsed.unclassifiedTurns,
+      quotaOrigin: conversationOrigin(conversation),
+      quotaTemporary: isTemporary(conversation),
+      title: conversation.title,
+      coverage: "full"
+    };
+  }
+
+  // src/conversation/mergeRecent.ts
+  async function mergeRecentSnapshot(full, recent) {
+    if (full.conversationId !== recent.conversationId) return null;
+    if (!full.activeTurns.length || !recent.activeTurns.length) return null;
+    if (recent.quotaUnclassifiedTurns > 0) return null;
+    if (recent.quotaIsWork !== full.quotaIsWork || recent.quotaTemporary !== full.quotaTemporary) return null;
+    if (full.quotaOrigin && recent.quotaOrigin && full.quotaOrigin !== recent.quotaOrigin) return null;
+    const anchor = findAnchor(full.activeTurns, recent.activeTurns);
+    if (!anchor) return null;
+    const prefix = full.activeTurns.slice(0, anchor.fullIndex);
+    const tail = recent.activeTurns.slice(anchor.recentIndex).map((turn, index2) => renumber(turn, prefix.length + index2));
+    const replacedUserIds = full.activeTurns.slice(anchor.fullIndex).map((turn) => turn.userMessageId).filter((id) => Boolean(id));
+    const replaced = new Set(await Promise.all(replacedUserIds.map((id) => identity(`${full.conversationId}:${id}`))));
+    const kept = full.quotaTurns.filter((turn) => !replaced.has(turn.id));
+    const quotaTurns = dedupeTurns([...kept, ...recent.quotaTurns]);
+    return {
+      ...full,
+      revision: full.revision,
+      capturedAt: recent.capturedAt,
+      activeTurns: [...prefix, ...tail],
+      quotaTurns,
+      quotaUnclassifiedTurns: full.quotaUnclassifiedTurns,
+      title: recent.title ?? full.title,
+      coverage: "full"
+    };
+  }
+  function renumber(turn, index2) {
+    return { ...turn, index: index2, globalIndex: index2, displayNumber: index2 + 1 };
+  }
+  function findAnchor(full, recent) {
+    for (let fullIndex = full.length - 1; fullIndex >= 0; fullIndex -= 1) {
+      const userId = full[fullIndex]?.userMessageId;
+      if (!userId) continue;
+      const recentIndex = recent.findIndex((turn) => turn.userMessageId === userId);
+      if (recentIndex < 0) continue;
+      if (tailAgrees(full, recent, fullIndex, recentIndex)) return { fullIndex, recentIndex };
+    }
+    return null;
+  }
+  function tailAgrees(full, recent, fullIndex, recentIndex) {
+    let offset = 0;
+    while (fullIndex + offset < full.length && recentIndex + offset < recent.length) {
+      const fullId = full[fullIndex + offset]?.userMessageId;
+      const recentId = recent[recentIndex + offset]?.userMessageId;
+      if (!fullId || !recentId) return false;
+      if (fullId !== recentId) return replacementAgrees(full, recent, fullIndex + offset, recentIndex + offset);
+      offset += 1;
+    }
+    if (recentIndex + offset >= recent.length && fullIndex + offset < full.length) return false;
+    return extensionIsNew(full, recent.slice(recentIndex + offset));
+  }
+  function replacementAgrees(full, recent, fullIndex, recentIndex) {
+    const earlier = new Set(full.slice(0, fullIndex).map((turn) => turn.userMessageId));
+    const replaced = new Set(full.slice(fullIndex).map((turn) => turn.userMessageId));
+    for (const turn of recent.slice(recentIndex)) {
+      const id = turn.userMessageId;
+      if (!id || earlier.has(id) || replaced.has(id)) return false;
+    }
+    return true;
+  }
+  function extensionIsNew(full, extra) {
+    const known = new Set(full.map((turn) => turn.userMessageId));
+    return extra.every((turn) => Boolean(turn.userMessageId) && !known.has(turn.userMessageId));
+  }
+  function dedupeTurns(turns) {
+    const byId = /* @__PURE__ */ new Map();
+    for (const turn of turns) byId.set(turn.id, turn);
+    return [...byId.values()];
   }
 
   // src/core/conversationSync.ts
   var SIGNAL_INSPECTION_DEBOUNCE_MS = 250;
+  var FALLBACK_IDLE_MS = 1e3;
   var ConversationSync = class {
     activeConversationId = null;
     generation = 0;
     runningPromise = null;
-    dirty = false;
+    desired = null;
+    active = null;
     abortController = null;
     latestSnapshot = null;
+    fullStale = false;
     lastError = null;
     listeners = /* @__PURE__ */ new Set();
+    fullWaiters = [];
     observer = null;
     visibilityListening = false;
-    initialSyncDeferred = false;
     signalTimer = 0;
+    fallbackTimer = 0;
+    fallbackIdle = 0;
     lastStreamingState = false;
     seenAssistantMessageIds = /* @__PURE__ */ new Set();
     disposed = false;
     published = 0;
-    read;
+    readFull;
+    readRecent;
     constructor(options = {}) {
-      this.read = options.readConversation ?? readConversation;
+      this.readFull = options.readConversation ?? readConversation;
+      this.readRecent = options.readRecentConversation === void 0 ? options.readConversation ? null : readRecentConversation : options.readRecentConversation;
     }
     subscribe(listener) {
       this.listeners.add(listener);
-      void listener(this.latestSnapshot);
+      this.deliver(listener, this.latestSnapshot);
       return () => this.listeners.delete(listener);
     }
-    requestSync(_reason) {
-      if (this.disposed) return Promise.reject(abortError4());
-      this.initialSyncDeferred = false;
-      this.dirty = true;
-      if (this.runningPromise) return this.runningPromise;
-      this.runningPromise = Promise.resolve().then(() => this.runLoop());
-      return this.runningPromise;
+    requestSync(reason) {
+      return this.request(this.modeForReason(reason));
+    }
+    requestRecent(reason) {
+      void reason;
+      return this.request("recent");
+    }
+    requestFull(reason) {
+      void reason;
+      return this.request("full");
     }
     setActiveConversation(conversationId) {
       if (this.activeConversationId === conversationId) return;
       this.generation += 1;
       this.clearSignalTimer();
+      this.clearFallback();
       this.abortController?.abort();
       this.abortController = null;
       this.activeConversationId = conversationId;
       this.seenAssistantMessageIds.clear();
       this.lastStreamingState = false;
-      this.initialSyncDeferred = false;
+      this.fullStale = false;
       this.latestSnapshot = null;
       this.lastError = null;
+      this.desired = null;
+      this.rejectFullWaiters(abortError4());
       if (!conversationId) {
-        this.dirty = false;
-        void this.publish(null);
+        this.publish(null);
         return;
       }
-      if (document.visibilityState === "hidden") {
-        this.dirty = false;
-        this.initialSyncDeferred = true;
-        return;
-      }
-      this.dirty = true;
-      void this.requestSync("route");
+      this.seedRenderedAssistants();
     }
     getSnapshot() {
       return this.latestSnapshot;
+    }
+    hasUsableFullSnapshot(conversationId = this.activeConversationId) {
+      return Boolean(
+        conversationId && this.latestSnapshot?.conversationId === conversationId && !this.fullStale && this.latestSnapshot.coverage !== "recent"
+      );
     }
     getLastError() {
       return this.lastError;
@@ -1106,59 +1546,98 @@ ${text}
       this.disposed = true;
       this.generation += 1;
       this.clearSignalTimer();
+      this.clearFallback();
       this.abortController?.abort();
       this.abortController = null;
-      this.dirty = false;
+      this.desired = null;
       this.observer?.disconnect();
       this.observer = null;
       if (this.visibilityListening) {
         document.removeEventListener("visibilitychange", this.onVisibility);
         this.visibilityListening = false;
       }
-      this.initialSyncDeferred = false;
+      this.rejectFullWaiters(abortError4());
       this.listeners.clear();
       this.latestSnapshot = null;
       this.runningPromise = null;
       this.seenAssistantMessageIds.clear();
     }
-    async runLoop() {
-      try {
-        while (this.dirty && !this.disposed) {
-          this.dirty = false;
-          const conversationId = this.activeConversationId;
-          const generation = this.generation;
-          if (!conversationId) {
-            await this.publish(null);
-            continue;
-          }
-          this.abortController?.abort();
-          this.abortController = new AbortController();
-          const signal = this.abortController.signal;
-          try {
-            const snapshot = await this.read(conversationId, signal);
-            if (this.disposed || signal.aborted) throw abortError4();
-            if (this.activeConversationId === conversationId && this.generation === generation) {
-              snapshot.revision = ++this.published;
-              this.lastError = null;
-              await this.publish(snapshot);
-            }
-          } catch (error) {
-            if (this.disposed) return;
-            if (isAbortError3(error) || this.generation !== generation) continue;
-            if (this.activeConversationId === conversationId) {
-              this.lastError = error instanceof Error ? error : new Error(String(error));
-              if (!this.latestSnapshot) await this.publish(null);
-            }
-          }
+    modeForReason(reason) {
+      if (reason === "streaming-end" || reason === "new-assistant") return this.liveMode();
+      return "full";
+    }
+    liveMode() {
+      return this.hasUsableFullSnapshot() ? "recent" : "full";
+    }
+    request(mode) {
+      if (this.disposed) return Promise.reject(abortError4());
+      const effective = mode === "recent" && !this.hasUsableFullSnapshot() ? "full" : mode;
+      this.desired = this.desired === "full" || effective === "full" ? "full" : "recent";
+      const waitForTrailingFull = effective === "full" && this.active === "recent";
+      if (!this.runningPromise) {
+        this.runningPromise = Promise.resolve().then(() => this.pump()).finally(() => {
+          this.runningPromise = null;
+          this.active = null;
+          if (this.desired && !this.disposed) void this.request(this.desired);
+        });
+      }
+      if (waitForTrailingFull) {
+        return new Promise((resolve, reject) => {
+          this.fullWaiters.push({ resolve, reject });
+        });
+      }
+      return this.runningPromise;
+    }
+    async pump() {
+      while (this.desired && !this.disposed) {
+        const mode = this.desired;
+        this.desired = null;
+        this.active = mode;
+        const conversationId = this.activeConversationId;
+        const generation = this.generation;
+        if (!conversationId) {
+          this.publish(null);
+          this.settleFullWaiters();
+          continue;
         }
-      } finally {
-        this.runningPromise = null;
-        if (this.dirty && !this.disposed) {
-          await this.requestSync("drain");
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+        const signal = this.abortController.signal;
+        try {
+          const raw = mode === "recent" && this.readRecent ? await this.readRecent(conversationId, signal) : await this.readFull(conversationId, signal);
+          if (this.disposed || signal.aborted || this.generation !== generation) throw abortError4();
+          if (this.activeConversationId !== conversationId) throw abortError4();
+          if (mode === "recent" && this.readRecent && this.latestSnapshot) {
+            const merged = await mergeRecentSnapshot(this.latestSnapshot, { ...raw, coverage: "recent" });
+            if (!merged) {
+              this.fullStale = true;
+              this.scheduleIdleFull();
+              continue;
+            }
+            merged.revision = ++this.published;
+            this.fullStale = false;
+            this.lastError = null;
+            this.publish(merged);
+          } else {
+            raw.revision = ++this.published;
+            raw.coverage = "full";
+            this.fullStale = false;
+            this.lastError = null;
+            this.publish(raw);
+          }
+          if (mode === "full") this.settleFullWaiters();
+        } catch (error) {
+          if (this.disposed) return;
+          if (isAbortError4(error) || this.generation !== generation) continue;
+          if (this.activeConversationId === conversationId) {
+            this.lastError = error instanceof Error ? error : new Error(String(error));
+            if (!this.latestSnapshot) this.publish(null);
+            if (mode === "full") this.settleFullWaiters(this.lastError);
+          }
         }
       }
     }
-    async publish(snapshot) {
+    publish(snapshot) {
       this.latestSnapshot = snapshot;
       if (snapshot) {
         for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
@@ -1166,7 +1645,26 @@ ${text}
           if (turn.assistantMessageId) this.seenAssistantMessageIds.add(turn.assistantMessageId);
         }
       }
-      await Promise.all([...this.listeners].map((listener) => listener(snapshot)));
+      for (const listener of [...this.listeners]) this.deliver(listener, snapshot);
+    }
+    deliver(listener, snapshot) {
+      try {
+        const result = listener(snapshot);
+        if (result && typeof result.then === "function") {
+          void Promise.resolve(result).catch(() => void 0);
+        }
+      } catch {
+      }
+    }
+    settleFullWaiters(error) {
+      const waiters = this.fullWaiters.splice(0);
+      for (const waiter of waiters) {
+        if (error) waiter.reject(error);
+        else waiter.resolve();
+      }
+    }
+    rejectFullWaiters(error) {
+      this.settleFullWaiters(error);
     }
     scheduleSignalInspection() {
       if (this.disposed) return;
@@ -1183,30 +1681,59 @@ ${text}
       window.clearTimeout(this.signalTimer);
       this.signalTimer = 0;
     }
+    seedRenderedAssistants() {
+      for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+    }
     inspectPageSignals() {
       if (this.disposed || !this.activeConversationId) return;
-      const streaming = isAssistantStreaming();
+      const streaming = isAssistantStreaming2();
       const wasStreaming = this.lastStreamingState;
       this.lastStreamingState = streaming;
       if (streaming) return;
       if (wasStreaming) {
-        this.initialSyncDeferred = false;
-        void this.requestSync("streaming-end");
+        for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+        void this.request(this.liveMode());
+        return;
       }
+      let unseen = false;
       for (const id of collectStableAssistantMessageIds()) {
         if (this.seenAssistantMessageIds.has(id)) continue;
         this.seenAssistantMessageIds.add(id);
-        this.initialSyncDeferred = false;
-        void this.requestSync("new-assistant");
+        unseen = true;
       }
+      if (unseen) void this.request(this.liveMode());
+    }
+    scheduleIdleFull() {
+      if (this.fallbackTimer || this.fallbackIdle || this.disposed || !this.fullStale) return;
+      const generation = this.generation;
+      const run = () => {
+        this.fallbackTimer = 0;
+        this.fallbackIdle = 0;
+        if (this.disposed || this.generation !== generation || !this.fullStale) return;
+        if (document.visibilityState === "hidden" || isAssistantStreaming2()) {
+          this.scheduleIdleFull();
+          return;
+        }
+        void this.requestFull("fallback");
+      };
+      if (typeof requestIdleCallback === "function") {
+        this.fallbackIdle = requestIdleCallback(() => run(), { timeout: FALLBACK_IDLE_MS });
+        return;
+      }
+      this.fallbackTimer = window.setTimeout(run, FALLBACK_IDLE_MS);
+    }
+    clearFallback() {
+      if (this.fallbackTimer) window.clearTimeout(this.fallbackTimer);
+      this.fallbackTimer = 0;
+      if (this.fallbackIdle && typeof cancelIdleCallback === "function") cancelIdleCallback(this.fallbackIdle);
+      this.fallbackIdle = 0;
     }
     onVisibility = () => {
-      if (document.visibilityState !== "visible" || !this.initialSyncDeferred || !this.activeConversationId) return;
-      this.initialSyncDeferred = false;
-      void this.requestSync("visible");
+      if (document.visibilityState !== "visible" || !this.fullStale) return;
+      this.scheduleIdleFull();
     };
   };
-  function isAssistantStreaming(root = document) {
+  function isAssistantStreaming2(root = document) {
     return Boolean(
       root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')
     );
@@ -1383,65 +1910,6 @@ ${text}
     return matches2[0].matches(MESSAGE_SELECTOR) ? matches2[0] : matches2[0].querySelector(MESSAGE_SELECTOR);
   }
 
-  // src/nativeNavigator/protocol.ts
-  var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
-  var PREPARE_HEARTBEAT_MS = 4e3;
-  var PREPARE_ACK_WAIT_MS = 1e3;
-  function emptyTransportState(conversationId, generation = 0) {
-    return {
-      conversationId,
-      generation,
-      revision: 0,
-      historyRequests: 0,
-      olderRequests: 0,
-      requestInFlight: false,
-      lastRequestKind: null,
-      lastHttpStatus: null,
-      lastRequestDurationMs: 0,
-      lastRequestAt: null,
-      lastRequestError: null,
-      boosted: false
-    };
-  }
-  function record(value) {
-    return value != null && typeof value === "object" && !Array.isArray(value) ? value : null;
-  }
-  function identifier(value) {
-    return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
-  }
-  function conversationIdFromUrl(input) {
-    try {
-      const parts = new URL(input).pathname.split("/").filter(Boolean);
-      const marker = parts.indexOf("c");
-      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
-    } catch {
-      return null;
-    }
-  }
-  function isMessageDeepLink(input = location.href) {
-    try {
-      const params = new URL(input).searchParams;
-      return params.has("message") || params.has("messageId");
-    } catch {
-      return false;
-    }
-  }
-  function isNativeTransportState(value) {
-    const candidate = record(value);
-    if (!candidate) return false;
-    if (candidate.conversationId !== null && !identifier(candidate.conversationId)) return false;
-    if (typeof candidate.requestInFlight !== "boolean" || typeof candidate.boosted !== "boolean") return false;
-    if (candidate.lastRequestKind !== null && candidate.lastRequestKind !== "initial" && candidate.lastRequestKind !== "older") return false;
-    if (candidate.lastRequestError !== null && candidate.lastRequestError !== "http-error" && candidate.lastRequestError !== "aborted" && candidate.lastRequestError !== "fetch-error") return false;
-    if (candidate.lastHttpStatus !== null && (!Number.isSafeInteger(candidate.lastHttpStatus) || candidate.lastHttpStatus < 100 || candidate.lastHttpStatus > 599)) return false;
-    if (candidate.lastRequestAt !== null && (!Number.isSafeInteger(candidate.lastRequestAt) || candidate.lastRequestAt < 0)) return false;
-    for (const key of ["generation", "revision", "historyRequests", "olderRequests", "lastRequestDurationMs"]) {
-      const number = candidate[key];
-      if (!Number.isSafeInteger(number) || number < 0 || number > Number.MAX_SAFE_INTEGER) return false;
-    }
-    return candidate.olderRequests <= candidate.historyRequests;
-  }
-
   // src/nativeNavigator/hydrator.ts
   var ACTIVE_LIMIT_MS = 6e4;
   var ADDITIONAL_PAGE_LIMIT = 20;
@@ -1483,6 +1951,7 @@ ${text}
     unsubscribe = null;
     disposed = false;
     heavyArmed = false;
+    awaitingSnapshot = false;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => {
         const nextExpected = snapshot?.conversationId === this.state.conversationId ? snapshot.activeTurns.length : 0;
@@ -1492,15 +1961,15 @@ ${text}
           this.publishDiagnostics();
           return;
         }
+        if (snapshot) this.awaitingSnapshot = false;
         if (this.phase === "sleeping" || this.phase === "ready" && changed) this.wake("snapshot");
-        else if (this.phase !== "ready") this.schedule();
+        else if (this.phase !== "ready") this.maybeArmHeavyWork();
+        if (this.heavyArmed && this.phase !== "ready") this.schedule();
         this.publishDiagnostics();
       });
       addEventListener("message", this.onMessage);
       document.addEventListener("visibilitychange", this.onVisibility);
-      this.armHeavyWork();
       this.requestState();
-      this.schedule(600);
     }
     resetRoute() {
       this.cancel("route");
@@ -1509,10 +1978,13 @@ ${text}
       this.connected = false;
       this.expectedPrompts = this.sync.getSnapshot()?.conversationId === current ? this.sync.getSnapshot().activeTurns.length : 0;
       this.resetContext("");
+      this.awaitingSnapshot = true;
+      this.parkHeavyWork();
       this.setPhase("waiting");
-      this.armHeavyWork();
       this.requestState();
-      this.schedule(300);
+    }
+    isMaintenanceBlocked() {
+      return this.phase === "preparing" || this.heavyArmed;
     }
     isHeavyWorkArmed() {
       return this.heavyArmed && this.mutations != null;
@@ -1549,8 +2021,9 @@ ${text}
       const hasNewEvidence = incoming.revision > this.state.revision;
       this.state = incoming;
       this.connected = true;
+      this.maybeArmHeavyWork();
       if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
-      else if (this.phase !== "ready" && this.phase !== "stopped") this.schedule();
+      else if (this.heavyArmed && this.phase !== "ready" && this.phase !== "stopped") this.schedule();
       this.publishDiagnostics();
     };
     onUserInput = () => {
@@ -1582,11 +2055,12 @@ ${text}
     async evaluate() {
       if (this.disposed || this.operation || this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped") return;
       const native = readNativePrompts();
-      if (!this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
+      if (this.awaitingSnapshot || !this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
         this.resetReadyStability();
         this.setPhase("waiting");
         return;
       }
+      this.maybeArmHeavyWork();
       if (isMessageDeepLink()) {
         this.stop("deep-link");
         return;
@@ -1812,13 +2286,19 @@ ${text}
       this.sleepReason = null;
       this.resetReadyStability();
       this.setPhase("waiting");
-      this.armHeavyWork();
-      this.schedule(0);
+      this.maybeArmHeavyWork();
+      if (this.heavyArmed) this.schedule(0);
     }
     stop(reason) {
       this.sleepReason = reason;
       this.parkHeavyWork();
       this.setPhase("stopped");
+    }
+    maybeArmHeavyWork() {
+      if (this.disposed || this.awaitingSnapshot) return;
+      if (this.phase === "ready" || this.phase === "sleeping" || this.phase === "stopped") return;
+      if (this.expectedPrompts <= 0 || !this.connected) return;
+      this.armHeavyWork();
     }
     armHeavyWork() {
       if (this.disposed) return;
@@ -2066,11 +2546,11 @@ ${text}
   }
 
   // src/quota/tracker.ts
-  var FIRST_HISTORY_DELAY_MS = 4e3;
-  var NEXT_HISTORY_SLICE_DELAY_MS = 1500;
-  var MAX_HISTORY_PASSES = 20;
+  var HISTORY_DAILY_INTERVAL_MS = 24 * 60 * 60 * 1e3;
+  var HISTORY_SLICE_DETAIL_BUDGET = 6;
+  var SLICE_IDLE_MS = 2e3;
+  var BUSY_RETRY_MS = 6e4;
   var MAX_TRANSIENT_RETRIES = 2;
-  var HISTORY_RECONCILE_INTERVAL_MS = 10 * 60 * 1e3;
   var HISTORY_LIST_TIMEOUT_MS = 45e3;
   var HISTORY_RECONCILE_LOCK = "chatgpt-yada:quota-history-reconcile";
   var HISTORY_LOCK_RETRY_MS = 6e4;
@@ -2090,17 +2570,15 @@ ${text}
   }
   async function requestHistoryList(path, signal) {
     try {
-      const response = await chatgptApi(path, { signal }, { timeoutMs: HISTORY_LIST_TIMEOUT_MS });
-      if (response.status === 401 || response.status === 403) {
-        throw Object.assign(new Error("login"), { name: "AbortError" });
-      }
-      if ([408, 500, 502, 503, 504].includes(response.status)) {
-        throw new RetryableHistoryTransportError(`history ${response.status}`);
-      }
-      if (!response.ok) throw new Error(`history ${response.status}`);
-      return await response.json();
+      return await chatgptApiJson(path, { signal }, { timeoutMs: HISTORY_LIST_TIMEOUT_MS });
     } catch (error) {
-      if (!signal?.aborted && (error instanceof ChatGPTApiTimeoutError || error instanceof TypeError)) {
+      if (signal?.aborted || error instanceof DOMException && error.name === "AbortError") throw error;
+      const message = error instanceof Error ? error.message : "";
+      const status = Number(/API failed: (\d+)/.exec(message)?.[1] ?? 0);
+      if (status === 401 || status === 403) throw Object.assign(new Error("login"), { name: "AbortError" });
+      if ([408, 500, 502, 503, 504].includes(status)) throw new RetryableHistoryTransportError(`history ${status}`);
+      if (status) throw new Error(`history ${status}`);
+      if (error instanceof ChatGPTApiTimeoutError || error instanceof TypeError) {
         throw new RetryableHistoryTransportError("History list transport interrupted");
       }
       throw error;
@@ -2118,12 +2596,13 @@ ${text}
     }
   }
   function shouldReconcileHistory(snapshot, now) {
-    return !snapshot.historyComplete || !snapshot.lastHistorySuccessAt || now - snapshot.lastHistorySuccessAt >= HISTORY_RECONCILE_INTERVAL_MS;
+    return !snapshot.historyComplete || !snapshot.lastHistorySuccessAt || now - snapshot.lastHistorySuccessAt >= HISTORY_DAILY_INTERVAL_MS;
   }
   var QuotaTracker = class {
     constructor(sync, options = {}) {
       this.sync = sync;
       this.locks = options.locks !== void 0 ? options.locks : typeof navigator !== "undefined" && "locks" in navigator ? navigator.locks : null;
+      this.blocked = options.blocked ?? (() => false);
     }
     unsubscribe = null;
     ingestQueue = Promise.resolve();
@@ -2133,31 +2612,34 @@ ${text}
     historyTimer = 0;
     historyAbort = null;
     nextHistoryAt = 0;
-    forceHistory = false;
+    forceMode = null;
     historyIdentity = null;
     bypassCaches = false;
+    transientRetries = 0;
+    limitsFingerprint = null;
     locks;
+    blocked;
     mount() {
       this.unsubscribe = this.sync.subscribe((snapshot) => this.onSnapshot(snapshot));
       document.addEventListener("visibilitychange", this.onVisibility);
-      this.scheduleHistory(FIRST_HISTORY_DELAY_MS);
+      this.scheduleSlice(SLICE_IDLE_MS);
     }
     async refreshCurrent() {
       this.bypassCaches = true;
       try {
-        await withTimeout(this.sync.requestSync("popup"), REFRESH_TIMEOUT_MS, "同步超时");
+        await withTimeout(this.sync.requestFull("popup"), REFRESH_TIMEOUT_MS, "同步超时");
         await withTimeout(this.ingestQueue, MESSAGE_TIMEOUT_MS, "账本写入超时");
       } finally {
-        this.nextHistoryAt = 0;
-        this.forceHistory = true;
-        this.scheduleHistory(0);
+        this.forceMode = "full";
+        this.transientRetries = 0;
+        this.scheduleSlice(0);
         this.bypassCaches = false;
       }
     }
     dispose() {
       this.disposed = true;
       this.historyAbort?.abort();
-      window.clearTimeout(this.historyTimer);
+      this.clearSliceTimer();
       this.unsubscribe?.();
       this.unsubscribe = null;
       document.removeEventListener("visibilitychange", this.onVisibility);
@@ -2165,39 +2647,49 @@ ${text}
     onSnapshot(snapshot) {
       const work = this.ingestQueue.then(() => this.writeLedger(snapshot));
       this.ingestQueue = work.catch(() => void 0);
-      return this.ingestQueue;
     }
-    scheduleHistory(delayMs) {
+    scheduleSlice(delayMs) {
       if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+      this.clearSliceTimer();
+      this.historyTimer = window.setTimeout(() => {
+        this.historyTimer = 0;
+        void this.startSlice();
+      }, Math.max(0, delayMs));
+    }
+    clearSliceTimer() {
+      if (!this.historyTimer) return;
       window.clearTimeout(this.historyTimer);
-      this.historyTimer = window.setTimeout(() => this.startHistoryScan(), Math.max(0, delayMs));
+      this.historyTimer = 0;
     }
-    startHistoryScan() {
+    startSlice() {
       if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+      if (this.blocked()) {
+        this.scheduleSlice(BUSY_RETRY_MS);
+        return;
+      }
       const controller = new AbortController();
       this.historyAbort = controller;
-      this.historyFlight = this.runLockedHistoryScan(controller.signal).catch(() => {
-        this.forceHistory = false;
-        this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS;
-      }).finally(() => {
+      this.historyFlight = this.runLockedSlice(controller.signal).catch(() => void 0).finally(() => {
         this.historyAbort = null;
         this.historyFlight = null;
-        this.scheduleHistory(this.forceHistory ? 0 : Math.max(600, this.nextHistoryAt - Date.now()));
+        if (this.disposed || document.visibilityState === "hidden") return;
+        if (this.nextHistoryAt <= Date.now()) return;
+        this.scheduleSlice(Math.max(SLICE_IDLE_MS, this.nextHistoryAt - Date.now()));
       });
     }
-    async runLockedHistoryScan(signal) {
-      const result = await withHistoryReconcileLock(() => this.scanHistory(signal), this.locks);
+    async runLockedSlice(signal) {
+      const result = await withHistoryReconcileLock(() => this.runSlice(signal), this.locks);
       if (result === "unsupported") {
-        await this.scanHistory(signal);
+        await this.runSlice(signal);
         return;
       }
       if (result === "busy") {
-        this.forceHistory = false;
+        this.forceMode = null;
         this.nextHistoryAt = Date.now() + HISTORY_LOCK_RETRY_MS;
       }
     }
-    async scanHistory(signal) {
-      const account = await readChatAccount(signal, { force: this.forceHistory || this.bypassCaches });
+    async runSlice(signal) {
+      const account = await readChatAccount(signal, { force: this.forceMode === "full" || this.bypassCaches });
       if (signal.aborted || this.disposed) return;
       if (!account.userId) throw new Error("login");
       const response = await sendRuntimeMessage({
@@ -2207,25 +2699,26 @@ ${text}
       });
       if (!response.snapshot || response.error) throw new Error("quota state unavailable");
       const baseline = response.snapshot;
-      const force = this.forceHistory;
-      this.forceHistory = false;
-      if (!force && !shouldReconcileHistory(baseline, Date.now())) {
-        this.nextHistoryAt = baseline.lastHistorySuccessAt + HISTORY_RECONCILE_INTERVAL_MS;
+      const forced = this.forceMode;
+      this.forceMode = null;
+      const maintenance = baseline.historyMaintenance;
+      const mode = forced ?? (maintenance?.pending ? maintenance.mode : !baseline.historyComplete ? "full" : "daily");
+      const now = Date.now();
+      if (!forced && !maintenance?.pending && !shouldReconcileHistory(baseline, now)) {
+        this.nextHistoryAt = (baseline.lastHistorySuccessAt ?? now) + HISTORY_DAILY_INTERVAL_MS;
         return;
       }
-      const retryDue = (baseline.lastHistoryAttemptAt ?? 0) + HISTORY_RECONCILE_INTERVAL_MS;
-      if (!force && baseline.lastHistoryError && Date.now() < retryDue) {
-        this.nextHistoryAt = retryDue;
+      if (!forced && baseline.lastHistoryError && now < (baseline.lastHistoryAttemptAt ?? 0) + HISTORY_DAILY_INTERVAL_MS && !maintenance?.pending) {
+        this.nextHistoryAt = (baseline.lastHistoryAttemptAt ?? now) + HISTORY_DAILY_INTERVAL_MS;
         return;
       }
       if (signal.aborted) return;
       this.historyIdentity = account.identity;
-      const attemptAt = Date.now();
+      const attemptAt = maintenance?.attemptStartedAt ?? now;
+      if (!baseline.historyComplete) {
+        await this.publish(account, { syncStatus: "backfill", lastHistoryAttemptAt: attemptAt });
+      }
       try {
-        await this.publish(account, {
-          syncStatus: baseline.historyComplete ? "ready" : "backfill",
-          lastHistoryAttemptAt: attemptAt
-        });
         let cache = structuredClone(await this.history.load(account.identity));
         const store = {
           load: async () => cache,
@@ -2233,55 +2726,69 @@ ${text}
             cache = next;
           }
         };
-        let dataPass = 1;
-        let retries = 0;
-        while (!signal.aborted) {
-          const result = await readChatHistory({
-            transport: { request: requestHistoryList },
-            fetchDetail: requestHistoryDetail,
-            store,
-            identity: account.identity,
-            now: Date.now(),
-            signal
-          });
-          if (signal.aborted || this.disposed) return;
-          const summary = result.summary;
-          if (summary.cancelled) throw new Error("login");
-          if (summary.complete) {
-            const successAt = Date.now();
-            await this.publish(account, {
-              events: toEvents(result.turns, account.identity, "personal"),
-              historyCache: cache,
-              historyComplete: true,
-              syncStatus: "ready",
-              unclassifiedTurns: summary.unclassifiedTurns,
-              lastHistorySuccessAt: successAt,
-              lastHistoryAttemptAt: attemptAt,
-              lastHistoryError: null
-            });
-            this.nextHistoryAt = successAt + HISTORY_RECONCILE_INTERVAL_MS;
-            return;
-          }
-          if (summary.permanentFailures > 0) throw new Error("历史数据暂不完整");
-          if (summary.retryableFailures > 0) {
-            if (retries >= MAX_TRANSIENT_RETRIES) throw new Error("历史接口暂不可用");
-            await pause(retries++ === 0 ? 1500 : 5e3, signal);
-          } else if (historyNeedsAnotherPass(summary) && dataPass < MAX_HISTORY_PASSES) {
-            dataPass += 1;
-            await pause(NEXT_HISTORY_SLICE_DELAY_MS, signal);
-          } else {
-            throw new Error("历史数据暂不完整");
-          }
+        const result = await readChatHistory({
+          transport: { request: requestHistoryList },
+          fetchDetail: requestHistoryDetail,
+          store,
+          identity: account.identity,
+          now,
+          signal,
+          includeArchived: mode === "full",
+          detailBudget: HISTORY_SLICE_DETAIL_BUDGET
+        });
+        if (signal.aborted || this.disposed) return;
+        const summary = result.summary;
+        if (summary.cancelled) throw new Error("login");
+        if (summary.permanentFailures > 0) throw new Error("历史数据暂不完整");
+        if (summary.retryableFailures > 0) {
+          if (this.transientRetries >= MAX_TRANSIENT_RETRIES) throw new Error("历史接口暂不可用");
+          this.transientRetries += 1;
+          this.forceMode = mode;
+          this.nextHistoryAt = Date.now() + SLICE_IDLE_MS;
+          await this.persistProgress(account, cache, mode, attemptAt, baseline, false);
+          return;
         }
+        this.transientRetries = 0;
+        if (summary.complete) {
+          const successAt = Date.now();
+          await this.publish(account, {
+            events: toEvents(result.turns, account.identity, "personal"),
+            historyCache: cache,
+            historyComplete: true,
+            syncStatus: "ready",
+            unclassifiedTurns: summary.unclassifiedTurns,
+            lastHistorySuccessAt: successAt,
+            lastHistoryAttemptAt: attemptAt,
+            lastHistoryError: null,
+            historyMaintenance: maintenanceState(mode, attemptAt, successAt, baseline, false)
+          });
+          this.nextHistoryAt = successAt + HISTORY_DAILY_INTERVAL_MS;
+          return;
+        }
+        if (summary.needsContinuation || historyNeedsAnotherPass(summary)) {
+          await this.persistProgress(account, cache, mode, attemptAt, baseline, true);
+          this.forceMode = mode;
+          this.nextHistoryAt = Date.now() + SLICE_IDLE_MS;
+          return;
+        }
+        throw new Error("历史数据暂不完整");
       } catch (error) {
         if (signal.aborted || this.disposed) return;
         await this.publish(account, {
           syncStatus: "error",
           lastHistoryAttemptAt: attemptAt,
-          lastHistoryError: conciseError(error)
+          lastHistoryError: conciseError(error),
+          historyMaintenance: maintenanceState(mode, attemptAt, baseline.lastHistorySuccessAt, baseline, false)
         });
-        this.nextHistoryAt = Date.now() + HISTORY_RECONCILE_INTERVAL_MS;
+        this.forceMode = null;
+        this.nextHistoryAt = Date.now() + HISTORY_DAILY_INTERVAL_MS;
       }
+    }
+    async persistProgress(account, cache, mode, attemptAt, baseline, pending) {
+      await this.publish(account, {
+        historyCache: cache,
+        historyMaintenance: maintenanceState(mode, attemptAt, baseline.lastHistorySuccessAt, baseline, pending)
+      });
     }
     async publish(account, extras) {
       const response = await sendRuntimeMessage({
@@ -2300,41 +2807,39 @@ ${text}
       const accountChanged = this.historyIdentity !== null && this.historyIdentity !== account.identity;
       if (accountChanged) {
         this.historyAbort?.abort();
+        this.limitsFingerprint = null;
+        this.forceMode = "full";
         this.nextHistoryAt = 0;
       }
       this.historyIdentity = account.identity;
       const classification = classifySnapshot(snapshot);
       const events = snapshot.quotaIsWork ? [] : toEvents(snapshot.quotaTurns, account.identity, classification);
-      await this.publish(account, {
-        events,
-        workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
-      });
-      if (accountChanged) this.scheduleHistory(0);
+      const workspaceKind = snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal";
+      await this.publish(account, { events, workspaceKind });
+      if (accountChanged) this.scheduleSlice(SLICE_IDLE_MS);
       const limits = await readModelLimits(Date.now(), void 0, { force: this.bypassCaches });
-      if (!this.disposed) await this.publish(account, {
-        limits,
-        workspaceKind: snapshot.quotaIsWork ? "work" : classification === "unknown" ? "unknown" : "personal"
-      });
+      if (this.disposed) return;
+      const fingerprint = JSON.stringify(limits);
+      if (fingerprint === this.limitsFingerprint) return;
+      this.limitsFingerprint = fingerprint;
+      await this.publish(account, { limits, workspaceKind });
     }
     onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        window.clearTimeout(this.historyTimer);
+        this.clearSliceTimer();
         return;
       }
-      if (!this.historyFlight) this.scheduleHistory(0);
+      if (!this.historyFlight) this.scheduleSlice(SLICE_IDLE_MS);
     };
   };
-  function pause(ms, signal) {
-    return new Promise((resolve) => {
-      const done = () => {
-        window.clearTimeout(timer);
-        signal.removeEventListener("abort", done);
-        resolve();
-      };
-      const timer = window.setTimeout(done, ms);
-      signal.addEventListener("abort", done, { once: true });
-      if (signal.aborted) done();
-    });
+  function maintenanceState(mode, attemptStartedAt, successAt, baseline, pending) {
+    return {
+      pending,
+      mode,
+      attemptStartedAt,
+      lastIncrementalSuccessAt: successAt,
+      lastFullSuccessAt: mode === "full" && !pending ? successAt : baseline.historyMaintenance?.lastFullSuccessAt
+    };
   }
   function classifySnapshot(snapshot) {
     if (snapshot.quotaIsWork) return "work";
@@ -2359,7 +2864,7 @@ ${text}
     return "历史读取失败";
   }
   function historyNeedsAnotherPass(summary) {
-    return !summary.complete && !summary.cancelled && summary.permanentFailures === 0 && summary.retryableFailures === 0 && summary.conversationsFetched > 0 && (summary.hitDetailBudget || summary.hitDeadline);
+    return !summary.complete && !summary.cancelled && summary.permanentFailures === 0 && summary.retryableFailures === 0 && summary.conversationsFetched > 0 && (summary.hitDetailBudget || summary.hitDeadline || summary.needsContinuation === true);
   }
 
   // node_modules/sortablejs/modular/sortable.esm.js
@@ -5041,10 +5546,7 @@ ${timestamp ? `${timestamp}
       { radius: innerRadius, width: innerWidth2 }
     ];
   }
-  function renderQuotaIcon(size, rings, palette = DARK_ICON_PALETTE) {
-    const canvas = new OffscreenCanvas(size, size);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) throw new Error("OffscreenCanvas is unavailable");
+  function drawQuotaRings(ctx, size, rings, palette = DARK_ICON_PALETTE) {
     ctx.clearRect(0, 0, size, size);
     const cx = size / 2;
     const cy = size / 2;
@@ -5063,12 +5565,9 @@ ${timestamp ? `${timestamp}
       ctx.textBaseline = "middle";
       ctx.fillText(rings.center, cx, cy + size * 0.02);
     }
-    return ctx.getImageData(0, 0, size, size);
   }
   function paintQuotaCanvas(canvas, rings, palette = DARK_ICON_PALETTE) {
-    const image = renderQuotaIcon(32, rings, palette);
-    canvas.width = 32;
-    canvas.height = 32;
+    const size = canvas.width || 32;
     let ctx = null;
     try {
       ctx = canvas.getContext("2d");
@@ -5076,10 +5575,7 @@ ${timestamp ? `${timestamp}
       return;
     }
     if (!ctx) return;
-    try {
-      ctx.putImageData(image, 0, 0);
-    } catch {
-    }
+    drawQuotaRings(ctx, size, rings, palette);
   }
   function drawTrack(ctx, cx, cy, radius, width, color) {
     ctx.beginPath();
@@ -5848,11 +6344,23 @@ ${timestamp ? `${timestamp}
     quota = null;
     observedTarget = null;
     observedParent = null;
+    setConversationSync(sync) {
+      this.sync = sync;
+    }
     closePanels() {
       this.prompts?.close();
       this.quota?.close();
     }
     mount() {
+      this.mountShell();
+      try {
+        this.attachQuotaIndicator();
+      } catch (error) {
+        console.error("ChatGPT Yada: quota indicator failed", error);
+        this.showQuotaFault();
+      }
+    }
+    mountShell() {
       if (this.host?.isConnected) return;
       document.getElementById(YADA_TOOLBAR_HOST_ID)?.remove();
       this.host = document.createElement("div");
@@ -5867,13 +6375,37 @@ ${timestamp ? `${timestamp}
       this.query("[data-copy-all]")?.addEventListener("click", () => {
         void this.copyAll();
       });
-      this.quota = new QuotaIndicator(this.query("[data-quota]"));
       this.query("[data-prompts]")?.addEventListener("click", this.onPromptsClick);
       this.disposeTheme = observeYadaTheme((theme) => {
         this.host?.setAttribute("data-yada-theme", theme);
       });
       window.addEventListener("resize", this.handleViewportChange, { passive: true });
       this.ensurePlacement();
+    }
+    attachQuotaIndicator() {
+      if (this.quota) return;
+      const button = this.query("[data-quota]");
+      if (!button) throw new Error("Quota button is missing");
+      this.quota = new QuotaIndicator(button);
+    }
+    showQuotaFault() {
+      const button = this.query("[data-quota]");
+      if (!button) return;
+      button.setAttribute("aria-label", "Pro 额度：异常");
+      button.title = "Pro 额度：异常";
+      const canvas = button.querySelector("canvas");
+      if (!(canvas instanceof HTMLCanvasElement)) return;
+      try {
+        paintQuotaCanvas(canvas, { outer: 0, middle: 0, inner: 0, center: "!" });
+      } catch {
+        button.textContent = "!";
+      }
+    }
+    isMounted() {
+      return Boolean(this.host?.isConnected);
+    }
+    hasQuotaIndicator() {
+      return this.quota !== null;
     }
     setVisible(visible) {
       this.host?.setAttribute("data-visible", visible ? "true" : "false");
@@ -6026,8 +6558,8 @@ ${timestamp ? `${timestamp}
         const id = getConversationIdFromUrl();
         if (id && this.sync && this.sync.getActiveConversationId() !== id) this.sync.setActiveConversation(id);
         let snapshot = this.sync?.getSnapshot() ?? null;
-        if (!snapshot && this.sync) {
-          await this.sync.requestSync("copy");
+        if (this.sync) {
+          await this.sync.requestFull("copy");
           snapshot = this.sync.getSnapshot();
         }
         if (!snapshot) throw new Error("No conversation snapshot");
@@ -6068,7 +6600,12 @@ ${timestamp ? `${timestamp}
       const button = this.query("[data-prompts]");
       if (!button) return;
       if (!this.prompts) {
-        this.prompts = new PromptPanel(button);
+        try {
+          this.prompts = new PromptPanel(button);
+        } catch (error) {
+          console.error("ChatGPT Yada: prompt panel failed", error);
+          return;
+        }
         void this.prompts.toggle();
       }
     };
@@ -6120,35 +6657,54 @@ ${timestamp ? `${timestamp}
   }
 
   // src/content.ts
+  var USER_IDLE_MS = 1500;
+  function startIsolated(start) {
+    try {
+      return { value: start(), error: null };
+    } catch (error) {
+      return { value: null, error };
+    }
+  }
   var ChatGptYadaApp = class {
     sync = null;
     hydrator = null;
     toolbar = null;
     quota = null;
+    boot = null;
     messageDispose = null;
-    mount() {
-      this.sync = new ConversationSync();
-      this.sync.mountPageObserver();
-      this.hydrator = new OfficialNavigatorHydrator(this.sync);
-      this.hydrator.mount();
-      this.quota = new QuotaTracker(this.sync);
-      this.quota.mount();
-      this.toolbar = new YadaToolbar(this.sync);
-      this.toolbar.mount();
+    routeListening = false;
+    visibilityListening = false;
+    inputListening = false;
+    lastUserInput = 0;
+    moduleErrors = /* @__PURE__ */ new Map();
+    mount(page = isChatGptPage()) {
+      if (!page) return;
+      this.ensureSync();
+      this.ensureToolbar();
+      this.toolbar?.setVisible(true);
       this.syncPageState();
-      addEventListener("message", this.onRouteMessage);
-      const onMessage = (message, _sender, sendResponse) => {
-        if (message?.type !== "quota/refresh-current") return false;
-        void this.quota?.refreshCurrent().then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: String(error) }));
-        return true;
-      };
-      chrome.runtime.onMessage.addListener(onMessage);
-      this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
+      this.ensureBoot();
+      this.ensureSyncObserver();
+      this.ensureNavigator();
+      this.ensureQuota();
+      this.ensureQuotaIndicator();
+      this.ensureListeners();
+    }
+    recover() {
+      if (!isChatGptPage()) return;
+      this.mount();
+      if (document.visibilityState === "visible") this.boot?.arm(getConversationIdFromUrl());
     }
     dispose = () => {
-      removeEventListener("message", this.onRouteMessage);
+      if (this.routeListening) removeEventListener("message", this.onRouteMessage);
+      this.routeListening = false;
+      if (this.visibilityListening) document.removeEventListener("visibilitychange", this.onVisibility);
+      this.visibilityListening = false;
+      this.detachInput();
       this.messageDispose?.();
       this.messageDispose = null;
+      this.boot?.dispose();
+      this.boot = null;
       this.hydrator?.dispose();
       this.hydrator = null;
       this.quota?.dispose();
@@ -6157,14 +6713,135 @@ ${timestamp ? `${timestamp}
       this.toolbar = null;
       this.sync?.dispose();
       this.sync = null;
+      this.moduleErrors.clear();
+    };
+    ensureSync() {
+      if (this.sync) return;
+      const started = startIsolated(() => new ConversationSync());
+      this.sync = started.value;
+      if (started.error) this.moduleErrors.set("sync", started.error);
+    }
+    ensureToolbar() {
+      if (this.toolbar?.isMounted()) return;
+      const started = startIsolated(() => {
+        const toolbar = new YadaToolbar();
+        toolbar.setConversationSync(this.sync);
+        toolbar.mountShell();
+        return toolbar;
+      });
+      if (started.error || !started.value) {
+        this.moduleErrors.set("toolbar", started.error ?? new Error("toolbar missing"));
+        return;
+      }
+      this.toolbar = started.value;
+      this.moduleErrors.delete("toolbar");
+    }
+    ensureBoot() {
+      if (!this.sync) return;
+      if (!this.boot) this.boot = new ConversationBootGate(this.sync);
+      if (document.visibilityState === "visible") this.boot.arm(this.sync.getActiveConversationId());
+    }
+    ensureSyncObserver() {
+      if (!this.sync) return;
+      const started = startIsolated(() => this.sync?.mountPageObserver());
+      if (started.error) this.moduleErrors.set("sync-observer", started.error);
+      else this.moduleErrors.delete("sync-observer");
+    }
+    ensureNavigator() {
+      if (this.hydrator || !this.sync) return;
+      const started = startIsolated(() => {
+        const hydrator = new OfficialNavigatorHydrator(this.sync);
+        try {
+          hydrator.mount();
+        } catch (error) {
+          hydrator.dispose();
+          throw error;
+        }
+        return hydrator;
+      });
+      if (started.error || !started.value) {
+        this.moduleErrors.set("navigator", started.error ?? new Error("navigator missing"));
+        return;
+      }
+      this.hydrator = started.value;
+      this.moduleErrors.delete("navigator");
+    }
+    ensureQuota() {
+      if (this.quota || !this.sync) return;
+      const started = startIsolated(() => {
+        const tracker = new QuotaTracker(this.sync, {
+          blocked: () => this.maintenanceBlocked()
+        });
+        try {
+          tracker.mount();
+        } catch (error) {
+          tracker.dispose();
+          throw error;
+        }
+        return tracker;
+      });
+      if (started.error || !started.value) {
+        this.moduleErrors.set("quota", started.error ?? new Error("quota missing"));
+        return;
+      }
+      this.quota = started.value;
+      this.moduleErrors.delete("quota");
+    }
+    ensureQuotaIndicator() {
+      if (!this.toolbar || this.toolbar.hasQuotaIndicator()) return;
+      const started = startIsolated(() => this.toolbar?.attachQuotaIndicator());
+      if (started.error) {
+        this.moduleErrors.set("quota-indicator", started.error);
+        this.toolbar.showQuotaFault();
+        return;
+      }
+      this.moduleErrors.delete("quota-indicator");
+    }
+    ensureListeners() {
+      if (!this.routeListening) {
+        addEventListener("message", this.onRouteMessage);
+        this.routeListening = true;
+      }
+      if (!this.visibilityListening) {
+        document.addEventListener("visibilitychange", this.onVisibility);
+        this.visibilityListening = true;
+      }
+      if (!this.inputListening) {
+        addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+        addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+        this.inputListening = true;
+      }
+      if (this.messageDispose) return;
+      const onMessage = (message, _sender, sendResponse) => {
+        if (message?.type !== "quota/refresh-current") return false;
+        void this.quota?.refreshCurrent().then(() => sendResponse({ ok: true })).catch((error) => sendResponse({ error: String(error) }));
+        return true;
+      };
+      chrome.runtime.onMessage.addListener(onMessage);
+      this.messageDispose = () => chrome.runtime.onMessage.removeListener(onMessage);
+    }
+    detachInput() {
+      if (!this.inputListening) return;
+      removeEventListener("pointerdown", this.onUserInput, true);
+      removeEventListener("keydown", this.onUserInput, true);
+      this.inputListening = false;
+    }
+    onUserInput = () => {
+      this.lastUserInput = Date.now();
+    };
+    onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      this.recover();
     };
     onRouteMessage = (event) => {
       if (event.source !== window || event.origin !== location.origin) return;
       const message = record(event.data);
       if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "route") return;
       this.toolbar?.closePanels();
+      this.boot?.clear();
       this.hydrator?.resetRoute();
       this.syncPageState();
+      this.recover();
     };
     syncPageState() {
       this.toolbar?.ensurePlacement();
@@ -6172,6 +6849,11 @@ ${timestamp ? `${timestamp}
       const copy = document.getElementById("chatgpt-yada-toolbar-host")?.shadowRoot?.querySelector("[data-copy-all]");
       if (copy) copy.hidden = !isChatGptConversationPage();
       this.sync?.setActiveConversation(getConversationIdFromUrl());
+    }
+    maintenanceBlocked() {
+      if (Date.now() - this.lastUserInput < USER_IDLE_MS) return true;
+      if (document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')) return true;
+      return this.hydrator?.isMaintenanceBlocked() === true;
     }
   };
   if (isChatGptPage()) {
@@ -6182,10 +6864,7 @@ ${timestamp ? `${timestamp}
     app.mount();
     const onPageHide = () => app.dispose();
     const onPageShow = (event) => {
-      if (event.persisted) {
-        app.dispose();
-        app.mount();
-      }
+      if (event.persisted) app.recover();
     };
     window.addEventListener("pagehide", onPageHide);
     window.addEventListener("pageshow", onPageShow);

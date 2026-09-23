@@ -1,5 +1,5 @@
 import { QuotaLedger } from "../quota/ledger";
-import { applyQuotaIcon, nextAlarmAt } from "../quota/iconState";
+import { applyQuotaIcon, nextAlarmAt, snapshotTitle, snapshotToRings } from "../quota/iconState";
 import { calculateQuotaSnapshot } from "../quota/calculator";
 import { buildQuotaHeatmap } from "../quota/heatmap";
 import { STATE_KEY, type QuotaHeatmapResponse, type QuotaSnapshot } from "../quota/types";
@@ -9,6 +9,19 @@ import { withTimeout } from "../shared/timeout";
 
 const ALARM_NAME = "chatgpt-yada-quota-window";
 const ledger = new QuotaLedger();
+let presentationKey: string | null = null;
+
+export function resetQuotaPresentationForTests(): void {
+  presentationKey = null;
+}
+
+export async function handleQuotaRequest(message: YadaRequest): Promise<unknown> {
+  return handle(message);
+}
+
+export async function restoreQuotaPresentation(): Promise<void> {
+  await restore();
+}
 
 chrome.runtime.onInstalled.addListener(() => { void restore(); });
 chrome.runtime.onStartup.addListener(() => { void restore(); });
@@ -70,9 +83,10 @@ async function ingest(message: QuotaIngest): Promise<{ snapshot: QuotaSnapshot |
     unclassifiedTurns: message.unclassifiedTurns,
     limits: message.limits,
     workspaceKind: message.workspaceKind,
-    accountKey: message.accountKey
+    accountKey: message.accountKey,
+    historyMaintenance: message.historyMaintenance
   });
-  if (snapshot) await publish(snapshot);
+  if (snapshot && ledger.takeChanged()) await publish(snapshot);
   return { snapshot };
 }
 
@@ -80,7 +94,6 @@ async function getState(message: QuotaGetState): Promise<{ snapshot: QuotaSnapsh
   const restored = await ledger.restore();
   const accountKey = message.accountKey ?? restored.state.accountKey ?? restored.state.lastSnapshot?.accountKey ?? "chat-unknown";
   const snapshot = await ledger.getSnapshot(accountKey, message.plan ?? null);
-  await publish(snapshot);
   return { snapshot };
 }
 
@@ -104,7 +117,22 @@ async function restore(): Promise<void> {
   await publish(snapshot);
 }
 
+function presentationFingerprint(snapshot: QuotaSnapshot): string {
+  const rings = snapshotToRings(snapshot);
+  return JSON.stringify({
+    outer: rings.outer,
+    middle: rings.middle,
+    inner: rings.inner,
+    center: rings.center,
+    title: snapshotTitle(snapshot),
+    alarm: nextAlarmAt(snapshot)
+  });
+}
+
 async function publish(snapshot: QuotaSnapshot): Promise<void> {
+  const fingerprint = presentationFingerprint(snapshot);
+  if (fingerprint === presentationKey) return;
+  presentationKey = fingerprint;
   await applyQuotaIcon(snapshot);
   const when = nextAlarmAt(snapshot);
   if (when) await chrome.alarms.create(ALARM_NAME, { when });
