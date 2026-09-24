@@ -1,12 +1,21 @@
 import type { ConversationSync } from "./conversationSync";
-import { NATIVE_NAV_CHANNEL, record } from "../nativeNavigator/protocol";
+import {
+  NATIVE_NAV_CHANNEL,
+  isNativeTransportState,
+  record,
+  type NativeTransportState
+} from "../nativeNavigator/protocol";
 
 export const BOOT_FALLBACK_MS = 15_000;
 const IDLE_TIMEOUT_MS = 2_000;
+const RESOURCE_SKEW_MS = 1_000;
 
 export class ConversationBootGate {
   private generation = 0;
   private conversationId: string | null = null;
+  private hostGeneration: number | null = null;
+  private initialEndedAt: number | null = null;
+  private initialDurationMs = 0;
   private observer: PerformanceObserver | null = null;
   private timer = 0;
   private idleTimer = 0;
@@ -20,6 +29,9 @@ export class ConversationBootGate {
   arm(conversationId: string | null): void {
     this.stopWatching();
     this.conversationId = conversationId;
+    this.hostGeneration = null;
+    this.initialEndedAt = null;
+    this.initialDurationMs = 0;
     this.transferSeen = false;
     this.launched = false;
     if (!conversationId || document.visibilityState === "hidden") return;
@@ -28,29 +40,47 @@ export class ConversationBootGate {
     this.timer = window.setTimeout(() => this.fallback(generation), BOOT_FALLBACK_MS);
     this.listenMain();
     this.observeResources(conversationId, generation);
+    this.requestState();
+  }
+
+  isPending(): boolean {
+    return this.conversationId != null
+      && !this.launched
+      && !this.sync.hasUsableFullSnapshot(this.conversationId)
+      && this.isWatching();
+  }
+
+  isActive(): boolean {
+    return this.launched && this.sync.isReading();
   }
 
   clear(): void {
     this.generation += 1;
     this.stopWatching();
     this.conversationId = null;
+    this.hostGeneration = null;
+    this.initialEndedAt = null;
+    this.initialDurationMs = 0;
   }
 
   dispose(): void {
     this.clear();
   }
 
+  private isWatching(): boolean {
+    return this.listening || this.observer != null || this.timer !== 0 || this.idleTimer !== 0 || this.idleId !== 0;
+  }
+
+  private requestState(): void {
+    window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "hello" }, location.origin);
+  }
+
   private observeResources(conversationId: string, generation: number): void {
-    const existing = performance.getEntriesByType?.("resource") ?? [];
-    if (existing.some((entry) => historyTransferDone(entry, conversationId))) {
-      this.onTransfer(generation);
-      return;
-    }
+    this.inspectResources(conversationId, generation);
     if (typeof PerformanceObserver === "undefined") return;
     this.observer = new PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) {
-        if (historyTransferDone(entry, conversationId)) this.onTransfer(generation);
-      }
+      void list;
+      this.inspectResources(conversationId, generation);
     });
     try {
       this.observer.observe({ type: "resource", buffered: true });
@@ -58,6 +88,22 @@ export class ConversationBootGate {
       this.observer.disconnect();
       this.observer = null;
     }
+  }
+
+  private inspectResources(conversationId: string, generation: number): void {
+    if (generation !== this.generation || this.initialEndedAt == null) return;
+    const existing = performance.getEntriesByType?.("resource") ?? [];
+    if (existing.some((entry) => this.resourceMatchesCurrentInitial(entry, conversationId))) {
+      this.onTransfer(generation);
+    }
+  }
+
+  private resourceMatchesCurrentInitial(entry: PerformanceEntry, conversationId: string): boolean {
+    if (!historyTransferDone(entry, conversationId) || this.initialEndedAt == null) return false;
+    const timing = entry as PerformanceResourceTiming;
+    const endedAt = performance.timeOrigin + timing.responseEnd;
+    const startedAt = this.initialEndedAt - this.initialDurationMs;
+    return endedAt >= startedAt - RESOURCE_SKEW_MS && endedAt <= this.initialEndedAt + RESOURCE_SKEW_MS;
   }
 
   private listenMain(): void {
@@ -70,12 +116,23 @@ export class ConversationBootGate {
     if (event.source !== window || event.origin !== location.origin) return;
     const message = record(event.data);
     if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state") return;
-    const state = record(message.state);
-    if (!state || state.conversationId !== this.conversationId) return;
-    if (state.requestInFlight !== false || state.lastRequestKind !== "initial") return;
-    if (this.observer) return;
-    this.onTransfer(this.generation);
+    if (!isNativeTransportState(message.state)) return;
+    this.onHostState(message.state);
   };
+
+  private onHostState(state: NativeTransportState): void {
+    if (state.conversationId !== this.conversationId) return;
+    if (this.hostGeneration == null) this.hostGeneration = state.generation;
+    if (state.generation !== this.hostGeneration) return;
+    if (state.lastRequestKind !== "initial" || state.requestInFlight || state.lastRequestAt == null) return;
+    this.initialEndedAt = state.lastRequestAt;
+    this.initialDurationMs = state.lastRequestDurationMs;
+    if (this.observer) {
+      this.inspectResources(this.conversationId!, this.generation);
+      return;
+    }
+    this.onTransfer(this.generation);
+  }
 
   private onTransfer(generation: number): void {
     if (generation !== this.generation || this.transferSeen || this.launched) return;

@@ -87,6 +87,7 @@ export class QuotaTracker {
   private disposed = false;
   private historyFlight: Promise<void> | null = null;
   private historyTimer = 0;
+  private historyIdle = 0;
   private historyAbort: AbortController | null = null;
   private nextHistoryAt = 0;
   private forceMode: "daily" | "full" | null = null;
@@ -131,7 +132,7 @@ export class QuotaTracker {
   dispose(): void {
     this.disposed = true;
     this.historyAbort?.abort();
-    this.clearSliceTimer();
+    this.clearSliceSchedule();
     this.unsubscribe?.();
     this.unsubscribe = null;
     document.removeEventListener("visibilitychange", this.onVisibility);
@@ -144,17 +145,55 @@ export class QuotaTracker {
 
   private scheduleSlice(delayMs: number): void {
     if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
-    this.clearSliceTimer();
-    this.historyTimer = window.setTimeout(() => {
-      this.historyTimer = 0;
-      void this.startSlice();
-    }, Math.max(0, delayMs));
+    this.clearSliceSchedule();
+    const wait = Math.max(0, delayMs);
+    if (wait > 0) {
+      this.historyTimer = window.setTimeout(() => {
+        this.historyTimer = 0;
+        this.armIdleSlice();
+      }, wait);
+      return;
+    }
+    this.armIdleSlice();
   }
 
-  private clearSliceTimer(): void {
-    if (!this.historyTimer) return;
-    window.clearTimeout(this.historyTimer);
+  private armIdleSlice(): void {
+    if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+    if (this.historyIdle || this.historyTimer) return;
+    const onIdle = (): void => {
+      this.historyIdle = 0;
+      this.historyTimer = 0;
+      this.onSliceOpportunity();
+    };
+    if (typeof requestIdleCallback === "function") {
+      this.historyIdle = requestIdleCallback(() => onIdle());
+      return;
+    }
+    this.historyTimer = window.setTimeout(onIdle, 0);
+  }
+
+  private onSliceOpportunity(): void {
+    if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+    if (!this.sliceIntended()) {
+      if (this.nextHistoryAt > Date.now()) this.scheduleSlice(this.nextHistoryAt - Date.now());
+      return;
+    }
+    if (this.blocked()) {
+      this.scheduleSlice(BUSY_RETRY_MS);
+      return;
+    }
+    this.startSlice();
+  }
+
+  private sliceIntended(): boolean {
+    return this.forceMode != null || this.nextHistoryAt <= Date.now();
+  }
+
+  private clearSliceSchedule(): void {
+    if (this.historyTimer) window.clearTimeout(this.historyTimer);
     this.historyTimer = 0;
+    if (this.historyIdle && typeof cancelIdleCallback === "function") cancelIdleCallback(this.historyIdle);
+    this.historyIdle = 0;
   }
 
   private startSlice(): void {
@@ -183,7 +222,6 @@ export class QuotaTracker {
       return;
     }
     if (result === "busy") {
-      this.forceMode = null;
       this.nextHistoryAt = Date.now() + HISTORY_LOCK_RETRY_MS;
     }
   }
@@ -330,7 +368,7 @@ export class QuotaTracker {
 
   private readonly onVisibility = (): void => {
     if (document.visibilityState === "hidden") {
-      this.clearSliceTimer();
+      this.clearSliceSchedule();
       return;
     }
     if (!this.historyFlight) this.scheduleSlice(SLICE_IDLE_MS);

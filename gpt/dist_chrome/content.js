@@ -62,12 +62,16 @@
   // src/core/bootGate.ts
   var BOOT_FALLBACK_MS = 15e3;
   var IDLE_TIMEOUT_MS = 2e3;
+  var RESOURCE_SKEW_MS = 1e3;
   var ConversationBootGate = class {
     constructor(sync) {
       this.sync = sync;
     }
     generation = 0;
     conversationId = null;
+    hostGeneration = null;
+    initialEndedAt = null;
+    initialDurationMs = 0;
     observer = null;
     timer = 0;
     idleTimer = 0;
@@ -78,6 +82,9 @@
     arm(conversationId) {
       this.stopWatching();
       this.conversationId = conversationId;
+      this.hostGeneration = null;
+      this.initialEndedAt = null;
+      this.initialDurationMs = 0;
       this.transferSeen = false;
       this.launched = false;
       if (!conversationId || document.visibilityState === "hidden") return;
@@ -86,26 +93,37 @@
       this.timer = window.setTimeout(() => this.fallback(generation), BOOT_FALLBACK_MS);
       this.listenMain();
       this.observeResources(conversationId, generation);
+      this.requestState();
+    }
+    isPending() {
+      return this.conversationId != null && !this.launched && !this.sync.hasUsableFullSnapshot(this.conversationId) && this.isWatching();
+    }
+    isActive() {
+      return this.launched && this.sync.isReading();
     }
     clear() {
       this.generation += 1;
       this.stopWatching();
       this.conversationId = null;
+      this.hostGeneration = null;
+      this.initialEndedAt = null;
+      this.initialDurationMs = 0;
     }
     dispose() {
       this.clear();
     }
+    isWatching() {
+      return this.listening || this.observer != null || this.timer !== 0 || this.idleTimer !== 0 || this.idleId !== 0;
+    }
+    requestState() {
+      window.postMessage({ channel: NATIVE_NAV_CHANNEL, kind: "hello" }, location.origin);
+    }
     observeResources(conversationId, generation) {
-      const existing = performance.getEntriesByType?.("resource") ?? [];
-      if (existing.some((entry) => historyTransferDone(entry, conversationId))) {
-        this.onTransfer(generation);
-        return;
-      }
+      this.inspectResources(conversationId, generation);
       if (typeof PerformanceObserver === "undefined") return;
       this.observer = new PerformanceObserver((list) => {
-        for (const entry of list.getEntries()) {
-          if (historyTransferDone(entry, conversationId)) this.onTransfer(generation);
-        }
+        void list;
+        this.inspectResources(conversationId, generation);
       });
       try {
         this.observer.observe({ type: "resource", buffered: true });
@@ -113,6 +131,20 @@
         this.observer.disconnect();
         this.observer = null;
       }
+    }
+    inspectResources(conversationId, generation) {
+      if (generation !== this.generation || this.initialEndedAt == null) return;
+      const existing = performance.getEntriesByType?.("resource") ?? [];
+      if (existing.some((entry) => this.resourceMatchesCurrentInitial(entry, conversationId))) {
+        this.onTransfer(generation);
+      }
+    }
+    resourceMatchesCurrentInitial(entry, conversationId) {
+      if (!historyTransferDone(entry, conversationId) || this.initialEndedAt == null) return false;
+      const timing = entry;
+      const endedAt = performance.timeOrigin + timing.responseEnd;
+      const startedAt = this.initialEndedAt - this.initialDurationMs;
+      return endedAt >= startedAt - RESOURCE_SKEW_MS && endedAt <= this.initialEndedAt + RESOURCE_SKEW_MS;
     }
     listenMain() {
       if (this.listening) return;
@@ -123,12 +155,22 @@
       if (event.source !== window || event.origin !== location.origin) return;
       const message = record(event.data);
       if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state") return;
-      const state = record(message.state);
-      if (!state || state.conversationId !== this.conversationId) return;
-      if (state.requestInFlight !== false || state.lastRequestKind !== "initial") return;
-      if (this.observer) return;
-      this.onTransfer(this.generation);
+      if (!isNativeTransportState(message.state)) return;
+      this.onHostState(message.state);
     };
+    onHostState(state) {
+      if (state.conversationId !== this.conversationId) return;
+      if (this.hostGeneration == null) this.hostGeneration = state.generation;
+      if (state.generation !== this.hostGeneration) return;
+      if (state.lastRequestKind !== "initial" || state.requestInFlight || state.lastRequestAt == null) return;
+      this.initialEndedAt = state.lastRequestAt;
+      this.initialDurationMs = state.lastRequestDurationMs;
+      if (this.observer) {
+        this.inspectResources(this.conversationId, this.generation);
+        return;
+      }
+      this.onTransfer(this.generation);
+    }
     onTransfer(generation) {
       if (generation !== this.generation || this.transferSeen || this.launched) return;
       this.transferSeen = true;
@@ -1486,6 +1528,9 @@ ${text}
       void reason;
       return this.request("full");
     }
+    isReading() {
+      return this.runningPromise != null || this.desired != null || this.active != null;
+    }
     setActiveConversation(conversationId) {
       if (this.activeConversationId === conversationId) return;
       this.generation += 1;
@@ -2610,6 +2655,7 @@ ${text}
     disposed = false;
     historyFlight = null;
     historyTimer = 0;
+    historyIdle = 0;
     historyAbort = null;
     nextHistoryAt = 0;
     forceMode = null;
@@ -2639,7 +2685,7 @@ ${text}
     dispose() {
       this.disposed = true;
       this.historyAbort?.abort();
-      this.clearSliceTimer();
+      this.clearSliceSchedule();
       this.unsubscribe?.();
       this.unsubscribe = null;
       document.removeEventListener("visibilitychange", this.onVisibility);
@@ -2650,16 +2696,51 @@ ${text}
     }
     scheduleSlice(delayMs) {
       if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
-      this.clearSliceTimer();
-      this.historyTimer = window.setTimeout(() => {
-        this.historyTimer = 0;
-        void this.startSlice();
-      }, Math.max(0, delayMs));
+      this.clearSliceSchedule();
+      const wait2 = Math.max(0, delayMs);
+      if (wait2 > 0) {
+        this.historyTimer = window.setTimeout(() => {
+          this.historyTimer = 0;
+          this.armIdleSlice();
+        }, wait2);
+        return;
+      }
+      this.armIdleSlice();
     }
-    clearSliceTimer() {
-      if (!this.historyTimer) return;
-      window.clearTimeout(this.historyTimer);
+    armIdleSlice() {
+      if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+      if (this.historyIdle || this.historyTimer) return;
+      const onIdle = () => {
+        this.historyIdle = 0;
+        this.historyTimer = 0;
+        this.onSliceOpportunity();
+      };
+      if (typeof requestIdleCallback === "function") {
+        this.historyIdle = requestIdleCallback(() => onIdle());
+        return;
+      }
+      this.historyTimer = window.setTimeout(onIdle, 0);
+    }
+    onSliceOpportunity() {
+      if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
+      if (!this.sliceIntended()) {
+        if (this.nextHistoryAt > Date.now()) this.scheduleSlice(this.nextHistoryAt - Date.now());
+        return;
+      }
+      if (this.blocked()) {
+        this.scheduleSlice(BUSY_RETRY_MS);
+        return;
+      }
+      this.startSlice();
+    }
+    sliceIntended() {
+      return this.forceMode != null || this.nextHistoryAt <= Date.now();
+    }
+    clearSliceSchedule() {
+      if (this.historyTimer) window.clearTimeout(this.historyTimer);
       this.historyTimer = 0;
+      if (this.historyIdle && typeof cancelIdleCallback === "function") cancelIdleCallback(this.historyIdle);
+      this.historyIdle = 0;
     }
     startSlice() {
       if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
@@ -2684,7 +2765,6 @@ ${text}
         return;
       }
       if (result === "busy") {
-        this.forceMode = null;
         this.nextHistoryAt = Date.now() + HISTORY_LOCK_RETRY_MS;
       }
     }
@@ -2826,7 +2906,7 @@ ${text}
     }
     onVisibility = () => {
       if (document.visibilityState === "hidden") {
-        this.clearSliceTimer();
+        this.clearSliceSchedule();
         return;
       }
       if (!this.historyFlight) this.scheduleSlice(SLICE_IDLE_MS);
@@ -6853,6 +6933,8 @@ ${timestamp ? `${timestamp}
     maintenanceBlocked() {
       if (Date.now() - this.lastUserInput < USER_IDLE_MS) return true;
       if (document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')) return true;
+      if (this.boot?.isPending() || this.boot?.isActive()) return true;
+      if (this.sync?.isReading()) return true;
       return this.hydrator?.isMaintenanceBlocked() === true;
     }
   };

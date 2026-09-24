@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ConversationSync } from "../src/core/conversationSync";
+import { ConversationSync, SIGNAL_INSPECTION_DEBOUNCE_MS } from "../src/core/conversationSync";
 import { mergeRecentSnapshot } from "../src/conversation/mergeRecent";
 import { normalizeConversation } from "../src/conversation/normalizeConversation";
 import { parseConversation } from "../src/quota/vibebar/conversationParser";
@@ -10,6 +10,16 @@ function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((res) => { resolve = res; });
   return { promise, resolve };
+}
+
+function waitForTurnCount(sync: ConversationSync, count: number): Promise<void> {
+  return new Promise((resolve) => {
+    const unsubscribe = sync.subscribe((snapshot) => {
+      if (snapshot?.activeTurns.length !== count) return;
+      unsubscribe();
+      resolve();
+    });
+  });
 }
 
 async function snapshotFor(count: number, id = "conversation-1"): Promise<ConversationSnapshot> {
@@ -36,6 +46,30 @@ describe("recent and full conversation demand", () => {
     vi.useRealTimers();
   });
 
+  it("publishes three merged turns as soon as requestRecent resolves", async () => {
+    const full = await snapshotFor(2);
+    const recent = await snapshotFor(3);
+    recent.coverage = "recent";
+    let fullReads = 0;
+    let recentReads = 0;
+    const sync = new ConversationSync({
+      async readConversation() { fullReads += 1; return full; },
+      async readRecentConversation() { recentReads += 1; return recent; }
+    });
+    sync.setActiveConversation("conversation-1");
+    await sync.requestFull("boot");
+    expect(sync.getSnapshot()?.activeTurns).toHaveLength(2);
+    expect(sync.isReading()).toBe(false);
+    await sync.requestRecent("streaming-end");
+    expect(recentReads).toBe(1);
+    expect(fullReads).toBe(1);
+    expect(sync.getSnapshot()?.activeTurns).toHaveLength(3);
+    expect(sync.getSnapshot()?.quotaTurns).toHaveLength(3);
+    expect(sync.getSnapshot()?.coverage).toBe("full");
+    expect(sync.isReading()).toBe(false);
+    sync.dispose();
+  });
+
   it("reads only the recent tail after a full baseline when an answer finishes", async () => {
     vi.useFakeTimers();
     const full = await snapshotFor(2);
@@ -55,10 +89,12 @@ describe("recent and full conversation demand", () => {
     sync.setActiveConversation("conversation-1");
     await sync.requestFull("boot");
     expect(fullReads).toBe(1);
+    const merged = waitForTurnCount(sync, 3);
     assistant.dataset.isStreaming = "true";
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(SIGNAL_INSPECTION_DEBOUNCE_MS + 50);
     assistant.dataset.isStreaming = "false";
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(SIGNAL_INSPECTION_DEBOUNCE_MS + 50);
+    await merged;
     expect(recentReads).toBe(1);
     expect(fullReads).toBe(1);
     expect(sync.getSnapshot()?.activeTurns).toHaveLength(3);

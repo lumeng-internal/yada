@@ -227,6 +227,8 @@ export class ChatGptYadaApp {
   private maintenanceBlocked(): boolean {
     if (Date.now() - this.lastUserInput < USER_IDLE_MS) return true;
     if (document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')) return true;
+    if (this.boot?.isPending() || this.boot?.isActive()) return true;
+    if (this.sync?.isReading()) return true;
     return this.hydrator?.isMaintenanceBlocked() === true;
   }
 }

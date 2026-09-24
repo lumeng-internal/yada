@@ -60,6 +60,8 @@ describe("source lifecycle invariants", () => {
     const mainHook = readFileSync(resolve(ROOT, "src/nativeNavigator/mainHook.ts"), "utf8");
     expect(content).not.toMatch(/observeRouteChange|requestAnimationFrame|hostGuard/);
     expect(content).not.toMatch(/this\.dispose\(\);\s*this\.mount\(\)/);
+    expect(content).toMatch(/boot\?\.isPending\(\)/);
+    expect(content).toMatch(/sync\?\.isReading\(\)/);
     expect(toolbar).not.toMatch(/observe\(document\.body,\s*\{\s*childList:\s*true,\s*subtree:\s*true/);
     expect(mainHook).toMatch(/kind:\s*"route"/);
     expect(mainHook).not.toMatch(/response\.clone|\.body\?*\.getReader|TextDecoder|JSON\.parse|captureActive/);

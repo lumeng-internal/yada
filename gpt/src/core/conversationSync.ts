@@ -63,6 +63,10 @@ export class ConversationSync {
     return this.request("full");
   }
 
+  isReading(): boolean {
+    return this.runningPromise != null || this.desired != null || this.active != null;
+  }
+
   setActiveConversation(conversationId: string | null): void {
     if (this.activeConversationId === conversationId) return;
     this.generation += 1;
@@ -164,6 +168,7 @@ export class ConversationSync {
     if (this.disposed) return Promise.reject(abortError());
     const effective: SyncDemand = mode === "recent" && !this.hasUsableFullSnapshot() ? "full" : mode;
     this.desired = this.desired === "full" || effective === "full" ? "full" : "recent";
+    // The returned promise settles after pump() publishes the merged snapshot.
     const waitForTrailingFull = effective === "full" && this.active === "recent";
     if (!this.runningPromise) {
       this.runningPromise = Promise.resolve().then(() => this.pump()).finally(() => {
