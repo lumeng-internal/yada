@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.1.2**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.1.3**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
@@ -16,7 +16,7 @@ Runtime is subtractive: BOOT work may use CPU/network; STEADY must sleep; heavy 
 - `nativeNavigator/mainHook.ts`: thin document-start MAIN-world fetch wrapper for route events, bounded prepare lease, `num_turns` boost, and request lifecycle signals; it never reads a history response body and has no `chrome.*` API.
 - `nativeNavigator/hydrator.ts`: isolated official-UI loader. It exposes the host pagination sentinel, compares official DOM count with ConversationSync, sleeps on transient unavailability, and parks heavy work after two stable matching checks.
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
-- `QuotaTracker`: live ledger delta + last-known-good baseline. Automatic history maintenance is at most one bounded slice, not a 10-minute full scan; a trusted baseline waits 24 hours and then checks non-archived revisions only. Full repair (normal + archived) is for the first baseline, account change, schema damage, or manual refresh. Web Locks keep a single tab in a slice; hidden cancels a slice that has not started.
+- `QuotaTracker`: live ledger delta + last-known-good baseline. Automatic history maintenance is at most one bounded slice, not a 10-minute full scan; a trusted baseline waits 24 hours and then checks non-archived revisions only. Full repair (normal + archived) is for the first baseline, account change, schema damage, or manual refresh. A due timer waits until the work is due; an idle callback then takes one page-idle chance. Maintenance stays off while BootGate is still waiting for or running the first Full, or ConversationSync is reading. Web Locks keep a single tab in a slice; a busy lock retries after 60 seconds without dropping a manual full. Hidden cancels a slice that has not started.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
 - `quota/heatmap.ts` + `ui/quotaHeatmap.ts`: on-demand, ledger-only rolling-hour aggregation and direct SVG rendering. No heatmap work runs until quota details open; close removes the SVG, shared tooltip, delegated listeners, and hour-boundary timeout.
 

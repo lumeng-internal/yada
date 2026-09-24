@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.1.3 - 2026-09-24
+
+- `requestRecent()` 在 ConversationSync 自己的 snapshot / activeTurns / quotaTurns 发布之后才 resolve；Recent 测试等待这个完成点，不再在 MutationObserver + fake timer 后立刻读取。
+- Quota maintenance 到期后走 `requestIdleCallback` 一次空闲机会；BootGate 仍在等待或执行首次 Full、ConversationSync 正在读取时不启动。
+- Web Lock busy 时保留 manual full / daily force，60 秒后重试，fresh TTL 也不能把手动 full 吃掉。
+- BootGate 只接受当前 generation 的 initial 传输；同一 Document 的旧 conversation resource timing 不再提前触发 Full。
+- 测试包 `ChatGPT-Yada-v4.1.3-official-only-UNVERIFIED.zip`。MacBook 真机性能验收仍为 PENDING。不执行 PR、CI、merge 或 Release。
+
 ## v4.1.2 - 2026-09-24
 
 - 工具栏 Shell 最先出现。额度、Navigator、ConversationSync 或提示词任一模块失败，不再让整个 Yada 消失。
