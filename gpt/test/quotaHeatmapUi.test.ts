@@ -6,7 +6,7 @@ import { buildQuotaHeatmap, HOUR_MS } from "../src/quota/heatmap";
 import { STATE_KEY, type QuotaSnapshot, type QuotaUsageEvent } from "../src/quota/types";
 import { GPT6_PRO, SOL_PRO } from "../src/quota/vibebar/allowances";
 import { QUOTA_INDICATOR_DEBOUNCE_MS, QUOTA_POPOVER_HOST_ID, QuotaIndicator, type QuotaStateSender } from "../src/ui/quotaIndicator";
-import { HEATMAP_CELL_SIZE, HEATMAP_GAP, HEATMAP_RADIUS } from "../src/ui/quotaHeatmap";
+import { HEATMAP_CELL_SIZE, HEATMAP_GAP, HEATMAP_RADIUS, QUOTA_HEATMAP_CSS } from "../src/ui/quotaHeatmap";
 
 const NOW = new Date(2026, 8, 22, 20, 5, 0, 0).getTime();
 const ANCHOR = new Date(2026, 8, 22, 21, 0, 0, 0).getTime();
@@ -173,7 +173,9 @@ describe("on-demand quota heatmap UI", () => {
     expect(css).toContain("--yada-heatmap-empty: #ebedf0");
     expect(css).toContain("--yada-heatmap-empty: #2d333b");
     expect(css).toMatch(/\[data-heatmap-cell\]:hover\s*\{[^}]*stroke:/);
-    expect(css).not.toMatch(/transition|animation/);
+    expect(QUOTA_HEATMAP_CSS).not.toMatch(/transition|animation/);
+    expect(css).toMatch(/@keyframes yada-quota-refresh-spin/);
+    expect(css).toMatch(/prefers-reduced-motion:\s*reduce/);
     document.documentElement.setAttribute("data-theme", "dark");
     await flush();
     expect(host.dataset.yadaTheme).toBe("dark");

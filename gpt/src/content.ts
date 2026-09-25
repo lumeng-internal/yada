@@ -4,6 +4,7 @@ import { OfficialNavigatorHydrator } from "./nativeNavigator/hydrator";
 import { NATIVE_NAV_CHANNEL, record } from "./nativeNavigator/protocol";
 import { isChatGptConversationPage, isChatGptPage, getConversationIdFromUrl } from "./platform/chatgptAdapter";
 import { QuotaTracker } from "./quota/tracker";
+import type { QuotaSnapshot } from "./quota/types";
 import { YadaToolbar } from "./ui/toolbar";
 
 const USER_IDLE_MS = 1_500;
@@ -150,13 +151,20 @@ export class ChatGptYadaApp {
 
   private ensureQuotaIndicator(): void {
     if (!this.toolbar || this.toolbar.hasQuotaIndicator()) return;
-    const started = startIsolated(() => this.toolbar?.attachQuotaIndicator());
+    const started = startIsolated(() => this.toolbar?.attachQuotaIndicator({
+      onRefresh: (snapshot) => this.refreshQuotaLight(snapshot)
+    }));
     if (started.error) {
       this.moduleErrors.set("quota-indicator", started.error);
       this.toolbar.showQuotaFault();
       return;
     }
     this.moduleErrors.delete("quota-indicator");
+  }
+
+  private async refreshQuotaLight(snapshot: QuotaSnapshot | null): Promise<void> {
+    if (!this.quota) throw new Error("额度模块暂不可用");
+    await this.quota.refreshCurrentLight(snapshot);
   }
 
   private ensureListeners(): void {

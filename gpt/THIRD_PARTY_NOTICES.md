@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 4.1.1
+# Third-party notices — ChatGPT Yada 4.1.4
 
 ## Vibe Bar
 
@@ -85,12 +85,23 @@ Reference only for MV3 service-worker icon updates and popup/background synchron
 
 LunaTOC Commit `1339969ec25d7c9b63068abd3776ce41780023ed` (MIT) was used by an earlier implementation. Luna virtual search is no longer present in production or tests and is not bundled in 4.1.1.
 
+## Heroicons
+
+- Repository: https://github.com/tailwindlabs/heroicons
+- Stable tag: `v2.2.0`
+- Commit: `0435d4ca364a608cc75e2f8683d374e55abbae26`
+- License: MIT
+- Copyright (c) Tailwind Labs, Inc.
+
+A single outline SVG path from `optimized/24/outline/arrow-path.svg` is inlined into `src/ui/quotaIndicator.ts` for the quota-details refresh button. No Heroicons npm package, React, Vue, or icon runtime is installed.
+
 ## SortableJS
 
 - Repository: https://github.com/SortableJS/Sortable
 - Fixed npm package: `sortablejs@1.15.6` (package-lock.json records the tarball and integrity)
 - License: MIT
-- Copyright (c) 2019 All contributors to Sortable
+- Copyright (c) Tailwind Labs, Inc.
+Copyright (c) 2019 All contributors to Sortable
 
 Official default ESM entry (`modular/sortable.esm.js`) supplies handle-only prompt reordering and AutoScroll. No framework wrapper, MultiDrag or Swap is bundled. Type declarations: `@types/sortablejs@1.15.8`, development only.
 

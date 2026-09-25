@@ -87,6 +87,19 @@ React component、React DOM、Legend、month/week calendar navigation 与 `@uiw/
 
 `claude/` 与 `gemini/` 不与 `gpt/` 构建、链接或打包，保留各自许可证。
 
+## Heroicons
+
+`src/ui/quotaIndicator.ts` 直接内联移植了 [tailwindlabs/heroicons](https://github.com/tailwindlabs/heroicons) 的一个 MIT outline SVG path，用作额度详情标题右侧的刷新按钮。
+
+- 固定 Tag：`v2.2.0`
+- 固定 Commit：`0435d4ca364a608cc75e2f8683d374e55abbae26`
+- 原许可证：MIT
+- 原版权：Copyright (c) Tailwind Labs, Inc.
+- 上游文件：`optimized/24/outline/arrow-path.svg`（仓库同时提供 `src/24/outline/arrow-path.svg`；当前 16px 视觉选用官方 24px outline path）
+- 移植范围：仅一个 `<path d>`，通过 `currentColor` 内联进 Yada；不安装 heroicons npm、不引入 React/Vue 或图标运行时
+
+未复制 Heroicons 其余图标、24/solid、20/solid、16/solid 或任何框架组件。
+
 ## SortableJS
 
 [SortableJS/Sortable](https://github.com/SortableJS/Sortable)，固定 npm `sortablejs@1.15.6`，MIT，Copyright (c) 2019 All contributors to Sortable。用于现有提示词卡片拖拽和官方 AutoScroll；采用默认 ESM 入口，不引入框架 wrapper。完整 MIT 文本与版权见 `THIRD_PARTY_NOTICES.md`；package-lock.json 固定 tarball integrity。

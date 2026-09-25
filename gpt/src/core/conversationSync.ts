@@ -168,6 +168,7 @@ export class ConversationSync {
     if (this.disposed) return Promise.reject(abortError());
     const effective: SyncDemand = mode === "recent" && !this.hasUsableFullSnapshot() ? "full" : mode;
     this.desired = this.desired === "full" || effective === "full" ? "full" : "recent";
+    if (effective === "full") this.clearFallback();
     // The returned promise settles after pump() publishes the merged snapshot.
     const waitForTrailingFull = effective === "full" && this.active === "recent";
     if (!this.runningPromise) {

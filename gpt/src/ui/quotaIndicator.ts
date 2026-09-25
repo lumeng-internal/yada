@@ -22,6 +22,11 @@ import { detectYadaTheme, observeYadaTheme, type YadaTheme } from "./theme";
 export const QUOTA_INDICATOR_DEBOUNCE_MS = 80;
 export const QUOTA_POPOVER_HOST_ID = "chatgpt-yada-quota-popover-host";
 export const UNKNOWN_QUOTA_RINGS: RingValues = { outer: 0, middle: 0, inner: 0, center: "…" };
+export const QUOTA_REFRESH_LABEL = "刷新当前额度";
+export const QUOTA_REFRESHING_LABEL = "正在刷新当前额度";
+export const QUOTA_REFRESHED_LIVE = "当前额度已刷新";
+export const QUOTA_REFRESH_ERROR = "刷新失败，继续显示上次数据";
+export const HEROICON_ARROW_PATH_D = "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99";
 const ERROR_QUOTA_RINGS: RingValues = { outer: 0, middle: 0, inner: 0, center: "!" };
 const POPOVER_WIDTH = 312;
 const VIEWPORT_GUTTER = 8;
@@ -36,6 +41,8 @@ export type QuotaStateSender = (
   message: unknown,
   timeoutMs?: number
 ) => Promise<QuotaStateResponse>;
+
+export type QuotaRefreshHandler = (snapshot: QuotaSnapshot | null) => Promise<void>;
 
 type IndicatorStatus = "loading" | "ready" | "error";
 
@@ -77,7 +84,84 @@ const POPOVER_CSS = `
     background: #2a2a2a;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
   }
-  [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+  [data-quota-header] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 8px;
+  }
+  [data-quota-header] h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 0;
+  }
+  [data-quota-refresh] {
+    appearance: none;
+    box-sizing: border-box;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--yada-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  [data-quota-refresh] svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+  }
+  [data-quota-refresh]:hover:not(:disabled) {
+    background: rgba(32, 33, 35, 0.06);
+  }
+  [data-quota-refresh]:active:not(:disabled) {
+    background: rgba(32, 33, 35, 0.12);
+  }
+  :host([data-yada-theme="dark"]) [data-quota-refresh]:hover:not(:disabled) {
+    background: rgba(236, 236, 236, 0.08);
+  }
+  :host([data-yada-theme="dark"]) [data-quota-refresh]:active:not(:disabled) {
+    background: rgba(236, 236, 236, 0.16);
+  }
+  [data-quota-refresh]:focus-visible {
+    outline: 2px solid rgba(16, 163, 127, 0.72);
+    outline-offset: 1px;
+  }
+  [data-quota-refresh]:disabled {
+    cursor: default;
+  }
+  [data-quota-refresh][aria-busy="true"] svg {
+    animation: yada-quota-refresh-spin 1s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-quota-refresh][aria-busy="true"] svg {
+      animation: none;
+      opacity: 0.55;
+    }
+  }
+  @keyframes yada-quota-refresh-spin {
+    to { transform: rotate(360deg); }
+  }
+  [data-quota-live] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  [data-quota-refresh-error] {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--yada-muted);
+  }
   [data-quota-popover] [data-quota-bucket] { margin-top: 10px; }
   [data-quota-popover] [data-quota-row] {
     display: flex;
@@ -107,14 +191,21 @@ const POPOVER_CSS = `
 
 export class QuotaIndicator {
   private readonly send: QuotaStateSender;
+  private readonly onRefresh: QuotaRefreshHandler | null;
   private readonly debounceMs: number;
   private readonly canvas: HTMLCanvasElement;
   private portalHost: HTMLDivElement | null = null;
   private popover: HTMLDivElement | null = null;
+  private refreshButton: HTMLButtonElement | null = null;
+  private liveRegion: HTMLParagraphElement | null = null;
   private readonly disposeTheme: () => void;
   private disposed = false;
   private generation = 0;
+  private refreshGeneration = 0;
+  private refreshUiGeneration = 0;
   private refreshTimer = 0;
+  private refreshPromise: Promise<void> | null = null;
+  private refreshFailed = false;
   private status: IndicatorStatus = "loading";
   private snapshot: QuotaSnapshot | null = null;
   private rings: RingValues = UNKNOWN_QUOTA_RINGS;
@@ -128,9 +219,10 @@ export class QuotaIndicator {
 
   constructor(
     private readonly button: HTMLButtonElement,
-    options: { send?: QuotaStateSender; debounceMs?: number } = {}
+    options: { send?: QuotaStateSender; debounceMs?: number; onRefresh?: QuotaRefreshHandler } = {}
   ) {
     this.send = options.send ?? ((message, timeoutMs) => sendRuntimeMessage<QuotaStateResponse>(message, timeoutMs));
+    this.onRefresh = options.onRefresh ?? null;
     this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
     this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
     this.canvas.setAttribute("aria-hidden", "true");
@@ -150,6 +242,10 @@ export class QuotaIndicator {
   }
 
   close = (): void => {
+    this.refreshGeneration += 1;
+    this.refreshFailed = false;
+    this.setRefreshUi("idle");
+    this.setLiveMessage("");
     this.stopHeatmapLifecycle();
     if (this.popover) this.popover.hidden = true;
     this.button.setAttribute("aria-expanded", "false");
@@ -163,13 +259,17 @@ export class QuotaIndicator {
     this.generation += 1;
     window.clearTimeout(this.refreshTimer);
     this.refreshTimer = 0;
+    this.refreshPromise = null;
     this.disposeTheme();
     this.button.removeEventListener("click", this.onClick);
+    this.refreshButton?.removeEventListener("click", this.onRefreshClick);
     chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
     document.removeEventListener("visibilitychange", this.onVisibility);
     this.portalHost?.remove();
     this.portalHost = null;
     this.popover = null;
+    this.refreshButton = null;
+    this.liveRegion = null;
   }
 
   private readonly onClick = (event: MouseEvent): void => {
@@ -235,17 +335,20 @@ export class QuotaIndicator {
     }, this.debounceMs);
   }
 
-  private async loadState(): Promise<void> {
+  private async loadState(options: { retainOnError?: boolean } = {}): Promise<boolean> {
     const generation = ++this.generation;
     try {
       const response = await this.send({ type: "quota/get-state" });
-      if (this.disposed || generation !== this.generation) return;
+      if (this.disposed || generation !== this.generation) return false;
       if (response?.error) throw new Error(response.error);
       if (!response?.snapshot) throw new Error("无法读取额度账本");
       this.apply(response.snapshot, "ready");
+      return true;
     } catch {
-      if (this.disposed || generation !== this.generation) return;
+      if (this.disposed || generation !== this.generation) return false;
+      if (options.retainOnError && this.snapshot && this.status !== "error") return false;
       this.apply(null, "error");
+      return false;
     }
   }
 
@@ -341,15 +444,15 @@ export class QuotaIndicator {
   private renderPopover(): void {
     if (!this.popover) return;
     this.popover.replaceChildren();
-    const heading = document.createElement("h2");
-    heading.textContent = "Pro 模型额度";
-    this.popover.append(heading);
+    this.popover.append(this.headerRow());
     if (this.status === "error" || (this.status === "ready" && !this.snapshot)) {
       this.popover.append(note("无法读取额度账本", "quota-error"));
+      this.appendRefreshStatus();
       return;
     }
     if (!this.snapshot) {
       this.popover.append(note("正在读取额度", "quota-note"));
+      this.appendRefreshStatus();
       return;
     }
 
@@ -390,6 +493,124 @@ export class QuotaIndicator {
     this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
     const workspace = workspaceStatusNote(this.snapshot);
     if (workspace) this.popover.append(note(workspace, "quota-warn"));
+    this.appendRefreshStatus();
+  }
+
+  private headerRow(): HTMLDivElement {
+    const row = document.createElement("div");
+    row.dataset.quotaHeader = "true";
+    const heading = document.createElement("h2");
+    heading.textContent = "Pro 模型额度";
+    row.append(heading, this.ensureRefreshButton());
+    return row;
+  }
+
+  private ensureRefreshButton(): HTMLButtonElement {
+    if (this.refreshButton) {
+      this.setRefreshUi(this.isRefreshUiActive() ? "refreshing" : "idle");
+      return this.refreshButton;
+    }
+    const button = document.createElement("button");
+    button.type = "button";
+    button.dataset.quotaRefresh = "true";
+    button.append(createRefreshIcon());
+    button.addEventListener("click", this.onRefreshClick);
+    this.refreshButton = button;
+    this.setRefreshUi("idle");
+    return button;
+  }
+
+  private appendRefreshStatus(): void {
+    if (!this.popover) return;
+    this.popover.append(this.ensureLiveRegion());
+    this.ensureRefreshError();
+  }
+
+  private ensureRefreshError(): void {
+    if (!this.refreshFailed || !this.popover || this.popover.hidden) return;
+    if (this.popover.querySelector("[data-quota-refresh-error]")) return;
+    const error = document.createElement("p");
+    error.dataset.quotaRefreshError = "true";
+    error.textContent = QUOTA_REFRESH_ERROR;
+    this.popover.append(error);
+  }
+
+  private ensureLiveRegion(): HTMLParagraphElement {
+    if (this.liveRegion) return this.liveRegion;
+    const live = document.createElement("p");
+    live.dataset.quotaLive = "true";
+    live.setAttribute("aria-live", "polite");
+    this.liveRegion = live;
+    return live;
+  }
+
+  private readonly onRefreshClick = (event: Event): void => {
+    event.preventDefault();
+    event.stopPropagation();
+    void this.startRefresh();
+  };
+
+  private isRefreshUiActive(): boolean {
+    return this.refreshPromise != null && this.refreshUiGeneration === this.refreshGeneration && this.popover?.hidden === false;
+  }
+
+  private startRefresh(): Promise<void> {
+    if (this.refreshPromise && this.refreshUiGeneration === this.refreshGeneration) return this.refreshPromise;
+    const generation = this.refreshGeneration;
+    this.refreshUiGeneration = generation;
+    this.setRefreshUi("refreshing");
+    const work = this.runRefresh(generation);
+    const wrapped = work.finally(() => {
+      if (this.refreshPromise === wrapped) this.refreshPromise = null;
+    });
+    this.refreshPromise = wrapped;
+    return wrapped;
+  }
+
+  private async runRefresh(generation: number): Promise<void> {
+    try {
+      const refresh = this.onRefresh;
+      if (!refresh) throw new Error("额度刷新暂不可用");
+      await refresh(this.snapshot);
+      if (this.disposed) return;
+      this.refreshFailed = false;
+      const loaded = await this.loadState({ retainOnError: true });
+      if (this.disposed || generation !== this.refreshGeneration) return;
+      if (!loaded) {
+        if (this.snapshot && this.status !== "error") {
+          this.refreshFailed = true;
+          this.ensureRefreshError();
+        }
+        return;
+      }
+      if (this.popover?.hidden === false) {
+        this.setLiveMessage("");
+        this.setLiveMessage(QUOTA_REFRESHED_LIVE);
+      }
+    } catch {
+      if (this.disposed || generation !== this.refreshGeneration) return;
+      this.refreshFailed = true;
+      this.ensureRefreshError();
+    } finally {
+      if (!this.disposed) this.setRefreshUi("idle");
+    }
+  }
+
+  private setRefreshUi(state: "idle" | "refreshing"): void {
+    const button = this.refreshButton;
+    if (!button) return;
+    const refreshing = state === "refreshing";
+    button.disabled = refreshing;
+    if (refreshing) button.setAttribute("aria-busy", "true");
+    else button.removeAttribute("aria-busy");
+    const label = refreshing ? QUOTA_REFRESHING_LABEL : QUOTA_REFRESH_LABEL;
+    button.title = label;
+    button.setAttribute("aria-label", label);
+  }
+
+  private setLiveMessage(text: string): void {
+    const live = this.ensureLiveRegion();
+    live.textContent = text;
   }
 
   private refreshHeatmap(): void {
@@ -504,4 +725,19 @@ function note(text: string, kind: "quota-note" | "quota-warn" | "quota-error"): 
   node.dataset[kind === "quota-note" ? "quotaNote" : kind === "quota-warn" ? "quotaWarn" : "quotaError"] = "true";
   node.textContent = text;
   return node;
+}
+
+function createRefreshIcon(): SVGSVGElement {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.5");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("stroke-linecap", "round");
+  path.setAttribute("stroke-linejoin", "round");
+  path.setAttribute("d", HEROICON_ARROW_PATH_D);
+  svg.append(path);
+  return svg;
 }

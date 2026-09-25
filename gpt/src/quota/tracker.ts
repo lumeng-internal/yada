@@ -1,6 +1,8 @@
 import type { ConversationSync } from "../core/conversationSync";
 import type { ConversationSnapshot } from "../core/types";
+import { abortError } from "../conversation/readConversation";
 import { ChatGPTApiTimeoutError, chatgptApiJson, fetchConversation } from "../conversation/fetchConversation";
+import { getConversationIdFromUrl, isChatGptConversationPage } from "../platform/chatgptAdapter";
 import { MESSAGE_TIMEOUT_MS, REFRESH_TIMEOUT_MS, sendRuntimeMessage, type QuotaIngest } from "../shared/messages";
 import { withTimeout } from "../shared/timeout";
 import { readChatAccount, readModelLimits, type ChatAccount } from "./pageClient";
@@ -83,6 +85,7 @@ export function shouldReconcileHistory(snapshot: Pick<QuotaSnapshot, "historyCom
 export class QuotaTracker {
   private unsubscribe: (() => void) | null = null;
   private ingestQueue: Promise<void> = Promise.resolve();
+  private ingestTail: Promise<void> = Promise.resolve();
   private readonly history = createChromeHistoryStore();
   private disposed = false;
   private historyFlight: Promise<void> | null = null;
@@ -95,6 +98,7 @@ export class QuotaTracker {
   private bypassCaches = false;
   private transientRetries = 0;
   private limitsFingerprint: string | null = null;
+  private lightRefreshPromise: Promise<void> | null = null;
   private readonly locks: HistoryLockManager | null;
   private readonly blocked: () => boolean;
 
@@ -129,6 +133,16 @@ export class QuotaTracker {
     }
   }
 
+  refreshCurrentLight(snapshot: QuotaSnapshot | null = null): Promise<void> {
+    if (this.lightRefreshPromise) return this.lightRefreshPromise;
+    const work = this.performLightRefresh(snapshot);
+    const wrapped = work.finally(() => {
+      if (this.lightRefreshPromise === wrapped) this.lightRefreshPromise = null;
+    });
+    this.lightRefreshPromise = wrapped;
+    return wrapped;
+  }
+
   dispose(): void {
     this.disposed = true;
     this.historyAbort?.abort();
@@ -140,7 +154,57 @@ export class QuotaTracker {
 
   private onSnapshot(snapshot: ConversationSnapshot | null): void {
     const work = this.ingestQueue.then(() => this.writeLedger(snapshot));
+    this.ingestTail = work;
     this.ingestQueue = work.catch(() => undefined);
+  }
+
+  private async performLightRefresh(snapshot: QuotaSnapshot | null): Promise<void> {
+    if (this.disposed) throw abortError();
+    const conversationId = getConversationIdFromUrl();
+    const activeId = this.sync.getActiveConversationId();
+    if (isChatGptConversationPage() && conversationId && activeId === conversationId) {
+      const ingestBefore = this.ingestTail;
+      await this.refreshConversationLight(conversationId);
+      if (this.ingestTail !== ingestBefore) {
+        await withTimeout(this.ingestTail, MESSAGE_TIMEOUT_MS, "账本写入超时");
+      }
+    }
+    this.requestHistoryRepair(snapshot);
+  }
+
+  private async refreshConversationLight(conversationId: string): Promise<void> {
+    const errorBefore = this.sync.getLastError();
+    if (this.sync.hasUsableFullSnapshot(conversationId)) {
+      await withTimeout(this.sync.requestRecent("quota-inline-refresh"), REFRESH_TIMEOUT_MS, "同步超时");
+      this.assertLightRefreshStillOn(conversationId);
+      if (!this.sync.hasUsableFullSnapshot(conversationId)) {
+        await withTimeout(this.sync.requestFull("quota-inline-refresh-fallback"), REFRESH_TIMEOUT_MS, "同步超时");
+        this.assertLightRefreshStillOn(conversationId);
+      }
+    } else {
+      await withTimeout(this.sync.requestFull("quota-inline-refresh"), REFRESH_TIMEOUT_MS, "同步超时");
+      this.assertLightRefreshStillOn(conversationId);
+    }
+    const errorAfter = this.sync.getLastError();
+    if (errorAfter && errorAfter !== errorBefore) throw errorAfter;
+  }
+
+  private assertLightRefreshStillOn(conversationId: string): void {
+    if (this.disposed) throw abortError();
+    if (this.sync.getActiveConversationId() !== conversationId) throw abortError();
+    if (getConversationIdFromUrl() !== conversationId) throw abortError();
+  }
+
+  private requestHistoryRepair(snapshot: QuotaSnapshot | null): void {
+    if (this.disposed || !snapshot) return;
+    let mode: "daily" | "full" | null = null;
+    if (!snapshot.historyComplete) mode = "full";
+    else if (snapshot.lastHistoryError != null) mode = "daily";
+    if (!mode) return;
+    if (mode === "full") this.forceMode = "full";
+    else if (this.forceMode !== "full") this.forceMode = "daily";
+    this.transientRetries = 0;
+    this.scheduleSlice(0);
   }
 
   private scheduleSlice(delayMs: number): void {

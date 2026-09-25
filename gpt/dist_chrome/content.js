@@ -1618,6 +1618,7 @@ ${text}
       if (this.disposed) return Promise.reject(abortError4());
       const effective = mode === "recent" && !this.hasUsableFullSnapshot() ? "full" : mode;
       this.desired = this.desired === "full" || effective === "full" ? "full" : "recent";
+      if (effective === "full") this.clearFallback();
       const waitForTrailingFull = effective === "full" && this.active === "recent";
       if (!this.runningPromise) {
         this.runningPromise = Promise.resolve().then(() => this.pump()).finally(() => {
@@ -2651,6 +2652,7 @@ ${text}
     }
     unsubscribe = null;
     ingestQueue = Promise.resolve();
+    ingestTail = Promise.resolve();
     history = createChromeHistoryStore();
     disposed = false;
     historyFlight = null;
@@ -2663,6 +2665,7 @@ ${text}
     bypassCaches = false;
     transientRetries = 0;
     limitsFingerprint = null;
+    lightRefreshPromise = null;
     locks;
     blocked;
     mount() {
@@ -2682,6 +2685,15 @@ ${text}
         this.bypassCaches = false;
       }
     }
+    refreshCurrentLight(snapshot = null) {
+      if (this.lightRefreshPromise) return this.lightRefreshPromise;
+      const work = this.performLightRefresh(snapshot);
+      const wrapped = work.finally(() => {
+        if (this.lightRefreshPromise === wrapped) this.lightRefreshPromise = null;
+      });
+      this.lightRefreshPromise = wrapped;
+      return wrapped;
+    }
     dispose() {
       this.disposed = true;
       this.historyAbort?.abort();
@@ -2692,7 +2704,53 @@ ${text}
     }
     onSnapshot(snapshot) {
       const work = this.ingestQueue.then(() => this.writeLedger(snapshot));
+      this.ingestTail = work;
       this.ingestQueue = work.catch(() => void 0);
+    }
+    async performLightRefresh(snapshot) {
+      if (this.disposed) throw abortError4();
+      const conversationId = getConversationIdFromUrl();
+      const activeId = this.sync.getActiveConversationId();
+      if (isChatGptConversationPage() && conversationId && activeId === conversationId) {
+        const ingestBefore = this.ingestTail;
+        await this.refreshConversationLight(conversationId);
+        if (this.ingestTail !== ingestBefore) {
+          await withTimeout(this.ingestTail, MESSAGE_TIMEOUT_MS, "账本写入超时");
+        }
+      }
+      this.requestHistoryRepair(snapshot);
+    }
+    async refreshConversationLight(conversationId) {
+      const errorBefore = this.sync.getLastError();
+      if (this.sync.hasUsableFullSnapshot(conversationId)) {
+        await withTimeout(this.sync.requestRecent("quota-inline-refresh"), REFRESH_TIMEOUT_MS, "同步超时");
+        this.assertLightRefreshStillOn(conversationId);
+        if (!this.sync.hasUsableFullSnapshot(conversationId)) {
+          await withTimeout(this.sync.requestFull("quota-inline-refresh-fallback"), REFRESH_TIMEOUT_MS, "同步超时");
+          this.assertLightRefreshStillOn(conversationId);
+        }
+      } else {
+        await withTimeout(this.sync.requestFull("quota-inline-refresh"), REFRESH_TIMEOUT_MS, "同步超时");
+        this.assertLightRefreshStillOn(conversationId);
+      }
+      const errorAfter = this.sync.getLastError();
+      if (errorAfter && errorAfter !== errorBefore) throw errorAfter;
+    }
+    assertLightRefreshStillOn(conversationId) {
+      if (this.disposed) throw abortError4();
+      if (this.sync.getActiveConversationId() !== conversationId) throw abortError4();
+      if (getConversationIdFromUrl() !== conversationId) throw abortError4();
+    }
+    requestHistoryRepair(snapshot) {
+      if (this.disposed || !snapshot) return;
+      let mode = null;
+      if (!snapshot.historyComplete) mode = "full";
+      else if (snapshot.lastHistoryError != null) mode = "daily";
+      if (!mode) return;
+      if (mode === "full") this.forceMode = "full";
+      else if (this.forceMode !== "full") this.forceMode = "daily";
+      this.transientRetries = 0;
+      this.scheduleSlice(0);
     }
     scheduleSlice(delayMs) {
       if (this.disposed || this.historyFlight || document.visibilityState === "hidden") return;
@@ -5994,6 +6052,11 @@ ${timestamp ? `${timestamp}
   var QUOTA_INDICATOR_DEBOUNCE_MS = 80;
   var QUOTA_POPOVER_HOST_ID = "chatgpt-yada-quota-popover-host";
   var UNKNOWN_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "…" };
+  var QUOTA_REFRESH_LABEL = "刷新当前额度";
+  var QUOTA_REFRESHING_LABEL = "正在刷新当前额度";
+  var QUOTA_REFRESHED_LIVE = "当前额度已刷新";
+  var QUOTA_REFRESH_ERROR = "刷新失败，继续显示上次数据";
+  var HEROICON_ARROW_PATH_D = "M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99";
   var ERROR_QUOTA_RINGS = { outer: 0, middle: 0, inner: 0, center: "!" };
   var POPOVER_WIDTH = 312;
   var VIEWPORT_GUTTER = 8;
@@ -6035,7 +6098,84 @@ ${timestamp ? `${timestamp}
     background: #2a2a2a;
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.46);
   }
-  [data-quota-popover] h2 { margin: 0 0 8px; font-size: 13px; font-weight: 700; }
+  [data-quota-header] {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 8px;
+  }
+  [data-quota-header] h2 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    min-width: 0;
+  }
+  [data-quota-refresh] {
+    appearance: none;
+    box-sizing: border-box;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--yada-muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    cursor: pointer;
+  }
+  [data-quota-refresh] svg {
+    display: block;
+    width: 16px;
+    height: 16px;
+  }
+  [data-quota-refresh]:hover:not(:disabled) {
+    background: rgba(32, 33, 35, 0.06);
+  }
+  [data-quota-refresh]:active:not(:disabled) {
+    background: rgba(32, 33, 35, 0.12);
+  }
+  :host([data-yada-theme="dark"]) [data-quota-refresh]:hover:not(:disabled) {
+    background: rgba(236, 236, 236, 0.08);
+  }
+  :host([data-yada-theme="dark"]) [data-quota-refresh]:active:not(:disabled) {
+    background: rgba(236, 236, 236, 0.16);
+  }
+  [data-quota-refresh]:focus-visible {
+    outline: 2px solid rgba(16, 163, 127, 0.72);
+    outline-offset: 1px;
+  }
+  [data-quota-refresh]:disabled {
+    cursor: default;
+  }
+  [data-quota-refresh][aria-busy="true"] svg {
+    animation: yada-quota-refresh-spin 1s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    [data-quota-refresh][aria-busy="true"] svg {
+      animation: none;
+      opacity: 0.55;
+    }
+  }
+  @keyframes yada-quota-refresh-spin {
+    to { transform: rotate(360deg); }
+  }
+  [data-quota-live] {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+  [data-quota-refresh-error] {
+    margin-top: 8px;
+    font-size: 11px;
+    color: var(--yada-muted);
+  }
   [data-quota-popover] [data-quota-bucket] { margin-top: 10px; }
   [data-quota-popover] [data-quota-row] {
     display: flex;
@@ -6066,6 +6206,7 @@ ${timestamp ? `${timestamp}
     constructor(button, options = {}) {
       this.button = button;
       this.send = options.send ?? ((message, timeoutMs) => sendRuntimeMessage(message, timeoutMs));
+      this.onRefresh = options.onRefresh ?? null;
       this.debounceMs = options.debounceMs ?? QUOTA_INDICATOR_DEBOUNCE_MS;
       this.canvas = button.querySelector("canvas") ?? button.appendChild(document.createElement("canvas"));
       this.canvas.setAttribute("aria-hidden", "true");
@@ -6083,14 +6224,21 @@ ${timestamp ? `${timestamp}
       void this.loadState();
     }
     send;
+    onRefresh;
     debounceMs;
     canvas;
     portalHost = null;
     popover = null;
+    refreshButton = null;
+    liveRegion = null;
     disposeTheme;
     disposed = false;
     generation = 0;
+    refreshGeneration = 0;
+    refreshUiGeneration = 0;
     refreshTimer = 0;
+    refreshPromise = null;
+    refreshFailed = false;
     status = "loading";
     snapshot = null;
     rings = UNKNOWN_QUOTA_RINGS;
@@ -6102,6 +6250,10 @@ ${timestamp ? `${timestamp}
     heatmapGeneration = 0;
     heatmapHourTimer = 0;
     close = () => {
+      this.refreshGeneration += 1;
+      this.refreshFailed = false;
+      this.setRefreshUi("idle");
+      this.setLiveMessage("");
       this.stopHeatmapLifecycle();
       if (this.popover) this.popover.hidden = true;
       this.button.setAttribute("aria-expanded", "false");
@@ -6114,13 +6266,17 @@ ${timestamp ? `${timestamp}
       this.generation += 1;
       window.clearTimeout(this.refreshTimer);
       this.refreshTimer = 0;
+      this.refreshPromise = null;
       this.disposeTheme();
       this.button.removeEventListener("click", this.onClick);
+      this.refreshButton?.removeEventListener("click", this.onRefreshClick);
       chrome.storage?.onChanged?.removeListener(this.onStorageChanged);
       document.removeEventListener("visibilitychange", this.onVisibility);
       this.portalHost?.remove();
       this.portalHost = null;
       this.popover = null;
+      this.refreshButton = null;
+      this.liveRegion = null;
     }
     onClick = (event) => {
       event.preventDefault();
@@ -6175,17 +6331,20 @@ ${timestamp ? `${timestamp}
         void this.loadState();
       }, this.debounceMs);
     }
-    async loadState() {
+    async loadState(options = {}) {
       const generation = ++this.generation;
       try {
         const response = await this.send({ type: "quota/get-state" });
-        if (this.disposed || generation !== this.generation) return;
+        if (this.disposed || generation !== this.generation) return false;
         if (response?.error) throw new Error(response.error);
         if (!response?.snapshot) throw new Error("无法读取额度账本");
         this.apply(response.snapshot, "ready");
+        return true;
       } catch {
-        if (this.disposed || generation !== this.generation) return;
+        if (this.disposed || generation !== this.generation) return false;
+        if (options.retainOnError && this.snapshot && this.status !== "error") return false;
         this.apply(null, "error");
+        return false;
       }
     }
     apply(snapshot, status) {
@@ -6265,15 +6424,15 @@ ${timestamp ? `${timestamp}
     renderPopover() {
       if (!this.popover) return;
       this.popover.replaceChildren();
-      const heading = document.createElement("h2");
-      heading.textContent = "Pro 模型额度";
-      this.popover.append(heading);
+      this.popover.append(this.headerRow());
       if (this.status === "error" || this.status === "ready" && !this.snapshot) {
         this.popover.append(note("无法读取额度账本", "quota-error"));
+        this.appendRefreshStatus();
         return;
       }
       if (!this.snapshot) {
         this.popover.append(note("正在读取额度", "quota-note"));
+        this.appendRefreshStatus();
         return;
       }
       const statusNote = historySyncLabel(this.snapshot);
@@ -6312,6 +6471,113 @@ ${timestamp ? `${timestamp}
       this.popover.append(note(this.snapshot.updatedLabel, "quota-note"));
       const workspace = workspaceStatusNote(this.snapshot);
       if (workspace) this.popover.append(note(workspace, "quota-warn"));
+      this.appendRefreshStatus();
+    }
+    headerRow() {
+      const row = document.createElement("div");
+      row.dataset.quotaHeader = "true";
+      const heading = document.createElement("h2");
+      heading.textContent = "Pro 模型额度";
+      row.append(heading, this.ensureRefreshButton());
+      return row;
+    }
+    ensureRefreshButton() {
+      if (this.refreshButton) {
+        this.setRefreshUi(this.isRefreshUiActive() ? "refreshing" : "idle");
+        return this.refreshButton;
+      }
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.quotaRefresh = "true";
+      button.append(createRefreshIcon());
+      button.addEventListener("click", this.onRefreshClick);
+      this.refreshButton = button;
+      this.setRefreshUi("idle");
+      return button;
+    }
+    appendRefreshStatus() {
+      if (!this.popover) return;
+      this.popover.append(this.ensureLiveRegion());
+      this.ensureRefreshError();
+    }
+    ensureRefreshError() {
+      if (!this.refreshFailed || !this.popover || this.popover.hidden) return;
+      if (this.popover.querySelector("[data-quota-refresh-error]")) return;
+      const error = document.createElement("p");
+      error.dataset.quotaRefreshError = "true";
+      error.textContent = QUOTA_REFRESH_ERROR;
+      this.popover.append(error);
+    }
+    ensureLiveRegion() {
+      if (this.liveRegion) return this.liveRegion;
+      const live = document.createElement("p");
+      live.dataset.quotaLive = "true";
+      live.setAttribute("aria-live", "polite");
+      this.liveRegion = live;
+      return live;
+    }
+    onRefreshClick = (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.startRefresh();
+    };
+    isRefreshUiActive() {
+      return this.refreshPromise != null && this.refreshUiGeneration === this.refreshGeneration && this.popover?.hidden === false;
+    }
+    startRefresh() {
+      if (this.refreshPromise && this.refreshUiGeneration === this.refreshGeneration) return this.refreshPromise;
+      const generation = this.refreshGeneration;
+      this.refreshUiGeneration = generation;
+      this.setRefreshUi("refreshing");
+      const work = this.runRefresh(generation);
+      const wrapped = work.finally(() => {
+        if (this.refreshPromise === wrapped) this.refreshPromise = null;
+      });
+      this.refreshPromise = wrapped;
+      return wrapped;
+    }
+    async runRefresh(generation) {
+      try {
+        const refresh = this.onRefresh;
+        if (!refresh) throw new Error("额度刷新暂不可用");
+        await refresh(this.snapshot);
+        if (this.disposed) return;
+        this.refreshFailed = false;
+        const loaded = await this.loadState({ retainOnError: true });
+        if (this.disposed || generation !== this.refreshGeneration) return;
+        if (!loaded) {
+          if (this.snapshot && this.status !== "error") {
+            this.refreshFailed = true;
+            this.ensureRefreshError();
+          }
+          return;
+        }
+        if (this.popover?.hidden === false) {
+          this.setLiveMessage("");
+          this.setLiveMessage(QUOTA_REFRESHED_LIVE);
+        }
+      } catch {
+        if (this.disposed || generation !== this.refreshGeneration) return;
+        this.refreshFailed = true;
+        this.ensureRefreshError();
+      } finally {
+        if (!this.disposed) this.setRefreshUi("idle");
+      }
+    }
+    setRefreshUi(state) {
+      const button = this.refreshButton;
+      if (!button) return;
+      const refreshing = state === "refreshing";
+      button.disabled = refreshing;
+      if (refreshing) button.setAttribute("aria-busy", "true");
+      else button.removeAttribute("aria-busy");
+      const label = refreshing ? QUOTA_REFRESHING_LABEL : QUOTA_REFRESH_LABEL;
+      button.title = label;
+      button.setAttribute("aria-label", label);
+    }
+    setLiveMessage(text) {
+      const live = this.ensureLiveRegion();
+      live.textContent = text;
     }
     refreshHeatmap() {
       window.clearTimeout(this.heatmapHourTimer);
@@ -6407,6 +6673,20 @@ ${timestamp ? `${timestamp}
     node.textContent = text;
     return node;
   }
+  function createRefreshIcon() {
+    const svg2 = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg2.setAttribute("viewBox", "0 0 24 24");
+    svg2.setAttribute("fill", "none");
+    svg2.setAttribute("stroke", "currentColor");
+    svg2.setAttribute("stroke-width", "1.5");
+    svg2.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("stroke-linecap", "round");
+    path.setAttribute("stroke-linejoin", "round");
+    path.setAttribute("d", HEROICON_ARROW_PATH_D);
+    svg2.append(path);
+    return svg2;
+  }
 
   // src/ui/toolbar.ts
   var YadaToolbar = class {
@@ -6462,11 +6742,11 @@ ${timestamp ? `${timestamp}
       window.addEventListener("resize", this.handleViewportChange, { passive: true });
       this.ensurePlacement();
     }
-    attachQuotaIndicator() {
+    attachQuotaIndicator(options = {}) {
       if (this.quota) return;
       const button = this.query("[data-quota]");
       if (!button) throw new Error("Quota button is missing");
-      this.quota = new QuotaIndicator(button);
+      this.quota = new QuotaIndicator(button, options);
     }
     showQuotaFault() {
       const button = this.query("[data-quota]");
@@ -6869,13 +7149,19 @@ ${timestamp ? `${timestamp}
     }
     ensureQuotaIndicator() {
       if (!this.toolbar || this.toolbar.hasQuotaIndicator()) return;
-      const started = startIsolated(() => this.toolbar?.attachQuotaIndicator());
+      const started = startIsolated(() => this.toolbar?.attachQuotaIndicator({
+        onRefresh: (snapshot) => this.refreshQuotaLight(snapshot)
+      }));
       if (started.error) {
         this.moduleErrors.set("quota-indicator", started.error);
         this.toolbar.showQuotaFault();
         return;
       }
       this.moduleErrors.delete("quota-indicator");
+    }
+    async refreshQuotaLight(snapshot) {
+      if (!this.quota) throw new Error("额度模块暂不可用");
+      await this.quota.refreshCurrentLight(snapshot);
     }
     ensureListeners() {
       if (!this.routeListening) {

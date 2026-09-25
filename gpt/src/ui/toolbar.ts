@@ -5,7 +5,7 @@ import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
 import { YADA_ACCENT, YADA_ACCENT_SOFT, YADA_TOOLBAR_HOST_ID } from "../styles";
 import { paintQuotaCanvas } from "../quota/iconRenderer";
-import { QuotaIndicator } from "./quotaIndicator";
+import { QuotaIndicator, type QuotaRefreshHandler, type QuotaStateSender } from "./quotaIndicator";
 import { detectYadaTheme, observeYadaTheme } from "./theme";
 
 type CopyState = "idle" | "pending" | "success" | "error" | "empty";
@@ -72,11 +72,11 @@ export class YadaToolbar {
     this.ensurePlacement();
   }
 
-  attachQuotaIndicator(): void {
+  attachQuotaIndicator(options: { send?: QuotaStateSender; onRefresh?: QuotaRefreshHandler } = {}): void {
     if (this.quota) return;
     const button = this.query<HTMLButtonElement>("[data-quota]");
     if (!button) throw new Error("Quota button is missing");
-    this.quota = new QuotaIndicator(button);
+    this.quota = new QuotaIndicator(button, options);
   }
 
   showQuotaFault(): void {
