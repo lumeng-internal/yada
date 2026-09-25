@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.1.4 - 2026-09-25
+
+- 三环额度详情标题右侧增加轻量刷新按钮：内联 Heroicons `arrow-path`，不安装图标运行时。
+- 有完整当前对话 snapshot 时先 Recent；无法安全合并时只做一次当前对话 Full fallback。没有 baseline 时直接 Full。非对话页只重读本地 Snapshot。
+- 等待当前账本写入后才返回成功；失败保留 last-good 数字和热力图。历史不完整或上次历史失败时只安排一个后台 idle slice，不阻塞按钮，也不修改 `lastHistorySuccessAt`。
+- Popup「立即刷新」仍走 `quota/refresh-current` 重型路径。
+- 测试包 `ChatGPT-Yada-v4.1.4-official-only-UNVERIFIED.zip`。MacBook 真机轻刷新验收仍为 PENDING。不执行 PR、CI、merge 或 Release。
+
 ## v4.1.3 - 2026-09-24
 
 - `requestRecent()` 在 ConversationSync 自己的 snapshot / activeTurns / quotaTurns 发布之后才 resolve；Recent 测试等待这个完成点，不再在 MutationObserver + fake timer 后立刻读取。

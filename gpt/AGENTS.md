@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.1.3**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
+Current version is **4.1.4**. Yada restores and preserves ChatGPT's native long-conversation Prompt Navigator by completing host history loading without moving the reader's position.
 
 The page toolbar contains only: Pro quota rings, Copy All, Prompt Library. There is no Yada rail, navigation preview, green mode dot, direct jump, official-button proxy, stable-slot jump, `?message=` preparation, official-nav hiding, or fallback navigator.
 
@@ -18,6 +18,7 @@ Runtime is subtractive: BOOT work may use CPU/network; STEADY must sleep; heavy 
 - `quota/vibebar/*`: authoritative quota parsing and allowance rules.
 - `QuotaTracker`: live ledger delta + last-known-good baseline. Automatic history maintenance is at most one bounded slice, not a 10-minute full scan; a trusted baseline waits 24 hours and then checks non-archived revisions only. Full repair (normal + archived) is for the first baseline, account change, schema damage, or manual refresh. A due timer waits until the work is due; an idle callback then takes one page-idle chance. Maintenance stays off while BootGate is still waiting for or running the first Full, or ConversationSync is reading. Web Locks keep a single tab in a slice; a busy lock retries after 60 seconds without dropping a manual full. Hidden cancels a slice that has not started.
 - `QuotaSnapshot`: the single source for Action rings, toolbar rings, inline details, and popup.
+- Inline quota refresh: the details heading hosts a 16px Heroicons `arrow-path` button. It calls `QuotaTracker.refreshCurrentLight()`, which prefers a current-conversation Recent read, does one Full fallback only when the snapshot is no longer usable, waits for ledger ingest, and may schedule one idle history-repair slice. It does not use Popup `quota/refresh-current`.
 - `quota/heatmap.ts` + `ui/quotaHeatmap.ts`: on-demand, ledger-only rolling-hour aggregation and direct SVG rendering. No heatmap work runs until quota details open; close removes the SVG, shared tooltip, delegated listeners, and hour-boundary timeout.
 
 ## Runtime rules for new work

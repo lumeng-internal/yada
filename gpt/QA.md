@@ -1,4 +1,4 @@
-# ChatGPT Yada 4.1.3 验收
+# ChatGPT Yada 4.1.4 验收
 
 ## 本轮工程门禁
 
@@ -25,7 +25,7 @@ MACBOOK_10_CHAT_NAV_ACCEPTANCE = PENDING
 
 固定 10 个长对话与多标签性能：
 
-1. 更新至 4.1.3。
+1. 更新至 4.1.4。
 2. 固定同一批 10 个真实长对话，每个只刷新一次；不要主动滚动。
 3. 逐个记录第一次刷新是否出现 Navigator、是否需要第二次刷新、最终是否失败，以及大致出现时间。
 4. 逐个记录是否出现由 Yada 引起的“页面没有响应”；目标为 0。
@@ -68,6 +68,8 @@ Navigator 平均出现时间：约 N 秒
 11. 确认没有 `0 / 1–2 / 3–5 / 6–10 / 11+`、少→多或其他图例。
 12. 关闭详情后 SVG、共享 Tooltip、热力图 listener 与整点 timer 全部清理；重新打开读取最新 Ledger。
 13. 详情保持打开跨过整点时只刷新一次；继续使用一次 Pro 后重新打开，格子数据应更新。
+14. 标题右侧有刷新按钮，不在工具栏三环旁边。点一次应旋转且不可连点；结束后数字和热力图仍正常。连续快按不应产生多次刷新。
+15. 历史仍失败时，「上次完整同步」不能被伪造成刚刚。关闭再打开，错误状态和动画不能残留。
 
 提示词：
 
@@ -80,7 +82,7 @@ Navigator 平均出现时间：约 N 秒
 
 1. 复制当前活动分支 Markdown 与真实时间戳仍正常。
 
-本轮只使用 `ChatGPT-Yada-v4.1.3-official-only-UNVERIFIED.zip`，不要生成正式 Release 包，不要 merge main。
+本轮只使用 `ChatGPT-Yada-v4.1.4-official-only-UNVERIFIED.zip`，不要生成正式 Release 包，不要 merge main。
 
 ```text
 MAC_MINI_ENGINEERING = COMPLETE
