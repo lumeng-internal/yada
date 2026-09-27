@@ -1,31 +1,39 @@
 # ChatGPT Yada
 
-ChatGPT Yada 4.1.4 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
+ChatGPT Yada **4.1.5** 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
 
-4.1.4 在 4.1.3 的运行时方向上，只给三环额度详情标题右侧增加一个轻量刷新按钮：优先读取当前对话最近部分，不能安全合并时才一次完整读取当前对话，并只在需要时安排后台历史修复 slice。
+当前正在使用的候选不是 `main`。本轮候选分支是 `work/gpt-yada-native-compat`，版本 **4.1.5**。`main` 仍可能停在更旧的提交；MacBook 不要“拉最新 main”来安装这一包。
+
+4.1.5 在 4.1.4 之上做兼容修复：统一 ChatGPT 页面识别；导航“正在等待”不再挡住额度历史维护；工具栏改为页面级独立宿主，用 Floating UI 跟随原生操作区。官方导航的自动恢复路径仍是现有 MAIN `num_turns` 提升 + 分页 sentinel；**真实 Edge 上“ChatGPT 自己加载历史 → 官方导航出现”尚未复验**。
 
 Yada 不再绘制右侧导航条，也没有导航预览、绿色模式点或代理跳转。页面工具栏只有：`Pro 额度三环 | 复制全部 | 提示词`。
 
 ## 功能
 
-- **官方导航恢复**：MAIN-world hook 只识别当前对话的历史 GET、提升合法 `num_turns` 并记录 request start/end/error；它不 clone、不读取、不解析 Response body。isolated 侧从 ConversationSync 获得 `expectedPrompts`，一次只临时暴露 ChatGPT 自己的 pagination sentinel；官方 Navigator 数量匹配且连续稳定两次后进入 ready 并休眠。Yada 不滚动、不 reload、不生成 fallback 导航。
+- **官方导航**：MAIN-world hook 只识别当前对话的历史 GET、提升合法 `num_turns` 并记录 request start/end/error；它不 clone、不读取、不解析 Response body。isolated 侧从 ConversationSync 获得 `expectedPrompts`，一次只临时暴露 ChatGPT 自己的 pagination sentinel。官方 Navigator **可用**、**完整**、Yada **正在准备** 是三件分开的事。数量匹配且连续稳定两次后进入 ready 并休眠。API 89 / 官方 88 记为 mismatch，不假报完整，也不无限重试。Yada 不滚动、不 reload、不把空的 `?message=` 当成自动恢复，不生成 fallback 导航。
+- **页面识别**：`pageFacts.ts` 同时适配旧 role 属性和新版 turn / search-unit 结构。角色标题只是线索；去重和完成判断使用消息容器稳定 ID。`overflow-anchor: none` 和负 `scrollTop` 不再一票否决阅读位置保护。
 - **阅读位置保护**：保存可见消息身份和 viewport offset；漂移超过 8px、用户操作、streaming、隐藏页面或布局变化都会立即停止本轮 hydration。
 - **复制全部**：导出当前活动分支 Markdown 和真实时间戳。
-- **提示词**：本地收藏、编辑、删除与复制；支持本地拖拽排序，顺序自动保存。新增放顶部，编辑不改变顺序。第一次点击「提示词」才创建面板。
-- **Pro 额度**：当前回答完成后本地记账。额度详情标题右侧可手动轻刷新当前对话数据；这不会重载 ChatGPT 页面，也不会把「上次完整同步」改成刚刚。已有可信基线时，自动核对不少于 24 小时一次，并且每次只跑一个有界 slice；首次、账号变化或手动刷新才做普通加归档的完整修复。后台刷新不会清空已有额度。沿用 Vibe Bar 规则与 `model_limits`，这是本地估算，不是 OpenAI 官方余额。
+- **提示词**：本地收藏、编辑、删除与复制；支持本地拖拽排序，顺序自动保存。新增放顶部，编辑不改变顺序。第一次点击「提示词」才创建面板。卡片本身不执行操作；复制、编辑、删除仍是纯 SVG 图标。
+- **Pro 额度**：当前回答完成后本地记账。额度详情标题右侧可手动轻刷新当前对话数据；这不会重载 ChatGPT 页面，也不会把「上次完整同步」改成刚刚。已有可信基线时，自动核对不少于 24 小时一次，并且每次只跑一个有界 slice；首次、账号变化或手动刷新才做普通加归档的完整修复。后台刷新不会清空已有额度。沿用 Vibe Bar 规则与 `model_limits`，这是本地估算，不是 OpenAI 官方余额。导航等待页面时不再占用重任务，也不再因此挡住到期维护。
 - **Pro 使用量滚动热力图**：只在用户打开三环详情时，Service Worker 从现有 `QuotaLedgerState.events` 按 allowance 在内存中聚合；页面只收到最多 216 个小时 cell。24 小时图从下一个完整小时开始，7 天图按 7 行 × 24 列连续排列；关闭详情即移除 SVG、共享 Tooltip、事件委托与整点 timer。
 - **同一份额度数据**：页面三环、浏览器 Action 图标和 popup 都读取同一个 `QuotaSnapshot`。热力图不保存第二份长期数据，不新增 ChatGPT 网络请求，也不返回原始事件。
+- **工具栏定位**：宿主挂在 `document.documentElement`，自有 Shadow DOM，不插入 ChatGPT Header。`@floating-ui/dom` 1.8.0 默认放在原生操作组左侧约 8px；越界时尝试下方靠右。与原生按钮或正文重叠则保持隐藏等待，不使用 `right:88px`。
 
-message / messageId 深链保持原样，Yada 不介入 hydration。普通网络、DOM 或 host pagination 暂时不可用时进入轻量 sleeping；同 conversation 的新请求、ConversationSync snapshot、重新可见或 route reset 会事件驱动恢复。只有明确深链、60 秒 active budget、20 个真实 older requests 或用户恢复预算耗尽才 stopped。官方 Navigator 按钮数必须与 `expectedPrompts > 0` 精确匹配才可 ready。
+message / messageId 深链保持原样，Yada 不介入 hydration。普通网络、DOM 或 host pagination 暂时不可用时进入轻量 sleeping；同 conversation 的新请求、ConversationSync snapshot、重新可见或 route reset 会事件驱动恢复。只有明确深链、60 秒 **实际执行** budget、20 个真实 older requests 或用户恢复预算耗尽才 stopped。官方 Navigator 按钮数必须与 `expectedPrompts > 0` 精确匹配才可报完整 ready。
 
 ## 安装测试包
 
 需要已登录 ChatGPT 的 Chrome 或 Edge。
 
-1. 加载 `gpt/dist_chrome`，或解压 `ChatGPT-Yada-v4.1.4-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
-2. 刷新 ChatGPT 标签页。
+**不要从 `main` 安装本轮候选。** 使用：
 
-该包是手工验收包，不是正式 Release。Mac mini 不执行产品测试；MacBook Edge 与真实 10～15 标签的验收状态见 `QA.md`。
+1. 分支 `work/gpt-yada-native-compat` 上的 `gpt/dist_chrome`，或
+2. 解压 `gpt/ChatGPT-Yada-v4.1.5-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
+
+保持现有扩展身份和加载目录，不要卸载换目录，也不要清空提示词和额度数据。
+
+该包是手工验收包，不是正式 Release。本轮未更新 MacBook 实际加载目录。真机验收状态见 `QA.md`。
 
 ## 隐私与边界
 
@@ -36,16 +44,17 @@ MAIN-world bridge 只传递 conversation id、generation、history/older 请求�
 ```bash
 npm ci
 npm test
+npm run verify:copy
 npm run build
 npm run verify:gate
 git diff --check
 npm run package
 ```
 
-旧测试包保留，新的 4.1.4 包不覆盖 4.0.3、4.0.4、4.1.0、4.1.1、4.1.2、4.1.3。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
+旧测试包保留，新的 4.1.5 包不覆盖 4.1.4 及更早版本。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
 
-不运行 Mac mini 浏览器验收、GitHub Actions、PR 或 Release。
+不运行 GitHub Actions、PR 或 Release。不把 Mac mini 的会议浏览器或模拟页面当成 Harson 的真实 Edge。
 
 ## 许可证
 
-`gpt/` 使用 AGPL-3.0-only。额度核心移植自 Vibe Bar；热力图窄范围移植并适配 Cal-Heatmap 与 `@uiw/react-heat-map` 的 MIT 源码，但未引入其 React、D3、Popper 或 dayjs 运行时。AI-MarkDone 的少量官方 Navigator DOM 识别结构按 MIT 合规复用。详见 `NOTICE.md` 与 `THIRD_PARTY_NOTICES.md`。
+`gpt/` 使用 AGPL-3.0-only。额度核心移植自 Vibe Bar；热力图窄范围移植并适配 Cal-Heatmap 与 `@uiw/react-heat-map` 的 MIT 源码，但未引入其 React、D3、Popper 或 dayjs 运行时。AI-MarkDone `8269364d7162712d1eb45a27937e00116f8e1ca7` 的消息身份 / 生成状态 / 官方导航结构按 MIT 合规复用。工具栏定位使用 `@floating-ui/dom` 1.8.0（MIT）。详见 `NOTICE.md` 与 `THIRD_PARTY_NOTICES.md`。

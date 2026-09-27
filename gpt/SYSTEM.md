@@ -1,16 +1,21 @@
 # ChatGPT Yada 系统
 
-版本：**4.1.4**。
+版本：**4.1.5**。候选分支 `work/gpt-yada-native-compat`，不是 `main`。
 
 ```text
 ChatGPT Host
+  ├─ pageFacts（唯一页面结构事实）
+  │    ├─ conversation id / generating / message identity
+  │    ├─ scroll container / reading-position screen offset
+  │    ├─ official navigator available + indexes
+  │    └─ native header action group
   ├─ Official Prompt Navigator
   │    ↑
   │    └─ Official Navigator Driver
   │         ├─ thin document_start MAIN request lifecycle hook
   │         ├─ route event + bounded prepare lease
   │         ├─ host pagination sentinel
-  │         └─ official DOM stable-match detector
+  │         └─ official DOM available vs complete vs preparing
   ├─ ConversationSync
   │    ├─ complete conversation single truth
   │    ├─ Navigator expectedPrompts
@@ -20,7 +25,7 @@ ChatGPT Host
   │    └─ last-good baseline + staged reconciliation cache
   │    └─ Web Locks 跨标签单飞 7 天校准
   │    └─ on-demand rolling heatmap aggregation
-  └─ Yada Toolbar
+  └─ Yada Toolbar（页面级独立宿主 + Floating UI）
        ├─ Pro quota rings
        ├─ 复制全部
        └─ 提示词
@@ -75,16 +80,18 @@ Yada 明确分成三个阶段。新工作必须进入其中一档，禁止把 BO
 
 ChatGPT 始终得到原始 Promise 和原始 Response。MAIN 不调用 `response.clone()`、不读取 `body`、不使用 `TextDecoder`、不 `JSON.parse` history response。它只在合法请求开始、结束或 reject 时，通过同源 `postMessage` 发送 conversationId、generation、revision、history/older 计数、in-flight、request kind、HTTP status、duration、time、轻量 error 与 `boosted`。没有 `captureActive`；同 route 的后续请求始终可成为恢复证据。
 
-isolated controller 从 `ConversationSync.activeTurns.length` 获得唯一 `expectedPrompts`。只有 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 且 `expectedPrompts > 0` 时才进入 PrepareSession。它发送 prepare handshake、4 秒 heartbeat，并每次只暴露唯一 pagination sentinel 一页；发现 host history request start 立即释放 sentinel，等待 request end、短暂 settle 后重新检查 official DOM。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式、发送 prepare=false 并停止当前尝试。共享上限为 60 秒 active、20 个真实 older requests、每页 12 秒、最多 3 次 interruption recovery。
+isolated controller 从 `ConversationSync.activeTurns.length` 获得唯一 `expectedPrompts`。官方导航 **available**、**completeness**（unknown / matching / mismatch）和 Yada **preparing** 分开记录。只有 visible、desktop hover、宽度至少 1024px、非 streaming、稳定 scroller 且 `expectedPrompts > 0` 时才进入 PrepareSession。waiting 只做会话区域上的轻量发现，不 armed 输入/resize 重监听，不占用 60 秒 active budget。`isMaintenanceBlocked()` 只在 `phase === "preparing"` 且存在 operation 时为真。
 
-Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts、branch、cursor、boundary 或 explicit root。完成合同只有：`expectedPrompts > 0`、official `found === expectedPrompts`、至少一个按钮真实可见、root/container connected，并在同 root/container 上间隔约 300ms 稳定两次。祖先 `hidden` / `display:none` / `visibility:hidden` / `opacity:0` 与无 client rect 的按钮不计 visible。
+PrepareSession 发送 prepare handshake、4 秒 heartbeat，并每次只暴露唯一 pagination sentinel 一页；发现 host history request start 立即释放 sentinel，等待 request end、短暂 settle 后重新检查 official DOM。漂移超过 8px、用户 wheel/touch/pointer/key、布局变化或 route/page 生命周期变化会释放临时样式、发送 prepare=false 并停止当前尝试。共享上限为 60 秒 **实际执行** active、20 个真实 older requests、每页 12 秒、最多 3 次 interruption recovery。不把 Yada 另下的完整 API 当成页面已使用历史；不自动 `?message=` 重载。
+
+Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts、branch、cursor、boundary 或 explicit root。完成合同只有：`expectedPrompts > 0`、official `found === expectedPrompts`、至少一个按钮真实可见、root/container connected，并在同 root/container 上间隔约 300ms 稳定两次。祖先 `hidden` / `display:none` / `visibility:hidden` / `opacity:0` 与无 client rect 的按钮不计 visible。数量连续或与 API 总数相等不能单独替代索引语义和所属会话验证。
 
 状态只有五类：
 
-- `waiting`：等待 ConversationSync snapshot、`expectedPrompts > 0` 或基础 DOM/layout；不运行 Sentinel。
+- `waiting`：等待 ConversationSync snapshot、`expectedPrompts > 0` 或基础 DOM/layout；不运行 Sentinel；不阻止额度维护。
 - `preparing`：PrepareSession 正在驱动 host-owned pagination；每个真实 older request 计一次 page progress。
-- `sleeping`：普通 HTTP/fetch transient、count mismatch、sentinel 12 秒无请求或暂时 layout/DOM 不可用。断开 MutationObserver、heartbeat、sentinel 与输入重 listener；没有固定 timer、轮询或 auto reload。同 conversation 新 transport lifecycle、ConversationSync snapshot、hidden → visible 或 route reset 才 wake。
-- `ready`：稳定匹配两次后断开所有 heavy work，只保留 route、轻量 message listener 和共享 ConversationSync 生命周期。
+- `sleeping`：普通 HTTP/fetch transient、count mismatch、sentinel 12 秒无请求或暂时 layout/DOM 不可用。断开 MutationObserver、heartbeat、sentinel 与输入重 listener；没有固定 timer、轮询或 auto reload。同 conversation 新 transport lifecycle、ConversationSync snapshot 变化、hidden → visible 或 route reset 才 wake。
+- `ready`：稳定匹配两次后断开所有 heavy work，只保留 route、轻量 message listener 和共享 ConversationSync 生命周期。ready 表示完整性通过；停止主动干预不等于完整。
 - `stopped`：仅用于明确不支持的 deep link、dispose、60 秒 active、20 older requests 或 3 次用户 interruption recovery 耗尽。
 
 不提供 fallback Navigator。普通官方 DOM 暂时缺失不是永久 terminal；它会在无进展后 sleeping，等待新证据。Hidden 页面释放当前 Sentinel 并 sleeping，因为 Sentinel 依赖阅读位置；重新 visible 可事件驱动恢复。
@@ -93,14 +100,16 @@ Navigator 不再构建 HistoryChain，也不拥有 messages、captured prompts�
 
 `ConversationSync` 是完整 current conversation 的唯一真相，同时服务 Navigator expectedPrompts、Copy All 与当前会话 quota turns。普通新回答走最近增量（`num_turns=16` 的一页，不翻旧页）；只有首次快照、复制全部、手动刷新、合并无法证明连续时才完整分页。同一时刻只有一个读取，多个 recent 合并，full 进行中覆盖 recent，recent 进行中最多追加一次 full。route 变化 abort 旧 generation，旧结果不发布。`requestRecent()` / `requestFull()` 的 Promise 在自己的 snapshot 已更新、`activeTurns` / `quotaTurns` 已合并并 `publish` 给 listener 之后才 resolve；不等 QuotaTracker 的网络附加工作。`publish` 立即更新 snapshot，listener 互相隔离，不等待对方的 Promise。完整请求的 timeout 覆盖 `fetch`、body 下载和 `response.json()`；外部 abort 在 body 阶段仍然有效。429 最多重试一次，5xx/timeout 不走 legacy endpoint，也不无限重试。
 
-页面打开顺序是：Toolbar Shell 立即可见，然后等待当前对话、当前 generation 的 initial history 传输完成和一次 idle，再做首次 Full；15 秒内没有可匹配的传输完成信号时只 fallback 一次。PerformanceResourceTiming 只用来证明对应当前 initial 请求的 body 已经结束；同一 Document 里旧 route / 旧 generation 的 resource 必须忽略，无法可靠匹配时不猜测。复制全部不等待这个 Boot Gate。`expectedPrompts <= 0` 时 Navigator 不挂 whole-document observer。虚拟列表重新挂载已知 assistant id 不发请求。
+页面打开顺序是：Toolbar Shell 立即作为页面级独立宿主出现，然后等待当前对话、当前 generation 的 initial history 传输完成和一次 idle，再做首次 Full；15 秒内没有可匹配的传输完成信号时只 fallback 一次。PerformanceResourceTiming 只用来证明对应当前 initial 请求的 body 已经结束；同一 Document 里旧 route / 旧 generation 的 resource 必须忽略，无法可靠匹配时不猜测。复制全部不等待这个 Boot Gate。`expectedPrompts <= 0` 时 Navigator 不挂会话观察。虚拟列表重新挂载已知 assistant id 不发请求。生成中到完成、真正新增回答才向 ConversationSync 申请更新。
 
-额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。MutationObserver 仍挂在 `document.documentElement`，但 callback 只调度 250ms debounce。hidden 页面不启动首次 Full；没有 baseline 时，回答完成仍允许一次 Full，避免后台回答漏记。
+额度算法只在 calculator / ledger / Vibe Bar parser 中执行；UI 只展示 `QuotaSnapshot`。ConversationSync 优先观察会话表面，根被替换时重新绑定；callback 只调度 250ms debounce。hidden 页面不启动首次 Full；没有 baseline 时，回答完成仍允许一次 Full，避免后台回答漏记。
+
+工具栏不进入 ChatGPT Header 子树。原生操作组由 pageFacts 识别：testid / header / banner 只是搜索入口，跳过 `span.contents` 和零尺寸包装，取得管理这组按钮的最小共同布局容器。`@floating-ui/dom` 1.8.0 以该容器为 reference，默认左侧 8px，空间不足时 `bottom-end`。最终候选必须通过与原生按钮、标题、视口和当前正文的占位检查；越界修正不得把工具栏推回分享按钮。没有可验证位置则 `data-layout=pending` 隐藏，不写错误坐标。`autoUpdate` 仅在工具栏可见且锚点有尺寸时运行，`animationFrame: false`。页面隐藏、锚点替换、dispose 时清理。提示词和额度弹窗继续使用独立宿主。
 
 `QuotaTracker` 维护一个到期 timer、一次 idle callback 和最多一个 history flight。账号/套餐内存缓存 30 分钟，model limits 内存缓存 10 分钟；这不是历史扫描周期。手动刷新 bypass 当前对话缓存。实时 quotaTurns 仍然每次回答完成后立即写 Ledger，不依赖七天历史。
 
 - 实时路径：Recent 或 Full → 当前聊天 quota turns → Ledger → Calculator → QuotaSnapshot。写入 live events 后才读取可选 model limits；limits 与上次指纹相同则不再写第二次。
-- 自动日常核对最短 24 小时，且只在可见、非 streaming、Navigator 不在 preparing/heavy、BootGate 不再等待或执行首次 Full、ConversationSync 没有正在读、没有刚发生的用户输入时启动。任务未到期时只用一个 due timer；到期后用 `requestIdleCallback` 等一次页面空闲（API 不存在时退回普通 `setTimeout`）。默认只扫非归档列表，沿用 per-conversation `updatedAt`；revision 未变不读详情。
+- 自动日常核对最短 24 小时，且只在可见、非 streaming、Navigator **没有正在执行的准备任务**、BootGate 不再等待或执行首次 Full、ConversationSync 没有正在读、没有刚发生的用户输入时启动。仅 waiting / sleeping 的导航不得挡住维护。任务未到期时只用一个 due timer；到期后用 `requestIdleCallback` 等一次页面空闲（API 不存在时退回普通 `setTimeout`）。默认只扫非归档列表，沿用 per-conversation `updatedAt`；revision 未变不读详情。
 - 首次没有 baseline、账号变化、账本或 cache 不兼容、用户手动刷新，才同时扫描普通和 archived。不每 24 小时强制扫 archived。
 - 一次调度机会只跑一个 slice。浏览器 detail budget 是 6。命中 budget 立即停止本 slice，保存已验证 cache，不把主动停止记成永久失败，也不在 1.5 秒后连跑 20 轮。
 - 不完整 slice 持久化 history cache 和很小的 maintenance 状态，不覆盖 `historyComplete`、`lastHistorySuccessAt` 或正式完整 events。完整范围成功后一次提交 events、cache 和 success 状态。

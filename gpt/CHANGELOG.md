@@ -1,5 +1,14 @@
 # Changelog
 
+## v4.1.5 - 2026-09-27
+
+- 统一 ChatGPT 页面识别到 `pageFacts.ts`：会话身份、生成状态、消息/滚动容器、官方导航、顶部原生操作组。旧 role 属性与新版 turn / search-unit 在这一处适配；H4 只作角色线索。
+- 导航 waiting 不再 `heavyArmed`、不再挡住额度历史维护。`isMaintenanceBlocked()` 只在实际 preparing 且存在 operation 时为真。61 秒的等待不再靠把 60 秒预算调大来掩盖。
+- 官方导航可用 / 完整 / Yada 正在准备分开表达。API 89 与官方 88 记 mismatch，不假报完整。官方导航存在而 API 计数失败时仍可使用原生导航。
+- 自动恢复仍只走 MAIN 合法 `num_turns` 提升和当前页 pagination sentinel。不把 Yada 自己的完整 API 下载当成页面已消费历史。不自动使用空 `?message=` 重载。**真实 Edge 上官方导航自动出现尚未复验。**
+- 工具栏改为 `document.documentElement` 独立宿主 + Shadow DOM，删除插入 Header 和 `right:88px` fallback。`@floating-ui/dom` 1.8.0 相对原生操作组左侧定位，重叠则 pending 隐藏。
+- 测试包 `ChatGPT-Yada-v4.1.5-official-only-UNVERIFIED.zip`，分支 `work/gpt-yada-native-compat`。MacBook 真机导航/几何验收 PENDING。不执行 PR、CI、merge 或 Release。
+
 ## v4.1.4 - 2026-09-25
 
 - 三环额度详情标题右侧增加轻量刷新按钮：内联 Heroicons `arrow-path`，不安装图标运行时。
