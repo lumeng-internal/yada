@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.1.5**. Candidate work lives on `work/gpt-yada-native-compat`, not `main`. `main` is not the in-use candidate.
+Current version is **4.1.6**. Candidate work lives on `work/gpt-yada-native-compat`, not `main`. `main` is not the in-use candidate.
 
 Yada is a single ChatGPT plugin. The right side uses only ChatGPT's official Prompt Navigator. Long conversations should cause that official navigator to appear and cover the history that should be shown; clicks keep official behavior. Do not restore a Yada rail, green mode dots, hover previews, proxy clicks, or a custom scroll engine.
 
@@ -150,3 +150,14 @@ Real layout, click occlusion, and official-navigator auto-restore require a brow
 - 本地固定验证：`npm test`、`npm run verify:copy`、`npm run build`、`npm run verify:gate`、`git diff --check`，之后 `npm run package`。
 - `HOSTED_CI = DISABLED_BY_OWNER_NO_QUOTA`，含义为 `NOT_USED_BY_POLICY`；不属于 PASS、FAILURE 或 Release Authority。本分支仅测试包交付，不执行 PR、merge、Release 或部署阶段。
 - 安装和验收必须写明候选分支、提交和 ZIP。不要只写“更新到最新版”，以免 MacBook 拉到旧 `main`。
+
+## MacBook 2026-09-27 4.1.6 closeout
+
+候选分支保持 `work/gpt-yada-native-compat`。本机 Edge 原位加载路径为 `/Users/harsonru/Documents/ChatGPT-Yada-v2.1.0`，扩展 ID 保持 `abdfkmhjbchcmblijimlonobmklkpkjg`。
+
+- 清理所有带 Yada 所有权标记的重复 Toolbar Host；无有效矩形时不启动 Floating UI 异步定位。隐藏页面解除定位观察，Header 替换后继续定位同一 Host。
+- 新版 Timeline：User bubble 向上取完整容器身份；角色属性只用于角色判断；已知 Timeline 为快速路径；通用祖先必须有实际滚动范围。负 scrollTop、column-reverse、overflow-anchor:none 均正常。
+- 官方导航稳定可用时休眠，89/88 保留 completeness=mismatch。只有真实历史请求启动/结束才唤醒失败准备；prepare ACK revision 不能自唤醒。
+- Floating UI 在 shell/app jsdom 单测中隔离。未修改 Vitest 超时或错误检查；真机几何不能由这组单测替代。
+- OFFICIAL_NAV_AUTO_RESTORE = BLOCKED：真实页面 initial num_turns=100 / HTTP 200 后无官方导航，旧 sentinel 为 0；新版历史加载绑定用户手势/边界或内容不足一屏的 ResizeObserver，没有安全的公开触发入口；单独测试空 message + 一次 reload 仍无导航。未接入自动 message fallback，不添加第四种导航系统。
+- main 只有核心真机合同全部通过才可普通快进推送。本轮导航阻塞，main 不变。CI、PR、Release 均不使用。真机记录见 QA.md。

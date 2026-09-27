@@ -101,6 +101,31 @@ describe("unified page facts", () => {
     expect(readingPositionDrift(position!)).toBe(12);
   });
 
+  it("uses live Timeline containers, role attributes and remount identity without body text", () => {
+    document.body.innerHTML = `<main><div data-app-action-timeline-scroll style="overflow-y:auto; flex-direction:column-reverse; overflow-anchor:none">
+      <div data-chatgpt-search-unit-key="unit:0:user" data-chatgpt-search-message-ids="u1"><div><div data-user-message-bubble></div></div></div>
+      <div data-chatgpt-search-unit-key="unit:2:assistant" data-chatgpt-search-message-ids="a1"><h4 data-conversation-role="assistant"></h4></div>
+    </div></main>`;
+    const scroller = document.querySelector<HTMLElement>("[data-app-action-timeline-scroll]")!;
+    Object.defineProperties(scroller, { clientHeight: { value: 600 }, scrollHeight: { value: 2400 }, scrollTop: { value: -12 } });
+    expect(conversationScroller()).toBe(scroller);
+    expect(collectPageMessages().map(({ id, role }) => ({ id, role }))).toEqual([{ id: "u1", role: "user" }, { id: "a1", role: "assistant" }]);
+    expect(collectCompletedAssistantIds()).toEqual(["a1"]);
+    const assistant = scroller.lastElementChild!;
+    const replacement = assistant.cloneNode(true);
+    assistant.replaceWith(replacement);
+    expect(collectCompletedAssistantIds()).toEqual(["a1"]);
+  });
+
+  it("ignores an overflow ancestor with no usable scroll range", () => {
+    document.body.innerHTML = `<main><div id="outer" style="overflow-y:auto"><div id="inner" style="overflow-y:auto"><div data-message-id="u1" data-message-author-role="user"></div></div></div></main>`;
+    const outer = document.getElementById("outer")!;
+    const inner = document.getElementById("inner")!;
+    Object.defineProperties(outer, { clientHeight: { value: 600 }, scrollHeight: { value: 2400 } });
+    Object.defineProperties(inner, { clientHeight: { value: 600 }, scrollHeight: { value: 600 } });
+    expect(conversationScroller()).toBe(outer);
+  });
+
   it("keeps the legacy official navigator contract", () => {
     const main = document.createElement("main");
     const root = document.createElement("div");

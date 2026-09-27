@@ -1,5 +1,13 @@
 # Changelog
 
+## v4.1.6 - 2026-09-27
+
+- MacBook 原位更新；清理全部带 Yada 所有权标记的旧 Host，保持独立 documentElement Host。
+- 根据本机 Timeline DOM 补齐 User / Assistant 角色属性与稳定容器身份，滚动祖先要求实际范围。
+- 稳定可用导航独立于完整性；prepare ACK 不再触发自身失败后的唤醒循环。
+- 零矩形不启动异步定位，隐藏解除定位观察，Header 替换后重定位。Floating UI 在 jsdom shell/app 单测隔离，不提高超时。
+- 原生自动恢复仍 BLOCKED：100-turn 初始 GET 与空 message 受控刷新均未产生官方导航；不接入未证实 fallback，不更新 main。
+
 ## v4.1.5 - 2026-09-27
 
 - 统一 ChatGPT 页面识别到 `pageFacts.ts`：会话身份、生成状态、消息/滚动容器、官方导航、顶部原生操作组。旧 role 属性与新版 turn / search-unit 在这一处适配；H4 只作角色线索。

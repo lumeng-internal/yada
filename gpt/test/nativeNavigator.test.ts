@@ -270,6 +270,41 @@ describe("official Navigator contract", () => {
     expect(officialNavigatorReadiness({ found: 88, visible: 88 }, 89, 2)).toBe("incomplete");
   });
 
+  it("parks a stable 89/88 navigator without claiming completeness or blocking maintenance", async () => {
+    vi.useFakeTimers();
+    officialNavigator(88);
+    const hydrator = new OfficialNavigatorHydrator(mockSync(89));
+    hydrator.mount();
+    const internals = hydrator as unknown as { state: ReturnType<typeof emptyTransportState>; connected: boolean; awaitingSnapshot: boolean; evaluate(): Promise<void>; phase: string; lightWatch: MutationObserver | null; heartbeat: number; timer: number };
+    internals.state = emptyTransportState("current", 1);
+    internals.connected = true;
+    internals.awaitingSnapshot = false;
+    await internals.evaluate();
+    await vi.advanceTimersByTimeAsync(350);
+    expect(internals.phase).toBe("ready");
+    expect(officialNavigatorStatus(readNativePrompts(), 89, 2).completeness).toBe("mismatch");
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
+    expect(internals.lightWatch).toBeNull();
+    expect(internals.heartbeat).toBe(0);
+    expect(internals.timer).toBe(0);
+    hydrator.dispose();
+  });
+
+  it("does not wake a failed prepare from its own handshake acknowledgement", () => {
+    const hydrator = new OfficialNavigatorHydrator(mockSync(2));
+    hydrator.mount();
+    const internals = hydrator as unknown as { state: ReturnType<typeof emptyTransportState>; context: string; sleep(reason: string): void; phase: string; heartbeat: number; timer: number };
+    internals.state = { ...emptyTransportState("current", 1), revision: 4, historyRequests: 1 };
+    internals.context = "current:1";
+    internals.sleep("sentinel-unavailable");
+    window.dispatchEvent(new MessageEvent("message", { data: { channel: NATIVE_NAV_CHANNEL, kind: "state", state: { ...internals.state, revision: 5, boosted: false } }, origin: location.origin, source: window }));
+    expect(internals.phase).toBe("sleeping");
+    expect(internals.heartbeat).toBe(0);
+    expect(internals.timer).toBe(0);
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
+    hydrator.dispose();
+  });
+
   it("keeps official navigation available when the API count is missing", () => {
     officialNavigator(8);
     expect(readNativePrompts()).toMatchObject({ found: 8, available: true });
@@ -309,6 +344,7 @@ describe("official Navigator contract", () => {
     const scroller = document.createElement("div");
     scroller.style.overflowY = "auto";
     Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 2400 });
     Object.defineProperty(scroller, "clientTop", { configurable: true, value: 0 });
     visibleBox(scroller, 0);
     const message = document.createElement("div");

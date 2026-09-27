@@ -3,6 +3,15 @@ import { ChatGptYadaApp } from "../src/content";
 import { YadaToolbar } from "../src/ui/toolbar";
 import { paintQuotaCanvas, renderQuotaIcon } from "../src/quota/iconRenderer";
 
+// Layout engines need a real browser. Keep shell/app lifecycle tests independent
+// of Floating UI's asynchronous jsdom layout pipeline; geometry is live-tested.
+vi.mock("@floating-ui/dom", () => ({ autoUpdate: vi.fn(() => vi.fn()) }));
+vi.mock("../src/ui/toolbarPlacement", async (original) => ({
+  ...await original<typeof import("../src/ui/toolbarPlacement")>(),
+  computeToolbarPosition: vi.fn(async () => null),
+  computeFallbackToolbarPosition: vi.fn(async () => null)
+}));
+
 describe("toolbar isolation", () => {
   afterEach(() => {
     document.body.innerHTML = "";
@@ -38,6 +47,23 @@ describe("toolbar isolation", () => {
     renderQuotaIcon(16, { outer: 1, middle: 1, inner: 1, center: null });
     expect(constructed).toBeGreaterThan(0);
     globalThis.OffscreenCanvas = Original;
+  });
+
+  it("cleans two pre-existing owned hosts and keeps one across recovery", () => {
+    for (let i = 0; i < 2; i++) {
+      const old = document.createElement("div");
+      old.id = "chatgpt-yada-toolbar-host";
+      old.dataset.yadaRoot = "true";
+      document.documentElement.append(old);
+    }
+    const toolbar = new YadaToolbar();
+    toolbar.mountShell();
+    toolbar.mountShell();
+    toolbar.ensurePlacement();
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    expect(document.querySelectorAll("#chatgpt-yada-toolbar-host")).toHaveLength(1);
+    toolbar.dispose();
+    expect(document.querySelectorAll("#chatgpt-yada-toolbar-host")).toHaveLength(0);
   });
 
   it("does not create a second host on remount and stays out of the header", () => {

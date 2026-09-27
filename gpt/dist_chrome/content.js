@@ -95,6 +95,9 @@
     "data-turn-key",
     "data-content-search-turn-key",
     "data-message-author-role",
+    "data-conversation-role",
+    "data-user-message-bubble",
+    "data-app-action-timeline-scroll",
     "data-turn",
     "data-is-streaming",
     "data-testid"
@@ -151,6 +154,7 @@
     const messages = [];
     const nodes = surface.querySelectorAll([
       "[data-message-id]",
+      "[data-user-message-bubble]",
       "[data-chatgpt-search-message-ids]",
       '[data-chatgpt-search-unit-key$=":assistant"]',
       '[data-chatgpt-search-unit-key$=":user"]',
@@ -191,6 +195,8 @@
   }
   function conversationScroller(root = document) {
     const surface = conversationSurface(root) ?? (root instanceof HTMLElement ? root : document.body);
+    const timeline = surface.querySelector("[data-app-action-timeline-scroll]");
+    if (timeline?.isConnected && timeline.scrollHeight > timeline.clientHeight) return timeline;
     const seed = collectPageMessages(surface)[0]?.element ?? surface.querySelector("[data-message-author-role], [data-chatgpt-search-unit-key], [data-turn], [data-message-id], article") ?? (surface instanceof HTMLElement ? surface : null);
     if (!seed) return document.scrollingElement;
     let ancestor = seed.parentElement;
@@ -198,7 +204,7 @@
       const style = getComputedStyle(ancestor);
       const overflowY = style.overflowY;
       const canScroll = overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay");
-      if (canScroll && (ancestor.clientHeight > 100 || ancestor.scrollHeight !== ancestor.clientHeight)) {
+      if (canScroll && ancestor.scrollHeight > ancestor.clientHeight) {
         return ancestor;
       }
       ancestor = ancestor.parentElement;
@@ -426,6 +432,10 @@
   function readMessageRole(element) {
     let node = element;
     for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+      if (node.hasAttribute("data-user-message-bubble")) return "user";
+      const marker = node.matches("[data-conversation-role]") ? node : node.querySelector("[data-conversation-role]");
+      const role = marker?.getAttribute("data-conversation-role");
+      if (role === "user" || role === "assistant") return role;
       const author = node.getAttribute("data-message-author-role");
       if (author === "user" || author === "assistant") return author;
       const turn = node.getAttribute("data-turn");
@@ -2258,9 +2268,6 @@ ${text}
       readiness: stableChecks >= 2 ? "ready" : "stabilizing"
     };
   }
-  function officialNavigatorReadiness(native, expectedPrompts, stableChecks) {
-    return officialNavigatorStatus(native, expectedPrompts, stableChecks).readiness;
-  }
   var OfficialNavigatorHydrator = class {
     constructor(sync) {
       this.sync = sync;
@@ -2352,7 +2359,7 @@ ${text}
         this.releaseTask("context");
         this.resetContext(incomingContext, incoming.olderRequests);
       }
-      const hasNewEvidence = incoming.revision > this.state.revision;
+      const hasNewEvidence = incoming.historyRequests > this.state.historyRequests || this.state.requestInFlight && !incoming.requestInFlight;
       this.state = incoming;
       this.connected = true;
       if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
@@ -2430,7 +2437,7 @@ ${text}
     }
     checkReady(native) {
       const status = officialNavigatorStatus(native, this.expectedPrompts, this.readyStableChecks);
-      if (status.readiness === "waiting" || status.readiness === "incomplete") {
+      if (!status.available || this.state.requestInFlight) {
         this.resetReadyStability();
         return false;
       }
@@ -2538,7 +2545,7 @@ ${text}
           const currentProblem = problem();
           if (currentProblem) return currentProblem;
           const native = readOfficialNavigator();
-          if (officialNavigatorReadiness(native, this.expectedPrompts, 0) === "stabilizing") {
+          if (officialNavigatorStatus(native, this.expectedPrompts, 0).available && !this.state.requestInFlight) {
             return { kind: "match" };
           }
           if (this.state.requestInFlight) {
@@ -8401,6 +8408,7 @@ ${timestamp ? `${timestamp}
     stopAutoUpdate = null;
     anchorSizeObserver = null;
     layoutToken = 0;
+    positionedReference = null;
     lastLeft = null;
     lastTop = null;
     visibilityListening = false;
@@ -8426,7 +8434,7 @@ ${timestamp ? `${timestamp}
     }
     mountShell() {
       if (this.host?.isConnected) return;
-      document.getElementById(YADA_TOOLBAR_HOST_ID)?.remove();
+      for (const old of document.querySelectorAll(`[id="${YADA_TOOLBAR_HOST_ID}"][data-yada-root]`)) old.remove();
       this.host = document.createElement("div");
       this.host.id = YADA_TOOLBAR_HOST_ID;
       this.host.dataset.yadaRoot = "true";
@@ -8692,17 +8700,26 @@ ${timestamp ? `${timestamp}
       this.placementObserver = null;
       this.observedTarget = target;
       this.observedParent = parent;
-      this.placementObserver = new MutationObserver(() => this.schedulePlacement());
+      this.placementObserver = new MutationObserver((records) => {
+        if (!target?.isConnected || records.some((record2) => target.contains(record2.target))) this.schedulePlacement();
+      });
       if (target) {
         this.placementObserver.observe(target, { childList: true, subtree: true });
         this.placementObserver.observe(parent, { childList: true });
+        const surface = conversationSurface();
+        if (surface) {
+          this.placementObserver.observe(surface, { childList: true, subtree: true });
+          if (surface.parentElement) this.placementObserver.observe(surface.parentElement, { childList: true });
+        }
         return;
       }
-      this.placementObserver.observe(document.body, { childList: true });
+      this.placementObserver.observe(conversationSurface() ?? document.body, { childList: true, subtree: true });
     }
     startPositioning(reference) {
       if (!this.host) return;
+      if (this.positionedReference === reference && (this.stopAutoUpdate || this.anchorSizeObserver)) return;
       this.stopPositioning();
+      this.positionedReference = reference;
       const token = ++this.layoutToken;
       const host = this.host;
       const update = () => {
@@ -8718,7 +8735,7 @@ ${timestamp ? `${timestamp}
         attachAutoUpdate();
         return;
       }
-      update();
+      this.host.dataset.layout = "pending";
       if (typeof ResizeObserver === "undefined") return;
       this.anchorSizeObserver = new ResizeObserver(() => {
         const next = reference.getBoundingClientRect();
@@ -8731,6 +8748,7 @@ ${timestamp ? `${timestamp}
     }
     stopPositioning() {
       this.layoutToken += 1;
+      this.positionedReference = null;
       this.stopAutoUpdate?.();
       this.stopAutoUpdate = null;
       this.anchorSizeObserver?.disconnect();
@@ -8739,7 +8757,7 @@ ${timestamp ? `${timestamp}
       this.lastTop = null;
     }
     async applyPosition(token, reference, host) {
-      if (token !== this.layoutToken || !reference.isConnected || host !== this.host) return;
+      if (token !== this.layoutToken || !reference.isConnected || !host.isConnected || host !== this.host) return;
       const group = findNativeActionGroup();
       if (!group || group.container !== reference) {
         this.schedulePlacement();
@@ -8782,6 +8800,11 @@ ${timestamp ? `${timestamp}
     onVisibility = () => {
       if (document.visibilityState !== "visible") {
         this.stopPositioning();
+        window.clearTimeout(this.placementTimer);
+        this.placementObserver?.disconnect();
+        this.placementObserver = null;
+        this.observedTarget = null;
+        this.observedParent = null;
         return;
       }
       this.ensurePlacement();

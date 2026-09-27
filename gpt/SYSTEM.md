@@ -1,6 +1,6 @@
 # ChatGPT Yada 系统
 
-版本：**4.1.5**。候选分支 `work/gpt-yada-native-compat`，不是 `main`。
+版本：**4.1.6**。候选分支 `work/gpt-yada-native-compat`，不是 `main`。
 
 ```text
 ChatGPT Host
@@ -132,3 +132,14 @@ PromptLibrary schema v2 使用 prompts 数组作为唯一排序。保留原 stor
 官方 SortableJS 1.15.6 默认 ESM 入口包含 AutoScroll。仅卡片 header 的 18px 六点 SVG grip 可拖动，150ms animation、轻微透明，list 是 scroll container；不加入 React/Vue wrapper 或自写 pointer/scroll 状态机。drag end 读取 DOM ids，立即保存数组顺序，失败回滚旧顺序并提示。rerender、编辑、close、dispose 均销毁实例。
 
 新增放顶部，编辑原位修改，删除保留其余顺序；复制不改变排序。不增加搜索、分类、云同步、导入导出或 composer 注入。第一次点击工具栏按钮才实例化 PromptPanel；打开时才安装 document listener，关闭后卸掉。
+
+## MacBook 2026-09-27 4.1.6 closeout
+
+候选分支保持 `work/gpt-yada-native-compat`。本机 Edge 原位加载路径为 `/Users/harsonru/Documents/ChatGPT-Yada-v2.1.0`，扩展 ID 保持 `abdfkmhjbchcmblijimlonobmklkpkjg`。
+
+- 清理所有带 Yada 所有权标记的重复 Toolbar Host；无有效矩形时不启动 Floating UI 异步定位。隐藏页面解除定位观察，Header 替换后继续定位同一 Host。
+- 新版 Timeline：User bubble 向上取完整容器身份；角色属性只用于角色判断；已知 Timeline 为快速路径；通用祖先必须有实际滚动范围。负 scrollTop、column-reverse、overflow-anchor:none 均正常。
+- 官方导航稳定可用时休眠，89/88 保留 completeness=mismatch。只有真实历史请求启动/结束才唤醒失败准备；prepare ACK revision 不能自唤醒。
+- Floating UI 在 shell/app jsdom 单测中隔离。未修改 Vitest 超时或错误检查；真机几何不能由这组单测替代。
+- OFFICIAL_NAV_AUTO_RESTORE = BLOCKED：真实页面 initial num_turns=100 / HTTP 200 后无官方导航，旧 sentinel 为 0；新版历史加载绑定用户手势/边界或内容不足一屏的 ResizeObserver，没有安全的公开触发入口；单独测试空 message + 一次 reload 仍无导航。未接入自动 message fallback，不添加第四种导航系统。
+- main 只有核心真机合同全部通过才可普通快进推送。本轮导航阻塞，main 不变。CI、PR、Release 均不使用。真机记录见 QA.md。

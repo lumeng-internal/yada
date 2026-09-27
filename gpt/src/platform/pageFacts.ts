@@ -60,6 +60,9 @@ export const PAGE_IDENTITY_ATTRIBUTES = [
   "data-turn-key",
   "data-content-search-turn-key",
   "data-message-author-role",
+  "data-conversation-role",
+  "data-user-message-bubble",
+  "data-app-action-timeline-scroll",
   "data-turn",
   "data-is-streaming",
   "data-testid"
@@ -122,6 +125,7 @@ export function collectPageMessages(root: ParentNode = document): PageMessage[] 
   const messages: PageMessage[] = [];
   const nodes = surface.querySelectorAll<HTMLElement>([
     "[data-message-id]",
+    "[data-user-message-bubble]",
     "[data-chatgpt-search-message-ids]",
     '[data-chatgpt-search-unit-key$=":assistant"]',
     '[data-chatgpt-search-unit-key$=":user"]',
@@ -166,6 +170,8 @@ export function collectCompletedAssistantIds(root: ParentNode = document): strin
 
 export function conversationScroller(root: ParentNode = document): HTMLElement | null {
   const surface = conversationSurface(root) ?? (root instanceof HTMLElement ? root : document.body);
+  const timeline = surface.querySelector<HTMLElement>("[data-app-action-timeline-scroll]");
+  if (timeline?.isConnected && timeline.scrollHeight > timeline.clientHeight) return timeline;
   const seed = collectPageMessages(surface)[0]?.element
     ?? surface.querySelector<HTMLElement>("[data-message-author-role], [data-chatgpt-search-unit-key], [data-turn], [data-message-id], article")
     ?? (surface instanceof HTMLElement ? surface : null);
@@ -175,7 +181,7 @@ export function conversationScroller(root: ParentNode = document): HTMLElement |
     const style = getComputedStyle(ancestor);
     const overflowY = style.overflowY;
     const canScroll = overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay");
-    if (canScroll && (ancestor.clientHeight > 100 || ancestor.scrollHeight !== ancestor.clientHeight)) {
+    if (canScroll && ancestor.scrollHeight > ancestor.clientHeight) {
       return ancestor;
     }
     ancestor = ancestor.parentElement;
@@ -446,6 +452,10 @@ function escapeAttributeValue(value: string): string {
 function readMessageRole(element: HTMLElement): MessageRole {
   let node: HTMLElement | null = element;
   for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+    if (node.hasAttribute("data-user-message-bubble")) return "user";
+    const marker = node.matches("[data-conversation-role]") ? node : node.querySelector("[data-conversation-role]");
+    const role = marker?.getAttribute("data-conversation-role");
+    if (role === "user" || role === "assistant") return role;
     const author = node.getAttribute("data-message-author-role");
     if (author === "user" || author === "assistant") return author;
     const turn = node.getAttribute("data-turn");

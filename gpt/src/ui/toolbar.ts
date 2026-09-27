@@ -30,6 +30,7 @@ export class YadaToolbar {
   private stopAutoUpdate: (() => void) | null = null;
   private anchorSizeObserver: ResizeObserver | null = null;
   private layoutToken = 0;
+  private positionedReference: HTMLElement | null = null;
   private lastLeft: number | null = null;
   private lastTop: number | null = null;
   private visibilityListening = false;
@@ -61,7 +62,7 @@ export class YadaToolbar {
 
   mountShell(): void {
     if (this.host?.isConnected) return;
-    document.getElementById(YADA_TOOLBAR_HOST_ID)?.remove();
+    for (const old of document.querySelectorAll(`[id="${YADA_TOOLBAR_HOST_ID}"][data-yada-root]`)) old.remove();
 
     this.host = document.createElement("div");
     this.host.id = YADA_TOOLBAR_HOST_ID;
@@ -347,18 +348,27 @@ export class YadaToolbar {
     this.placementObserver = null;
     this.observedTarget = target;
     this.observedParent = parent;
-    this.placementObserver = new MutationObserver(() => this.schedulePlacement());
+    this.placementObserver = new MutationObserver((records) => {
+      if (!target?.isConnected || records.some((record) => target.contains(record.target))) this.schedulePlacement();
+    });
     if (target) {
       this.placementObserver.observe(target, { childList: true, subtree: true });
       this.placementObserver.observe(parent, { childList: true });
+      const surface = conversationSurface();
+      if (surface) {
+        this.placementObserver.observe(surface, { childList: true, subtree: true });
+        if (surface.parentElement) this.placementObserver.observe(surface.parentElement, { childList: true });
+      }
       return;
     }
-    this.placementObserver.observe(document.body, { childList: true });
+    this.placementObserver.observe(conversationSurface() ?? document.body, { childList: true, subtree: true });
   }
 
   private startPositioning(reference: HTMLElement): void {
     if (!this.host) return;
+    if (this.positionedReference === reference && (this.stopAutoUpdate || this.anchorSizeObserver)) return;
     this.stopPositioning();
+    this.positionedReference = reference;
     const token = ++this.layoutToken;
     const host = this.host;
     const update = (): void => {
@@ -374,7 +384,9 @@ export class YadaToolbar {
       attachAutoUpdate();
       return;
     }
-    update();
+    // A zero-size reference is not a placement. In jsdom it also starts
+    // expensive unbounded async layout work that cannot finish before dispose.
+    this.host.dataset.layout = "pending";
     if (typeof ResizeObserver === "undefined") return;
     this.anchorSizeObserver = new ResizeObserver(() => {
       const next = reference.getBoundingClientRect();
@@ -388,6 +400,7 @@ export class YadaToolbar {
 
   private stopPositioning(): void {
     this.layoutToken += 1;
+    this.positionedReference = null;
     this.stopAutoUpdate?.();
     this.stopAutoUpdate = null;
     this.anchorSizeObserver?.disconnect();
@@ -397,7 +410,7 @@ export class YadaToolbar {
   }
 
   private async applyPosition(token: number, reference: HTMLElement, host: HTMLDivElement): Promise<void> {
-    if (token !== this.layoutToken || !reference.isConnected || host !== this.host) return;
+    if (token !== this.layoutToken || !reference.isConnected || !host.isConnected || host !== this.host) return;
     const group = findNativeActionGroup();
     if (!group || group.container !== reference) {
       this.schedulePlacement();
@@ -442,6 +455,11 @@ export class YadaToolbar {
   private readonly onVisibility = (): void => {
     if (document.visibilityState !== "visible") {
       this.stopPositioning();
+      window.clearTimeout(this.placementTimer);
+      this.placementObserver?.disconnect();
+      this.placementObserver = null;
+      this.observedTarget = null;
+      this.observedParent = null;
       return;
     }
     this.ensurePlacement();

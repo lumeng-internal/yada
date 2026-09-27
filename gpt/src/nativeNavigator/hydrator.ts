@@ -204,7 +204,10 @@ export class OfficialNavigatorHydrator {
       this.releaseTask("context");
       this.resetContext(incomingContext, incoming.olderRequests);
     }
-    const hasNewEvidence = incoming.revision > this.state.revision;
+    // Prepare acknowledgements also increment revision. Only host history progress
+    // may wake a parked attempt; otherwise stopPrepare wakes its own failure.
+    const hasNewEvidence = incoming.historyRequests > this.state.historyRequests
+      || (this.state.requestInFlight && !incoming.requestInFlight);
     this.state = incoming;
     this.connected = true;
     if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
@@ -288,7 +291,7 @@ export class OfficialNavigatorHydrator {
 
   private checkReady(native: NativePromptState): boolean {
     const status = officialNavigatorStatus(native, this.expectedPrompts, this.readyStableChecks);
-    if (status.readiness === "waiting" || status.readiness === "incomplete") {
+    if (!status.available || this.state.requestInFlight) {
       this.resetReadyStability();
       return false;
     }
@@ -406,7 +409,7 @@ export class OfficialNavigatorHydrator {
         const currentProblem = problem();
         if (currentProblem) return currentProblem;
         const native = readNativePrompts();
-        if (officialNavigatorReadiness(native, this.expectedPrompts, 0) === "stabilizing") {
+        if (officialNavigatorStatus(native, this.expectedPrompts, 0).available && !this.state.requestInFlight) {
           return { kind: "match" };
         }
 
