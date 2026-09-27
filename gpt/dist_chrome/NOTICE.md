@@ -65,13 +65,24 @@ React component、React DOM、Legend、month/week calendar navigation 与 `@uiw/
 
 本目录直接适配了 [zhaoliangbin42/AI-MarkDone](https://github.com/zhaoliangbin42/AI-MarkDone) 的极少量 MIT 结构。
 
-- 上游 Commit：`d6cc562931607f378c48023420f814de1f7c9d60`
+- 本轮实际读取的上游 Commit：`8269364d7162712d1eb45a27937e00116f8e1ca7`（AI-MarkDone 6.0.0 HEAD at the time of this work）
 - 原许可证：MIT
 - 原版权：zhaoliangbin42 / AI-MarkDone contributors
-- 本项目文件：`src/nativeNavigator/dom.ts`
-- 复用范围：ChatGPT 官方 Navigator root/fixed-child/button 识别结构，以及稳定 message identity 属性的选择顺序
+- 本项目文件：`src/platform/pageFacts.ts`（`src/nativeNavigator/dom.ts` 再导出）
+- 复用范围：新版消息稳定身份属性、生成中证据（stop-button / streaming 属性）、官方 Navigator 结构线索，以及角色标题不得单独充当身份
 
-未引入 Reader、书签、PDF/PNG、Drive、Annotation、其他平台、自绘 Directory Rail、React Fiber 或 private virtualizer。
+未引入 Reader、书签、PDF/PNG、Drive、Annotation、其他平台、自绘 Directory Rail、React Fiber、private virtualizer，也没有把用户点击的空 `?message=` 刷新做成 Yada 默认自动恢复。
+
+## Floating UI
+
+工具栏定位使用官方 npm 包 [@floating-ui/dom](https://github.com/floating-ui/floating-ui) **1.8.0**（依赖 `@floating-ui/core` 1.8.0、`@floating-ui/utils` 0.2.12）。
+
+- 原许可证：MIT
+- 原版权：Copyright (c) 2021-present Floating UI contributors
+- 使用范围：`computePosition`、`autoUpdate`、`offset` / `flip` / `shift`。`autoUpdate` 关闭 `animationFrame`。
+- 未引入：React/Vue 绑定、Floating UI React、WXT、自建通用几何引擎
+
+完整 MIT 文本见 `THIRD_PARTY_NOTICES.md`；package-lock.json 固定 tarball integrity。
 
 ## GPT Navigator Helper
 

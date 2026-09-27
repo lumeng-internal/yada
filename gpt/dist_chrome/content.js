@@ -1,5 +1,30 @@
 "use strict";
 (() => {
+  // src/platform/conversationUrl.ts
+  function conversationIdFromUrl(input) {
+    try {
+      const parts = new URL(input).pathname.split("/").filter(Boolean);
+      const marker = parts.findIndex((part) => part.toLowerCase() === "c");
+      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
+    } catch {
+      return null;
+    }
+  }
+  function isChatGptHostname(hostname) {
+    return hostname.trim().toLowerCase().replace(/\.$/, "") === "chatgpt.com";
+  }
+  function isChatGptPageUrl(url) {
+    try {
+      const parsed = new URL(url);
+      return (parsed.protocol === "https:" || parsed.protocol === "http:") && isChatGptHostname(parsed.hostname);
+    } catch {
+      return false;
+    }
+  }
+  function isChatGptConversationUrl(url) {
+    return isChatGptPageUrl(url) && conversationIdFromUrl(url) !== null;
+  }
+
   // src/nativeNavigator/protocol.ts
   var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
   var PREPARE_HEARTBEAT_MS = 4e3;
@@ -26,14 +51,8 @@
   function identifier(value) {
     return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
   }
-  function conversationIdFromUrl(input) {
-    try {
-      const parts = new URL(input).pathname.split("/").filter(Boolean);
-      const marker = parts.indexOf("c");
-      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
-    } catch {
-      return null;
-    }
+  function conversationIdFromUrl2(input) {
+    return conversationIdFromUrl(input);
   }
   function isMessageDeepLink(input = location.href) {
     try {
@@ -57,6 +76,427 @@
       if (!Number.isSafeInteger(number) || number < 0 || number > Number.MAX_SAFE_INTEGER) return false;
     }
     return candidate.olderRequests <= candidate.historyRequests;
+  }
+
+  // src/platform/pageFacts.ts
+  var CONVERSATION_SURFACE_SELECTOR = "main, [role='main']";
+  var GENERATION_STOP_SELECTOR = 'button[data-testid="stop-button"]';
+  var STREAMING_ATTR_SELECTOR = [
+    '[data-is-streaming="true"]',
+    '[data-message-author-role="assistant"].result-streaming',
+    '[data-stream-active="true"]'
+  ].join(", ");
+  var PAGE_IDENTITY_ATTRIBUTES = [
+    "data-message-id",
+    "data-chatgpt-search-message-ids",
+    "data-chatgpt-search-unit-key",
+    "data-turn-id",
+    "data-turn-id-container",
+    "data-turn-key",
+    "data-content-search-turn-key",
+    "data-message-author-role",
+    "data-turn",
+    "data-is-streaming",
+    "data-testid"
+  ];
+  var LEGACY_OFFICIAL_ROOT_SELECTOR = [
+    'main [class$="_convSearchResultHighlightRoot"]',
+    'main [class*="_convSearchResultHighlightRoot "]'
+  ].join(",");
+  var LEGACY_OFFICIAL_CONTAINER_TOKENS = ["fixed", "inset-e-4", "top-1/2", "z-20", "-translate-y-1/2"];
+  var SENTINEL_SELECTOR = '[data-testid="conversation-pagination-sentinel"]';
+  var HEADER_SEARCH_SELECTORS = [
+    '[data-testid="app-shell-header-context-menu-surface"]',
+    "#page-header",
+    "#conversation-header-actions",
+    '[data-testid="conversation-header-actions"]',
+    "header",
+    '[role="banner"]'
+  ];
+  var YADA_ROOT_SELECTOR = "[data-yada-root]";
+  var COMPOSER_SELECTOR = 'form, #prompt-textarea, [data-composer-markdown], [name="prompt-textarea"]';
+  var OVERLAY_SELECTOR = '[role="dialog"], [role="menu"], [data-radix-popper-content-wrapper]';
+  var INDEX_IDENTITY_ATTRIBUTES = [
+    "data-message-id",
+    "data-turn-id",
+    "data-turn-id-container",
+    "data-turn-key",
+    "data-content-search-turn-key"
+  ];
+  function conversationSurface(root = document) {
+    const scoped = root.querySelector(CONVERSATION_SURFACE_SELECTOR);
+    if (scoped) return scoped;
+    if (root instanceof HTMLElement && root.matches(CONVERSATION_SURFACE_SELECTOR)) return root;
+    return document.querySelector(CONVERSATION_SURFACE_SELECTOR);
+  }
+  function conversationDomId(root = document) {
+    return root.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
+  }
+  function readGenerationState(root = document) {
+    const scope = root instanceof Document ? root : root;
+    if (scope.querySelector(GENERATION_STOP_SELECTOR)) {
+      return { generating: true, evidence: "stop-button" };
+    }
+    if (scope.querySelector(STREAMING_ATTR_SELECTOR)) {
+      return { generating: true, evidence: "streaming-attr" };
+    }
+    return { generating: false, evidence: "none" };
+  }
+  function isGenerating(root = document) {
+    return readGenerationState(root).generating;
+  }
+  function collectPageMessages(root = document) {
+    const surface = conversationSurface(root) ?? root;
+    const seen = /* @__PURE__ */ new Set();
+    const messages = [];
+    const nodes = surface.querySelectorAll([
+      "[data-message-id]",
+      "[data-chatgpt-search-message-ids]",
+      '[data-chatgpt-search-unit-key$=":assistant"]',
+      '[data-chatgpt-search-unit-key$=":user"]',
+      '[data-message-author-role="assistant"]',
+      '[data-message-author-role="user"]',
+      'article[data-turn="assistant"]',
+      'article[data-turn="user"]',
+      'section[data-turn="assistant"]',
+      'section[data-turn="user"]',
+      "[data-turn-id]",
+      "[data-turn-id-container]"
+    ].join(","));
+    for (const node of nodes) {
+      if (node.closest(YADA_ROOT_SELECTOR)) continue;
+      if (shouldDeferToDescendantMessage(node)) continue;
+      const identity2 = stableMessageIdentity(node);
+      if (!identity2) continue;
+      if (seen.has(identity2.value)) continue;
+      const role = readMessageRole(node);
+      if (role === "unknown") continue;
+      seen.add(identity2.value);
+      messages.push({ id: identity2.value, role, element: node, identity: identity2 });
+    }
+    return messages;
+  }
+  function collectCompletedAssistantIds(root = document) {
+    const messages = collectPageMessages(root);
+    const generating = isGenerating(root);
+    const activeId = generating ? [...messages].reverse().find((message) => message.role === "assistant")?.id : null;
+    const ids = [];
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      if (isMessageStreaming(message.element)) continue;
+      if (activeId && message.id === activeId) continue;
+      ids.push(message.id);
+    }
+    return ids;
+  }
+  function conversationScroller(root = document) {
+    const surface = conversationSurface(root) ?? (root instanceof HTMLElement ? root : document.body);
+    const seed = collectPageMessages(surface)[0]?.element ?? surface.querySelector("[data-message-author-role], [data-chatgpt-search-unit-key], [data-turn], [data-message-id], article") ?? (surface instanceof HTMLElement ? surface : null);
+    if (!seed) return document.scrollingElement;
+    let ancestor = seed.parentElement;
+    while (ancestor) {
+      const style = getComputedStyle(ancestor);
+      const overflowY = style.overflowY;
+      const canScroll = overflowY.includes("auto") || overflowY.includes("scroll") || overflowY.includes("overlay");
+      if (canScroll && (ancestor.clientHeight > 100 || ancestor.scrollHeight !== ancestor.clientHeight)) {
+        return ancestor;
+      }
+      ancestor = ancestor.parentElement;
+    }
+    return document.scrollingElement;
+  }
+  function viewportTop(scroller) {
+    if (scroller === document.scrollingElement) return 0;
+    const rectangle = scroller.getBoundingClientRect();
+    return rectangle.top + scroller.clientTop;
+  }
+  function stableLayoutAvailable(root = document) {
+    const scroller = conversationScroller(root);
+    return Boolean(scroller?.isConnected) && !isGenerating(root);
+  }
+  function safeDesktopLayout(root = document) {
+    return document.visibilityState === "visible" && innerWidth >= 1024 && matchMedia("(hover: hover)").matches && stableLayoutAvailable(root);
+  }
+  function saveReadingPosition(root = document) {
+    const scroller = conversationScroller(root);
+    if (!scroller) return null;
+    const top = viewportTop(scroller);
+    const bottom = Math.min(innerHeight, top + scroller.clientHeight);
+    const onScreen = visibleConversationNodes(root).filter((node) => {
+      const rectangle = node.getBoundingClientRect();
+      return rectangle.bottom > top + 8 && rectangle.top < bottom - 8;
+    });
+    const anchor = onScreen.find((node) => node.getBoundingClientRect().top >= top) ?? onScreen[0];
+    if (!anchor) return null;
+    return {
+      identity: stableMessageIdentity(anchor),
+      element: anchor,
+      offset: anchor.getBoundingClientRect().top - top,
+      scroller
+    };
+  }
+  function readingPositionDrift(position, root = document) {
+    if (!position.scroller.isConnected || conversationScroller(root) !== position.scroller) return null;
+    let anchor = position.element.isConnected ? position.element : null;
+    if (position.identity) anchor = findStableMessage(position.identity, root);
+    if (!anchor) return null;
+    return anchor.getBoundingClientRect().top - viewportTop(position.scroller) - position.offset;
+  }
+  function readOfficialNavigator(root = document) {
+    const legacy = readLegacyOfficialNavigator(root);
+    if (legacy.available) return legacy;
+    return readIndexedOfficialNavigator(root);
+  }
+  function exposePaginationSentinel(scroller) {
+    const matches2 = [...scroller.querySelectorAll(SENTINEL_SELECTOR)];
+    if (matches2.length !== 1) return null;
+    const element = matches2[0];
+    const rectangle = element.getBoundingClientRect();
+    if (!element.isConnected || element.getClientRects().length === 0 || rectangle.height > 100) return null;
+    const ownedStyles = /* @__PURE__ */ new Map([
+      ["position", "sticky"],
+      ["top", "80px"],
+      ["opacity", "0"],
+      ["pointer-events", "none"]
+    ]);
+    const previous = /* @__PURE__ */ new Map();
+    for (const [property, value] of ownedStyles) {
+      previous.set(property, {
+        value: element.style.getPropertyValue(property),
+        priority: element.style.getPropertyPriority(property)
+      });
+      element.style.setProperty(property, value, "important");
+    }
+    let active = true;
+    return {
+      element,
+      release() {
+        if (!active) return;
+        active = false;
+        for (const [property, value] of ownedStyles) {
+          if (element.style.getPropertyValue(property) !== value || element.style.getPropertyPriority(property) !== "important") continue;
+          const original = previous.get(property);
+          if (original.value) element.style.setProperty(property, original.value, original.priority);
+          else element.style.removeProperty(property);
+        }
+      }
+    };
+  }
+  function findNativeActionGroup(root = document) {
+    const regions = [];
+    for (const selector of HEADER_SEARCH_SELECTORS) {
+      for (const node of root.querySelectorAll(selector)) {
+        if (node.closest(YADA_ROOT_SELECTOR) || node.closest(COMPOSER_SELECTOR)) continue;
+        if (!regions.includes(node)) regions.push(node);
+      }
+    }
+    for (const region of regions) {
+      const known = asKnownActionContainer(region);
+      if (known) return known;
+      const buttons = visibleHeaderButtons(region);
+      if (buttons.length === 0) continue;
+      const container = commonLayoutAncestor(buttons);
+      if (!container || container.closest(YADA_ROOT_SELECTOR) || container.closest(COMPOSER_SELECTOR)) continue;
+      return { container, buttons };
+    }
+    return null;
+  }
+  function nativeActionObstacles(group) {
+    const title = group.container.closest("header, [role='banner'], #page-header")?.querySelector("h1, h2, [data-testid='conversation-title'], [data-testid='conversation-turn-header']");
+    const obstacles = [...group.buttons];
+    if (title && !obstacles.includes(title)) obstacles.push(title);
+    return obstacles;
+  }
+  function stableMessageIdentity(element) {
+    let node = element;
+    for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+      const searchIds = node.getAttribute("data-chatgpt-search-message-ids")?.trim().split(/\s+/).filter(Boolean);
+      if (searchIds?.length && searchIds.every((id) => id === searchIds[0]) && searchIds[0].length <= 256) {
+        return { attribute: "data-chatgpt-search-message-ids", value: searchIds[0] };
+      }
+      for (const attribute of INDEX_IDENTITY_ATTRIBUTES) {
+        const value = node.getAttribute(attribute)?.trim();
+        if (value && value.length <= 256) return { attribute, value };
+      }
+      if (node.tagName === "ARTICLE" || node.tagName === "MAIN") break;
+    }
+    return null;
+  }
+  function readLegacyOfficialNavigator(root) {
+    const candidates = [...root.querySelectorAll(LEGACY_OFFICIAL_ROOT_SELECTOR)];
+    if (candidates.length !== 1) return emptyNativePromptState();
+    const container = [...candidates[0].children].find(
+      (child) => child instanceof HTMLElement && LEGACY_OFFICIAL_CONTAINER_TOKENS.every((token) => child.classList.contains(token)) && !child.closest(YADA_ROOT_SELECTOR)
+    );
+    if (!container || !layoutVisible(candidates[0], false) || !layoutVisible(container, true)) {
+      return emptyNativePromptState();
+    }
+    return navigatorFromButtons(container, candidates[0]);
+  }
+  function readIndexedOfficialNavigator(root) {
+    const buttons = [...root.querySelectorAll("button")].filter((button) => {
+      if (button.closest(YADA_ROOT_SELECTOR) || button.closest(OVERLAY_SELECTOR) || button.closest(COMPOSER_SELECTOR)) {
+        return false;
+      }
+      return readPromptIndex(button) !== null;
+    });
+    if (!buttons.length) return emptyNativePromptState();
+    const groups = /* @__PURE__ */ new Map();
+    for (const button of buttons) {
+      const container = indexedNavigatorContainer(button);
+      if (!container) continue;
+      const list = groups.get(container) ?? [];
+      list.push(button);
+      groups.set(container, list);
+    }
+    const matches2 = [];
+    for (const [container, group] of groups) {
+      if (!layoutVisible(container, true) || !isRightRail(container)) continue;
+      const state = navigatorFromButtons(container, container);
+      if (state.available && state.found === group.length) matches2.push(state);
+    }
+    return matches2.length === 1 ? matches2[0] : emptyNativePromptState();
+  }
+  function navigatorFromButtons(container, root) {
+    const buttons = [...container.querySelectorAll("button")].filter((button) => !button.closest(YADA_ROOT_SELECTOR));
+    const indexes = buttons.map(readPromptIndex);
+    if (!indexes.length || indexes.some((index2) => index2 === null)) return emptyNativePromptState();
+    const numeric = indexes;
+    if (new Set(numeric).size !== numeric.length) return emptyNativePromptState();
+    const first = Math.min(...numeric);
+    const ordered = [...numeric].map((index2) => index2 - (first === 1 ? 1 : 0)).sort((left, right) => left - right);
+    if (!ordered.every((index2, position) => index2 === position)) return emptyNativePromptState();
+    return {
+      found: buttons.length,
+      visible: buttons.filter((button) => layoutVisible(button, true)).length,
+      root,
+      container,
+      available: buttons.length > 0,
+      indexes: numeric
+    };
+  }
+  function indexedNavigatorContainer(button) {
+    let node = button.parentElement;
+    while (node && node !== document.body) {
+      const style = getComputedStyle(node);
+      if (style.position === "fixed" || style.position === "absolute" || style.position === "sticky") return node;
+      node = node.parentElement;
+    }
+    return button.parentElement;
+  }
+  function isRightRail(element) {
+    const rectangle = element.getBoundingClientRect();
+    if (rectangle.width <= 0 || rectangle.height <= 0) return false;
+    return rectangle.left > innerWidth * 0.55 && rectangle.right <= innerWidth + 1;
+  }
+  function readPromptIndex(button) {
+    const explicit = button.dataset.tocItemIndex;
+    if (explicit && /^\d+$/.test(explicit)) return Number(explicit);
+    for (const name of ["aria-label", "aria-description"]) {
+      const match = /^prompt\s+(\d+)(?:\b|:)/i.exec(button.getAttribute(name) ?? "");
+      if (match) return Number(match[1]);
+    }
+    return null;
+  }
+  function emptyNativePromptState() {
+    return { found: 0, visible: 0, root: null, container: null, available: false, indexes: [] };
+  }
+  function layoutVisible(element, requireRectangle) {
+    if (!element.isConnected || requireRectangle && element.getClientRects().length === 0) return false;
+    let ancestor = element;
+    while (ancestor) {
+      const style = getComputedStyle(ancestor);
+      if (ancestor.hidden || ancestor.getAttribute("aria-hidden") === "true" || style.visibility === "hidden" || style.display === "none" || style.opacity !== "" && Number(style.opacity) === 0) return false;
+      ancestor = ancestor.parentElement;
+    }
+    if (!requireRectangle) return true;
+    const rectangle = element.getBoundingClientRect();
+    return rectangle.width > 0 && rectangle.height > 0 && rectangle.right > 0 && rectangle.left < innerWidth && rectangle.bottom > 0 && rectangle.top < innerHeight;
+  }
+  function findStableMessage(identity2, root) {
+    const escaped = escapeAttributeValue(identity2.value);
+    const matches2 = identity2.attribute === "data-chatgpt-search-message-ids" ? [...root.querySelectorAll(`[data-chatgpt-search-message-ids]`)].filter((node) => node.getAttribute("data-chatgpt-search-message-ids")?.trim().split(/\s+/).includes(identity2.value)) : [...root.querySelectorAll(`[${identity2.attribute}="${escaped}"]`)];
+    if (matches2.length !== 1) return null;
+    return matches2[0];
+  }
+  function escapeAttributeValue(value) {
+    if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+    return value.replace(/\\/g, "\\\\").replace(/"/g, "\\");
+  }
+  function readMessageRole(element) {
+    let node = element;
+    for (let depth = 0; node && depth < 8; depth += 1, node = node.parentElement) {
+      const author = node.getAttribute("data-message-author-role");
+      if (author === "user" || author === "assistant") return author;
+      const turn = node.getAttribute("data-turn");
+      if (turn === "user" || turn === "assistant") return turn;
+      const unit = node.getAttribute("data-chatgpt-search-unit-key") ?? "";
+      if (unit.endsWith(":assistant")) return "assistant";
+      if (unit.endsWith(":user")) return "user";
+      if (node.tagName === "MAIN") break;
+    }
+    const heading = element.querySelector("h1, h2, h3, h4, h5")?.textContent?.trim() ?? "";
+    if (/^(chatgpt|assistant)$/i.test(heading)) return "assistant";
+    if (/^(you|你)$/i.test(heading)) return "user";
+    return "unknown";
+  }
+  function isMessageStreaming(element) {
+    return element.getAttribute("data-is-streaming") === "true" || element.classList.contains("result-streaming") || element.getAttribute("data-stream-active") === "true" || Boolean(element.closest(STREAMING_ATTR_SELECTOR));
+  }
+  function visibleConversationNodes(root) {
+    const identified = collectPageMessages(root).map((message) => message.element);
+    if (identified.length) return identified;
+    const surface = conversationSurface(root) ?? root;
+    return [...surface.querySelectorAll("[data-message-author-role], article[data-turn], [data-chatgpt-search-unit-key]")];
+  }
+  function shouldDeferToDescendantMessage(node) {
+    if (node.hasAttribute("data-message-id") || node.hasAttribute("data-chatgpt-search-message-ids")) return false;
+    return Boolean(node.querySelector("[data-message-id], [data-chatgpt-search-message-ids]"));
+  }
+  function asKnownActionContainer(region) {
+    const known = region.id === "conversation-header-actions" || region.getAttribute("data-testid") === "conversation-header-actions";
+    if (!known) return null;
+    const container = skipContents(region);
+    if (!container) return null;
+    return { container, buttons: visibleHeaderButtons(container) };
+  }
+  function visibleHeaderButtons(region) {
+    return [...region.querySelectorAll("button, [role='button']")].filter((element) => {
+      if (element.closest(YADA_ROOT_SELECTOR) || element.closest(COMPOSER_SELECTOR)) return false;
+      const rectangle = element.getBoundingClientRect();
+      if (rectangle.width === 0 && rectangle.height === 0) {
+        return region.id === "conversation-header-actions" || region.getAttribute("data-testid") === "conversation-header-actions" || region.id === "page-header";
+      }
+      return rectangle.width >= 8 && rectangle.height >= 8 && rectangle.top < 160;
+    });
+  }
+  function commonLayoutAncestor(elements) {
+    if (!elements.length) return null;
+    let ancestor = skipContents(elements[0].parentElement);
+    while (ancestor) {
+      if (elements.every((element) => ancestor.contains(element))) {
+        const rectangle = ancestor.getBoundingClientRect();
+        const known = ancestor.id === "conversation-header-actions" || ancestor.getAttribute("data-testid") === "conversation-header-actions";
+        if (known || rectangle.width > 0 && rectangle.height > 0 && !isContentsWrapper(ancestor)) {
+          return ancestor;
+        }
+      }
+      ancestor = skipContents(ancestor.parentElement);
+    }
+    return null;
+  }
+  function skipContents(element) {
+    let current = element;
+    while (current && isContentsWrapper(current)) current = current.parentElement;
+    return current;
+  }
+  function isContentsWrapper(element) {
+    if (element.tagName === "SPAN" && element.classList.contains("contents")) return true;
+    try {
+      return getComputedStyle(element).display === "contents";
+    } catch {
+      return false;
+    }
   }
 
   // src/core/bootGate.ts
@@ -199,7 +639,7 @@
     }
     canStart() {
       if (!this.conversationId || this.sync.getActiveConversationId() !== this.conversationId) return false;
-      if (document.visibilityState === "hidden" || isAssistantStreaming()) return false;
+      if (document.visibilityState === "hidden" || isGenerating()) return false;
       if (this.sync.hasUsableFullSnapshot(this.conversationId)) return false;
       return true;
     }
@@ -228,9 +668,6 @@
     } catch {
       return false;
     }
-  }
-  function isAssistantStreaming() {
-    return Boolean(document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming'));
   }
 
   // src/conversation/completeConversation.ts
@@ -475,22 +912,13 @@
 
   // src/platform/chatgptAdapter.ts
   function isChatGptPage(url = window.location.href) {
-    try {
-      return new URL(url).hostname === "chatgpt.com";
-    } catch {
-      return false;
-    }
+    return isChatGptPageUrl(url);
   }
   function getConversationIdFromUrl(url = window.location.href) {
-    try {
-      const parsed = new URL(url);
-      return parsed.pathname.match(/^\/c\/([a-z0-9-]+)/i)?.[1] ?? parsed.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i)?.[1] ?? document.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
-    } catch {
-      return url.match(/\/c\/([a-z0-9-]+)/i)?.[1] ?? document.querySelector("[data-conversation-id]")?.dataset.conversationId ?? null;
-    }
+    return conversationIdFromUrl(url) ?? conversationDomId();
   }
   function isChatGptConversationPage(url = window.location.href) {
-    return isChatGptPage(url) && getConversationIdFromUrl(url) !== null;
+    return isChatGptConversationUrl(url) || isChatGptPage(url) && getConversationIdFromUrl(url) !== null;
   }
 
   // src/conversation/fetchConversation.ts
@@ -1239,7 +1667,7 @@ ${text}
     };
     try {
       streamLoop: for (const archived of streams) {
-        let offset = 0;
+        let offset3 = 0;
         let reachedEnd = false;
         for (let page = 0; page < maxPages && !stopSlice; page++) {
           if (aborted()) throw abortError3();
@@ -1248,7 +1676,7 @@ ${text}
             stopSlice = true;
             break streamLoop;
           }
-          const path = `/backend-api/conversations?offset=${offset}&limit=${pageSize}&order=updated&is_archived=${archived}`;
+          const path = `/backend-api/conversations?offset=${offset3}&limit=${pageSize}&order=updated&is_archived=${archived}`;
           const data = await input.transport.request(path, input.signal);
           const root = asObject(data);
           const items = Array.isArray(root.items) ? root.items : null;
@@ -1300,7 +1728,7 @@ ${text}
               turns.push(...parsed.turns);
             }
           }
-          offset += items.length;
+          offset3 += items.length;
           if (!items.length || items.length < pageSize) reachedEnd = true;
           if (reachedEnd) break;
           if (seen.size === before) {
@@ -1452,16 +1880,16 @@ ${text}
     return null;
   }
   function tailAgrees(full, recent, fullIndex, recentIndex) {
-    let offset = 0;
-    while (fullIndex + offset < full.length && recentIndex + offset < recent.length) {
-      const fullId = full[fullIndex + offset]?.userMessageId;
-      const recentId = recent[recentIndex + offset]?.userMessageId;
+    let offset3 = 0;
+    while (fullIndex + offset3 < full.length && recentIndex + offset3 < recent.length) {
+      const fullId = full[fullIndex + offset3]?.userMessageId;
+      const recentId = recent[recentIndex + offset3]?.userMessageId;
       if (!fullId || !recentId) return false;
-      if (fullId !== recentId) return replacementAgrees(full, recent, fullIndex + offset, recentIndex + offset);
-      offset += 1;
+      if (fullId !== recentId) return replacementAgrees(full, recent, fullIndex + offset3, recentIndex + offset3);
+      offset3 += 1;
     }
-    if (recentIndex + offset >= recent.length && fullIndex + offset < full.length) return false;
-    return extensionIsNew(full, recent.slice(recentIndex + offset));
+    if (recentIndex + offset3 >= recent.length && fullIndex + offset3 < full.length) return false;
+    return extensionIsNew(full, recent.slice(recentIndex + offset3));
   }
   function replacementAgrees(full, recent, fullIndex, recentIndex) {
     const earlier = new Set(full.slice(0, fullIndex).map((turn) => turn.userMessageId));
@@ -1504,6 +1932,7 @@ ${text}
     fallbackIdle = 0;
     lastStreamingState = false;
     seenAssistantMessageIds = /* @__PURE__ */ new Set();
+    observerRootHint = null;
     disposed = false;
     published = 0;
     readFull;
@@ -1540,7 +1969,7 @@ ${text}
       this.abortController = null;
       this.activeConversationId = conversationId;
       this.seenAssistantMessageIds.clear();
-      this.lastStreamingState = false;
+      this.lastStreamingState = isGenerating();
       this.fullStale = false;
       this.latestSnapshot = null;
       this.lastError = null;
@@ -1571,21 +2000,9 @@ ${text}
         document.addEventListener("visibilitychange", this.onVisibility);
         this.visibilityListening = true;
       }
-      if (this.observer || typeof MutationObserver === "undefined") return;
-      this.observer = new MutationObserver((records) => {
-        for (const record2 of records) {
-          if (record2.attributeName === "data-is-streaming" && record2.target instanceof Element && record2.target.getAttribute("data-is-streaming") === "true") {
-            this.lastStreamingState = true;
-          }
-        }
-        this.scheduleSignalInspection();
-      });
-      this.observer.observe(root, {
-        subtree: true,
-        childList: true,
-        attributes: true,
-        attributeFilter: ["data-is-streaming", "data-message-id", "data-message-author-role"]
-      });
+      this.observerRootHint = root;
+      if (typeof MutationObserver === "undefined") return;
+      this.bindObserver();
     }
     dispose() {
       this.disposed = true;
@@ -1597,6 +2014,7 @@ ${text}
       this.desired = null;
       this.observer?.disconnect();
       this.observer = null;
+      this.observerRootHint = null;
       if (this.visibilityListening) {
         document.removeEventListener("visibilitychange", this.onVisibility);
         this.visibilityListening = false;
@@ -1686,7 +2104,7 @@ ${text}
     publish(snapshot) {
       this.latestSnapshot = snapshot;
       if (snapshot) {
-        for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+        for (const id of collectCompletedAssistantIds()) this.seenAssistantMessageIds.add(id);
         for (const turn of snapshot.activeTurns) {
           if (turn.assistantMessageId) this.seenAssistantMessageIds.add(turn.assistantMessageId);
         }
@@ -1727,22 +2145,56 @@ ${text}
       window.clearTimeout(this.signalTimer);
       this.signalTimer = 0;
     }
+    bindObserver() {
+      this.observer?.disconnect();
+      const hinted = this.observerRootHint;
+      const hintConnected = !(hinted instanceof Element) || hinted.isConnected;
+      const surface = conversationSurface(hintConnected && hinted ? hinted : document);
+      const target = (hintConnected ? hinted : null) ?? surface ?? document.documentElement;
+      this.observer = new MutationObserver((records) => {
+        if (target instanceof Element && !target.isConnected) {
+          this.bindObserver();
+          return;
+        }
+        for (const record2 of records) {
+          if (record2.attributeName === "data-is-streaming" && record2.target instanceof Element && record2.target.getAttribute("data-is-streaming") === "true") {
+            this.lastStreamingState = true;
+          }
+          if (record2.attributeName === "data-testid" && record2.target instanceof Element && record2.target.getAttribute("data-testid") === "stop-button") {
+            this.lastStreamingState = true;
+          }
+          for (const node of record2.addedNodes) {
+            if (!(node instanceof Element)) continue;
+            if (node.matches(GENERATION_STOP_SELECTOR) || node.querySelector(GENERATION_STOP_SELECTOR)) {
+              this.lastStreamingState = true;
+            }
+          }
+        }
+        this.scheduleSignalInspection();
+      });
+      this.observer.observe(target, {
+        subtree: true,
+        childList: true,
+        attributes: true,
+        attributeFilter: [...PAGE_IDENTITY_ATTRIBUTES]
+      });
+    }
     seedRenderedAssistants() {
-      for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+      for (const id of collectCompletedAssistantIds()) this.seenAssistantMessageIds.add(id);
     }
     inspectPageSignals() {
       if (this.disposed || !this.activeConversationId) return;
-      const streaming = isAssistantStreaming2();
+      const streaming = isGenerating();
       const wasStreaming = this.lastStreamingState;
       this.lastStreamingState = streaming;
       if (streaming) return;
       if (wasStreaming) {
-        for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+        for (const id of collectCompletedAssistantIds()) this.seenAssistantMessageIds.add(id);
         void this.request(this.liveMode());
         return;
       }
       let unseen = false;
-      for (const id of collectStableAssistantMessageIds()) {
+      for (const id of collectCompletedAssistantIds()) {
         if (this.seenAssistantMessageIds.has(id)) continue;
         this.seenAssistantMessageIds.add(id);
         unseen = true;
@@ -1756,7 +2208,7 @@ ${text}
         this.fallbackTimer = 0;
         this.fallbackIdle = 0;
         if (this.disposed || this.generation !== generation || !this.fullStale) return;
-        if (document.visibilityState === "hidden" || isAssistantStreaming2()) {
+        if (document.visibilityState === "hidden" || isGenerating()) {
           this.scheduleIdleFull();
           return;
         }
@@ -1779,182 +2231,6 @@ ${text}
       this.scheduleIdleFull();
     };
   };
-  function isAssistantStreaming2(root = document) {
-    return Boolean(
-      root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')
-    );
-  }
-  function collectStableAssistantMessageIds(root = document) {
-    const ids = [];
-    for (const node of root.querySelectorAll('[data-message-author-role="assistant"][data-message-id]')) {
-      if (node.getAttribute("data-is-streaming") === "true" || node.classList.contains("result-streaming")) continue;
-      const id = node.dataset.messageId;
-      if (id) ids.push(id);
-    }
-    return ids;
-  }
-
-  // src/nativeNavigator/dom.ts
-  var MESSAGE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"]';
-  var OFFICIAL_ROOT_SELECTOR = [
-    'main [class$="_convSearchResultHighlightRoot"]',
-    'main [class*="_convSearchResultHighlightRoot "]'
-  ].join(",");
-  var OFFICIAL_CONTAINER_TOKENS = ["fixed", "inset-e-4", "top-1/2", "z-20", "-translate-y-1/2"];
-  var SENTINEL_SELECTOR = '[data-testid="conversation-pagination-sentinel"]';
-  function conversationScroller() {
-    const surface = document.querySelector("main, [role=main]") ?? document;
-    const message = surface.querySelector(MESSAGE_SELECTOR);
-    if (!message) return null;
-    let ancestor = message.parentElement;
-    while (ancestor) {
-      const style = getComputedStyle(ancestor);
-      if (ancestor.clientHeight > 100 && ["auto", "scroll", "overlay"].some((value) => style.overflowY.includes(value))) {
-        return ancestor;
-      }
-      ancestor = ancestor.parentElement;
-    }
-    return document.scrollingElement;
-  }
-  function viewportTop(scroller) {
-    if (scroller === document.scrollingElement) return 0;
-    const rectangle = scroller.getBoundingClientRect();
-    return rectangle.top + scroller.clientTop;
-  }
-  function readNativePrompts(root = document) {
-    const candidates = [...root.querySelectorAll(OFFICIAL_ROOT_SELECTOR)];
-    if (candidates.length !== 1) return emptyNativePromptState();
-    const container = [...candidates[0].children].find(
-      (child) => child instanceof HTMLElement && OFFICIAL_CONTAINER_TOKENS.every((token) => child.classList.contains(token)) && !child.closest("[data-yada-root]")
-    );
-    if (!container || !layoutVisible(candidates[0], false) || !layoutVisible(container, true)) {
-      return emptyNativePromptState();
-    }
-    const buttons = [...container.querySelectorAll("button")];
-    const indexes = buttons.map(readPromptIndex);
-    if (!indexes.length || indexes.some((index2) => index2 === null)) return emptyNativePromptState();
-    const numeric = indexes;
-    if (new Set(numeric).size !== numeric.length) return emptyNativePromptState();
-    const first = Math.min(...numeric);
-    const ordered = [...numeric].map((index2) => index2 - (first === 1 ? 1 : 0)).sort((left, right) => left - right);
-    if (!ordered.every((index2, position) => index2 === position)) return emptyNativePromptState();
-    return {
-      found: buttons.length,
-      visible: buttons.filter((button) => layoutVisible(button, true)).length,
-      root: candidates[0],
-      container
-    };
-  }
-  function saveReadingPosition() {
-    const scroller = conversationScroller();
-    if (!scroller) return null;
-    const top = viewportTop(scroller);
-    const bottom = Math.min(innerHeight, top + scroller.clientHeight);
-    const onScreen = [...document.querySelectorAll(MESSAGE_SELECTOR)].filter((message) => {
-      const rectangle = message.getBoundingClientRect();
-      return rectangle.bottom > top + 8 && rectangle.top < bottom - 8;
-    });
-    const anchor = onScreen.find((message) => message.getBoundingClientRect().top >= top) ?? onScreen[0];
-    if (!anchor) return null;
-    return {
-      identity: stableMessageIdentity(anchor),
-      element: anchor,
-      offset: anchor.getBoundingClientRect().top - top,
-      scroller
-    };
-  }
-  function readingPositionDrift(position) {
-    if (!position.scroller.isConnected || conversationScroller() !== position.scroller) return null;
-    let anchor = position.element.isConnected ? position.element : null;
-    if (position.identity) anchor = findStableMessage(position.identity);
-    if (!anchor) return null;
-    return anchor.getBoundingClientRect().top - viewportTop(position.scroller) - position.offset;
-  }
-  function stableLayoutAvailable() {
-    const scroller = conversationScroller();
-    if (!scroller || getComputedStyle(scroller).overflowAnchor === "none") return false;
-    return !document.querySelector(
-      '[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming, button[data-testid="stop-button"], [data-stream-active="true"]'
-    );
-  }
-  function safeDesktopLayout() {
-    return document.visibilityState === "visible" && innerWidth >= 1024 && matchMedia("(hover: hover)").matches && stableLayoutAvailable();
-  }
-  function exposePaginationSentinel(scroller) {
-    const matches2 = [...scroller.querySelectorAll(SENTINEL_SELECTOR)];
-    if (matches2.length !== 1) return null;
-    const element = matches2[0];
-    const rectangle = element.getBoundingClientRect();
-    if (!element.isConnected || element.getClientRects().length === 0 || rectangle.height > 100) return null;
-    const ownedStyles = /* @__PURE__ */ new Map([
-      ["position", "sticky"],
-      ["top", "80px"],
-      ["opacity", "0"],
-      ["pointer-events", "none"]
-    ]);
-    const previous = /* @__PURE__ */ new Map();
-    for (const [property, value] of ownedStyles) {
-      previous.set(property, {
-        value: element.style.getPropertyValue(property),
-        priority: element.style.getPropertyPriority(property)
-      });
-      element.style.setProperty(property, value, "important");
-    }
-    let active = true;
-    return {
-      element,
-      release() {
-        if (!active) return;
-        active = false;
-        for (const [property, value] of ownedStyles) {
-          if (element.style.getPropertyValue(property) !== value || element.style.getPropertyPriority(property) !== "important") continue;
-          const original = previous.get(property);
-          if (original.value) element.style.setProperty(property, original.value, original.priority);
-          else element.style.removeProperty(property);
-        }
-      }
-    };
-  }
-  function readPromptIndex(button) {
-    const explicit = button.dataset.tocItemIndex;
-    if (explicit && /^\d+$/.test(explicit)) return Number(explicit);
-    for (const name of ["aria-label", "aria-description"]) {
-      const match = /^prompt\s+(\d+)(?:\b|:)/i.exec(button.getAttribute(name) ?? "");
-      if (match) return Number(match[1]);
-    }
-    return null;
-  }
-  function emptyNativePromptState() {
-    return { found: 0, visible: 0, root: null, container: null };
-  }
-  function layoutVisible(element, requireRectangle) {
-    if (!element.isConnected || requireRectangle && element.getClientRects().length === 0) return false;
-    let ancestor = element;
-    while (ancestor) {
-      const style = getComputedStyle(ancestor);
-      if (ancestor.hidden || ancestor.getAttribute("aria-hidden") === "true" || style.visibility === "hidden" || style.display === "none" || style.opacity !== "" && Number(style.opacity) === 0) return false;
-      ancestor = ancestor.parentElement;
-    }
-    if (!requireRectangle) return true;
-    const rectangle = element.getBoundingClientRect();
-    return rectangle.width > 0 && rectangle.height > 0 && rectangle.right > 0 && rectangle.left < innerWidth && rectangle.bottom > 0 && rectangle.top < innerHeight;
-  }
-  function stableMessageIdentity(element) {
-    let node = element;
-    for (let depth = 0; node && depth < 7; depth += 1, node = node.parentElement) {
-      for (const attribute of ["data-message-id", "data-turn-id", "data-turn-id-container"]) {
-        const value = node.getAttribute(attribute);
-        if (value && value.length <= 256) return { attribute, value };
-      }
-      if (node.tagName === "ARTICLE") break;
-    }
-    return null;
-  }
-  function findStableMessage(identity2) {
-    const matches2 = [...document.querySelectorAll(`[${identity2.attribute}="${CSS.escape(identity2.value)}"]`)];
-    if (matches2.length !== 1) return null;
-    return matches2[0].matches(MESSAGE_SELECTOR) ? matches2[0] : matches2[0].querySelector(MESSAGE_SELECTOR);
-  }
 
   // src/nativeNavigator/hydrator.ts
   var ACTIVE_LIMIT_MS = 6e4;
@@ -1964,16 +2240,32 @@ ${text}
   var RECOVERY_IDLE_MS = 2500;
   var MAX_RECOVERIES = 3;
   var DEBUG_KEY = "chatgpt-yada:native-nav-debug";
+  function officialNavigatorStatus(native, expectedPrompts, stableChecks) {
+    const available = native.found > 0 && native.visible > 0;
+    if (expectedPrompts <= 0) {
+      return { available, completeness: "unknown", readiness: "waiting" };
+    }
+    if (!available || native.found !== expectedPrompts) {
+      return {
+        available,
+        completeness: available ? "mismatch" : "unknown",
+        readiness: "incomplete"
+      };
+    }
+    return {
+      available,
+      completeness: "matching",
+      readiness: stableChecks >= 2 ? "ready" : "stabilizing"
+    };
+  }
   function officialNavigatorReadiness(native, expectedPrompts, stableChecks) {
-    if (expectedPrompts <= 0) return "waiting";
-    if (native.found !== expectedPrompts || native.visible <= 0) return "incomplete";
-    return stableChecks >= 2 ? "ready" : "stabilizing";
+    return officialNavigatorStatus(native, expectedPrompts, stableChecks).readiness;
   }
   var OfficialNavigatorHydrator = class {
     constructor(sync) {
       this.sync = sync;
     }
-    state = emptyTransportState(conversationIdFromUrl(location.href));
+    state = emptyTransportState(conversationIdFromUrl2(location.href));
     expectedPrompts = 0;
     connected = false;
     context = "";
@@ -1993,7 +2285,8 @@ ${text}
     heartbeat = 0;
     operation = null;
     timer = 0;
-    mutations = null;
+    lightWatch = null;
+    lightRoot = null;
     unsubscribe = null;
     disposed = false;
     heavyArmed = false;
@@ -2008,9 +2301,8 @@ ${text}
           return;
         }
         if (snapshot) this.awaitingSnapshot = false;
-        if (this.phase === "sleeping" || this.phase === "ready" && changed) this.wake("snapshot");
-        else if (this.phase !== "ready") this.maybeArmHeavyWork();
-        if (this.heavyArmed && this.phase !== "ready") this.schedule();
+        if ((this.phase === "sleeping" || this.phase === "ready") && changed) this.wake("snapshot");
+        else if (this.phase === "waiting") this.schedule();
         this.publishDiagnostics();
       });
       addEventListener("message", this.onMessage);
@@ -2018,22 +2310,21 @@ ${text}
       this.requestState();
     }
     resetRoute() {
-      this.cancel("route");
-      const current = conversationIdFromUrl(location.href);
+      this.releaseTask("route");
+      const current = conversationIdFromUrl2(location.href);
       this.state = emptyTransportState(current, this.state.generation);
       this.connected = false;
       this.expectedPrompts = this.sync.getSnapshot()?.conversationId === current ? this.sync.getSnapshot().activeTurns.length : 0;
       this.resetContext("");
       this.awaitingSnapshot = true;
-      this.parkHeavyWork();
       this.setPhase("waiting");
       this.requestState();
     }
     isMaintenanceBlocked() {
-      return this.phase === "preparing" || this.heavyArmed;
+      return this.phase === "preparing" && this.operation != null;
     }
     isHeavyWorkArmed() {
-      return this.heavyArmed && this.mutations != null;
+      return this.heavyArmed;
     }
     isParked() {
       return !this.heavyArmed && (this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped");
@@ -2041,10 +2332,7 @@ ${text}
     dispose() {
       if (this.disposed) return;
       this.disposed = true;
-      this.cancel("dispose");
-      clearTimeout(this.timer);
-      this.timer = 0;
-      this.parkHeavyWork();
+      this.releaseTask("dispose");
       this.unsubscribe?.();
       this.unsubscribe = null;
       removeEventListener("message", this.onMessage);
@@ -2056,20 +2344,19 @@ ${text}
       const message = record(event.data);
       if (message?.channel !== NATIVE_NAV_CHANNEL || message.kind !== "state" || !isNativeTransportState(message.state)) return;
       const incoming = message.state;
-      if (incoming.conversationId !== conversationIdFromUrl(location.href)) return;
+      if (incoming.conversationId !== conversationIdFromUrl2(location.href)) return;
       if (incoming.generation < this.state.generation) return;
       if (incoming.generation === this.state.generation && incoming.revision < this.state.revision) return;
       const incomingContext = `${incoming.conversationId ?? ""}:${incoming.generation}`;
       if (incomingContext !== this.context) {
-        this.cancel("context");
+        this.releaseTask("context");
         this.resetContext(incomingContext, incoming.olderRequests);
       }
       const hasNewEvidence = incoming.revision > this.state.revision;
       this.state = incoming;
       this.connected = true;
-      this.maybeArmHeavyWork();
       if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
-      else if (this.heavyArmed && this.phase !== "ready" && this.phase !== "stopped") this.schedule();
+      else if (this.phase === "waiting") this.schedule();
       this.publishDiagnostics();
     };
     onUserInput = () => {
@@ -2084,6 +2371,7 @@ ${text}
     onVisibility = () => {
       if (document.visibilityState === "visible") {
         if (this.phase === "sleeping") this.wake("visible");
+        else if (this.phase === "waiting") this.schedule();
         return;
       }
       if (this.phase === "ready" || this.phase === "stopped") return;
@@ -2100,13 +2388,19 @@ ${text}
     }
     async evaluate() {
       if (this.disposed || this.operation || this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped") return;
-      const native = readNativePrompts();
-      if (this.awaitingSnapshot || !this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
+      const native = readOfficialNavigator();
+      if (this.awaitingSnapshot || !this.connected || !this.state.conversationId) {
         this.resetReadyStability();
+        this.releaseIdle("waiting-context");
         this.setPhase("waiting");
         return;
       }
-      this.maybeArmHeavyWork();
+      if (this.expectedPrompts <= 0) {
+        this.resetReadyStability();
+        this.releaseIdle("waiting-expected");
+        this.setPhase("waiting");
+        return;
+      }
       if (isMessageDeepLink()) {
         this.stop("deep-link");
         return;
@@ -2121,11 +2415,13 @@ ${text}
         return;
       }
       if (!safeDesktopLayout()) {
+        this.armLightWatch();
         this.setPhase("waiting");
         return;
       }
       const idleFor = performance.now() - this.lastUserInput;
       if (idleFor < RECOVERY_IDLE_MS) {
+        this.armLightWatch();
         this.setPhase("waiting");
         this.schedule(RECOVERY_IDLE_MS - idleFor);
         return;
@@ -2133,8 +2429,8 @@ ${text}
       await this.launchAttempt();
     }
     checkReady(native) {
-      const readiness = officialNavigatorReadiness(native, this.expectedPrompts, this.readyStableChecks);
-      if (readiness === "waiting" || readiness === "incomplete") {
+      const status = officialNavigatorStatus(native, this.expectedPrompts, this.readyStableChecks);
+      if (status.readiness === "waiting" || status.readiness === "incomplete") {
         this.resetReadyStability();
         return false;
       }
@@ -2146,6 +2442,7 @@ ${text}
         this.stableFound = native.found;
         this.readyStableChecks = 1;
         this.stableCheckedAt = now;
+        this.releaseIdle("stabilizing");
         this.setPhase("waiting");
         this.schedule(READY_STABILITY_MS);
         return true;
@@ -2153,13 +2450,14 @@ ${text}
       if (this.readyStableChecks < 2) {
         const remaining = READY_STABILITY_MS - (now - this.stableCheckedAt);
         if (remaining > 0) {
+          this.releaseIdle("stabilizing");
           this.setPhase("waiting");
           this.schedule(remaining);
           return true;
         }
         this.readyStableChecks = 2;
       }
-      this.parkHeavyWork();
+      this.releaseTask("ready");
       this.setPhase("ready");
       return true;
     }
@@ -2168,6 +2466,7 @@ ${text}
       const attemptContext = this.context;
       const started = performance.now();
       this.operation = controller;
+      this.armHeavyWork();
       this.setPhase("preparing");
       let outcome;
       try {
@@ -2179,6 +2478,7 @@ ${text}
         outcome = reason === "user" || reason === "hidden" || reason === "layout" ? { kind: "interrupted", reason } : { kind: "changed" };
       } finally {
         this.stopPrepare();
+        this.parkHeavyWork();
         this.activeMs += Math.max(0, performance.now() - started);
         if (this.operation === controller) this.operation = null;
       }
@@ -2200,6 +2500,7 @@ ${text}
         }
         this.recoveries += 1;
         this.setPhase("waiting");
+        this.armLightWatch();
         this.schedule(RECOVERY_IDLE_MS);
         return;
       }
@@ -2225,7 +2526,7 @@ ${text}
       signal.addEventListener("abort", release, { once: true });
       const problem = () => {
         if (signal.aborted) throw signal.reason;
-        if (context !== this.context || this.state.conversationId !== conversationIdFromUrl(location.href)) return { kind: "changed" };
+        if (context !== this.context || this.state.conversationId !== conversationIdFromUrl2(location.href)) return { kind: "changed" };
         const layoutProblem = watch.problem();
         if (layoutProblem) return { kind: "sleep", reason: layoutProblem };
         if (document.visibilityState !== "visible") return { kind: "interrupted", reason: "hidden" };
@@ -2236,7 +2537,7 @@ ${text}
         for (; ; ) {
           const currentProblem = problem();
           if (currentProblem) return currentProblem;
-          const native = readNativePrompts();
+          const native = readOfficialNavigator();
           if (officialNavigatorReadiness(native, this.expectedPrompts, 0) === "stabilizing") {
             return { kind: "match" };
           }
@@ -2324,7 +2625,7 @@ ${text}
     sleep(reason) {
       if (this.phase === "ready" || this.phase === "stopped") return;
       this.sleepReason = reason;
-      this.parkHeavyWork();
+      this.releaseTask("sleep");
       this.setPhase("sleeping");
     }
     wake(_reason) {
@@ -2332,41 +2633,63 @@ ${text}
       this.sleepReason = null;
       this.resetReadyStability();
       this.setPhase("waiting");
-      this.maybeArmHeavyWork();
-      if (this.heavyArmed) this.schedule(0);
+      this.armLightWatch();
+      this.schedule(0);
     }
     stop(reason) {
       this.sleepReason = reason;
-      this.parkHeavyWork();
+      this.releaseTask("stop");
       this.setPhase("stopped");
     }
-    maybeArmHeavyWork() {
-      if (this.disposed || this.awaitingSnapshot) return;
-      if (this.phase === "ready" || this.phase === "sleeping" || this.phase === "stopped") return;
-      if (this.expectedPrompts <= 0 || !this.connected) return;
-      this.armHeavyWork();
-    }
-    armHeavyWork() {
-      if (this.disposed) return;
-      if (!this.heavyArmed) {
-        addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
-        addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
-        addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
-        addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
-        addEventListener("resize", this.onEnvironment, { passive: true });
-        this.heavyArmed = true;
-      }
-      if (!this.mutations) {
-        this.mutations = new MutationObserver(() => this.schedule());
-        this.mutations.observe(document.documentElement, { subtree: true, childList: true });
+    releaseIdle(_reason) {
+      this.cancel("release");
+      this.parkHeavyWork();
+      if (this.expectedPrompts > 0 && this.connected && this.phase !== "ready" && this.phase !== "stopped") {
+        this.armLightWatch();
+      } else {
+        this.parkLightWatch();
       }
     }
-    parkHeavyWork() {
+    releaseTask(_reason) {
+      this.cancel("release");
       clearTimeout(this.timer);
       this.timer = 0;
+      this.parkHeavyWork();
+      this.parkLightWatch();
+    }
+    armLightWatch() {
+      if (this.disposed || this.awaitingSnapshot || this.expectedPrompts <= 0 || !this.connected) return;
+      if (this.phase === "ready" || this.phase === "sleeping" || this.phase === "stopped") return;
+      const surface = conversationSurface();
+      const root = surface ?? document.body;
+      if (this.lightWatch && this.lightRoot === root && (!(root instanceof Element) || root.isConnected)) return;
+      this.parkLightWatch();
+      this.lightRoot = root;
+      this.lightWatch = new MutationObserver(() => {
+        if (!surface && conversationSurface()) {
+          this.parkLightWatch();
+          this.armLightWatch();
+        }
+        this.schedule();
+      });
+      this.lightWatch.observe(root, { subtree: Boolean(surface), childList: true });
+    }
+    parkLightWatch() {
+      this.lightWatch?.disconnect();
+      this.lightWatch = null;
+      this.lightRoot = null;
+    }
+    armHeavyWork() {
+      if (this.disposed || this.heavyArmed) return;
+      addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
+      addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
+      addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+      addEventListener("resize", this.onEnvironment, { passive: true });
+      this.heavyArmed = true;
+    }
+    parkHeavyWork() {
       this.stopPrepare();
-      this.mutations?.disconnect();
-      this.mutations = null;
       if (!this.heavyArmed) return;
       removeEventListener("wheel", this.onUserInput, true);
       removeEventListener("touchstart", this.onUserInput, true);
@@ -2400,13 +2723,16 @@ ${text}
         delete globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__;
         return;
       }
-      const native = readNativePrompts();
+      const native = readOfficialNavigator();
+      const status = officialNavigatorStatus(native, this.expectedPrompts, this.readyStableChecks);
       globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__ = {
         phase: this.phase,
         conversationId: this.state.conversationId,
         expectedPrompts: this.expectedPrompts,
         nativeFound: native.found,
         nativeVisible: native.visible,
+        nativeAvailable: status.available,
+        completeness: status.completeness,
         historyRequests: this.state.historyRequests,
         olderRequests: this.state.olderRequests,
         requestInFlight: this.state.requestInFlight,
@@ -2441,7 +2767,7 @@ ${text}
         missingFrames = 0;
         onDrift(drift);
       }
-      if (drift !== null && Math.abs(drift) > 8 || missingFrames > 3 || !stableLayoutAvailable()) {
+      if (drift !== null && Math.abs(drift) > 8 || missingFrames > 3 || !stableLayoutAvailable() || isGenerating()) {
         issue = "layout-changed";
         onUnsafe();
         return;
@@ -3004,6 +3330,1332 @@ ${text}
   function historyNeedsAnotherPass(summary) {
     return !summary.complete && !summary.cancelled && summary.permanentFailures === 0 && summary.retryableFailures === 0 && summary.conversationsFetched > 0 && (summary.hitDetailBudget || summary.hitDeadline || summary.needsContinuation === true);
   }
+
+  // node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs
+  var min = Math.min;
+  var max = Math.max;
+  var round = Math.round;
+  var floor = Math.floor;
+  var createCoords = (v) => ({
+    x: v,
+    y: v
+  });
+  var oppositeSideMap = {
+    left: "right",
+    right: "left",
+    bottom: "top",
+    top: "bottom"
+  };
+  function clamp(start, value, end) {
+    return max(start, min(value, end));
+  }
+  function evaluate(value, param) {
+    return typeof value === "function" ? value(param) : value;
+  }
+  function getSide(placement) {
+    return placement.split("-")[0];
+  }
+  function getAlignment(placement) {
+    return placement.split("-")[1];
+  }
+  function getOppositeAxis(axis) {
+    return axis === "x" ? "y" : "x";
+  }
+  function getAxisLength(axis) {
+    return axis === "y" ? "height" : "width";
+  }
+  function getSideAxis(placement) {
+    const firstChar = placement[0];
+    return firstChar === "t" || firstChar === "b" ? "y" : "x";
+  }
+  function getAlignmentAxis(placement) {
+    return getOppositeAxis(getSideAxis(placement));
+  }
+  function getAlignmentSides(placement, rects, rtl) {
+    if (rtl === void 0) {
+      rtl = false;
+    }
+    const alignment = getAlignment(placement);
+    const alignmentAxis = getAlignmentAxis(placement);
+    const length = getAxisLength(alignmentAxis);
+    let mainAlignmentSide = alignmentAxis === "x" ? alignment === (rtl ? "end" : "start") ? "right" : "left" : alignment === "start" ? "bottom" : "top";
+    if (rects.reference[length] > rects.floating[length]) {
+      mainAlignmentSide = getOppositePlacement(mainAlignmentSide);
+    }
+    return [mainAlignmentSide, getOppositePlacement(mainAlignmentSide)];
+  }
+  function getExpandedPlacements(placement) {
+    const oppositePlacement = getOppositePlacement(placement);
+    return [getOppositeAlignmentPlacement(placement), oppositePlacement, getOppositeAlignmentPlacement(oppositePlacement)];
+  }
+  function getOppositeAlignmentPlacement(placement) {
+    return placement.includes("start") ? placement.replace("start", "end") : placement.replace("end", "start");
+  }
+  var lrPlacement = ["left", "right"];
+  var rlPlacement = ["right", "left"];
+  var tbPlacement = ["top", "bottom"];
+  var btPlacement = ["bottom", "top"];
+  function getSideList(side, isStart, rtl) {
+    switch (side) {
+      case "top":
+      case "bottom":
+        if (rtl) return isStart ? rlPlacement : lrPlacement;
+        return isStart ? lrPlacement : rlPlacement;
+      case "left":
+      case "right":
+        return isStart ? tbPlacement : btPlacement;
+      default:
+        return [];
+    }
+  }
+  function getOppositeAxisPlacements(placement, flipAlignment, direction, rtl) {
+    const alignment = getAlignment(placement);
+    let list = getSideList(getSide(placement), direction === "start", rtl);
+    if (alignment) {
+      list = list.map((side) => side + "-" + alignment);
+      if (flipAlignment) {
+        list = list.concat(list.map(getOppositeAlignmentPlacement));
+      }
+    }
+    return list;
+  }
+  function getOppositePlacement(placement) {
+    const side = getSide(placement);
+    return oppositeSideMap[side] + placement.slice(side.length);
+  }
+  function expandPaddingObject(padding) {
+    var _padding$top, _padding$right, _padding$bottom, _padding$left;
+    return {
+      top: (_padding$top = padding.top) != null ? _padding$top : 0,
+      right: (_padding$right = padding.right) != null ? _padding$right : 0,
+      bottom: (_padding$bottom = padding.bottom) != null ? _padding$bottom : 0,
+      left: (_padding$left = padding.left) != null ? _padding$left : 0
+    };
+  }
+  function getPaddingObject(padding) {
+    return typeof padding !== "number" ? expandPaddingObject(padding) : {
+      top: padding,
+      right: padding,
+      bottom: padding,
+      left: padding
+    };
+  }
+  function rectToClientRect(rect) {
+    const {
+      x,
+      y,
+      width,
+      height
+    } = rect;
+    return {
+      width,
+      height,
+      top: y,
+      left: x,
+      right: x + width,
+      bottom: y + height,
+      x,
+      y
+    };
+  }
+
+  // node_modules/@floating-ui/core/dist/floating-ui.core.mjs
+  function computeCoordsFromPlacement(_ref, placement, rtl) {
+    let {
+      reference,
+      floating
+    } = _ref;
+    const sideAxis = getSideAxis(placement);
+    const alignmentAxis = getAlignmentAxis(placement);
+    const alignLength = getAxisLength(alignmentAxis);
+    const side = getSide(placement);
+    const isVertical = sideAxis === "y";
+    const commonX = reference.x + reference.width / 2 - floating.width / 2;
+    const commonY = reference.y + reference.height / 2 - floating.height / 2;
+    const commonAlign = reference[alignLength] / 2 - floating[alignLength] / 2;
+    let coords;
+    switch (side) {
+      case "top":
+        coords = {
+          x: commonX,
+          y: reference.y - floating.height
+        };
+        break;
+      case "bottom":
+        coords = {
+          x: commonX,
+          y: reference.y + reference.height
+        };
+        break;
+      case "right":
+        coords = {
+          x: reference.x + reference.width,
+          y: commonY
+        };
+        break;
+      case "left":
+        coords = {
+          x: reference.x - floating.width,
+          y: commonY
+        };
+        break;
+      default:
+        coords = {
+          x: reference.x,
+          y: reference.y
+        };
+    }
+    const alignment = getAlignment(placement);
+    if (alignment) {
+      coords[alignmentAxis] += commonAlign * (alignment === "end" ? 1 : -1) * (rtl && isVertical ? -1 : 1);
+    }
+    return coords;
+  }
+  async function detectOverflow(state, options) {
+    var _await$platform$isEle;
+    if (options === void 0) {
+      options = {};
+    }
+    const {
+      x,
+      y,
+      platform: platform2,
+      rects,
+      elements,
+      strategy
+    } = state;
+    const {
+      boundary = "clippingAncestors",
+      rootBoundary = "viewport",
+      elementContext = "floating",
+      altBoundary = false,
+      padding = 0
+    } = evaluate(options, state);
+    const paddingObject = getPaddingObject(padding);
+    const altContext = elementContext === "floating" ? "reference" : "floating";
+    const element = elements[altBoundary ? altContext : elementContext];
+    const clippingClientRect = rectToClientRect(await platform2.getClippingRect({
+      element: ((_await$platform$isEle = await (platform2.isElement == null ? void 0 : platform2.isElement(element))) != null ? _await$platform$isEle : true) ? element : element.contextElement || await (platform2.getDocumentElement == null ? void 0 : platform2.getDocumentElement(elements.floating)),
+      boundary,
+      rootBoundary,
+      strategy
+    }));
+    const rect = elementContext === "floating" ? {
+      x,
+      y,
+      width: rects.floating.width,
+      height: rects.floating.height
+    } : rects.reference;
+    const offsetParent = await (platform2.getOffsetParent == null ? void 0 : platform2.getOffsetParent(elements.floating));
+    const offsetScale = await (platform2.isElement == null ? void 0 : platform2.isElement(offsetParent)) && await (platform2.getScale == null ? void 0 : platform2.getScale(offsetParent)) || {
+      x: 1,
+      y: 1
+    };
+    const elementClientRect = rectToClientRect(platform2.convertOffsetParentRelativeRectToViewportRelativeRect ? await platform2.convertOffsetParentRelativeRectToViewportRelativeRect({
+      elements,
+      rect,
+      offsetParent,
+      strategy
+    }) : rect);
+    return {
+      top: (clippingClientRect.top - elementClientRect.top + paddingObject.top) / offsetScale.y,
+      bottom: (elementClientRect.bottom - clippingClientRect.bottom + paddingObject.bottom) / offsetScale.y,
+      left: (clippingClientRect.left - elementClientRect.left + paddingObject.left) / offsetScale.x,
+      right: (elementClientRect.right - clippingClientRect.right + paddingObject.right) / offsetScale.x
+    };
+  }
+  var MAX_RESET_COUNT = 50;
+  var computePosition = async (reference, floating, config) => {
+    const {
+      placement = "bottom",
+      strategy = "absolute",
+      middleware = [],
+      platform: platform2
+    } = config;
+    const platformWithDetectOverflow = platform2.detectOverflow ? platform2 : {
+      ...platform2,
+      detectOverflow
+    };
+    const rtl = await (platform2.isRTL == null ? void 0 : platform2.isRTL(floating));
+    let rects = await platform2.getElementRects({
+      reference,
+      floating,
+      strategy
+    });
+    let {
+      x,
+      y
+    } = computeCoordsFromPlacement(rects, placement, rtl);
+    let statefulPlacement = placement;
+    let resetCount = 0;
+    const middlewareData = {};
+    for (let i = 0; i < middleware.length; i++) {
+      const currentMiddleware = middleware[i];
+      if (!currentMiddleware) {
+        continue;
+      }
+      const {
+        name,
+        fn
+      } = currentMiddleware;
+      const {
+        x: nextX,
+        y: nextY,
+        data,
+        reset
+      } = await fn({
+        x,
+        y,
+        initialPlacement: placement,
+        placement: statefulPlacement,
+        strategy,
+        middlewareData,
+        rects,
+        platform: platformWithDetectOverflow,
+        elements: {
+          reference,
+          floating
+        }
+      });
+      x = nextX != null ? nextX : x;
+      y = nextY != null ? nextY : y;
+      middlewareData[name] = {
+        ...middlewareData[name],
+        ...data
+      };
+      if (reset && resetCount < MAX_RESET_COUNT) {
+        resetCount++;
+        if (typeof reset === "object") {
+          if (reset.placement) {
+            statefulPlacement = reset.placement;
+          }
+          if (reset.rects) {
+            rects = reset.rects === true ? await platform2.getElementRects({
+              reference,
+              floating,
+              strategy
+            }) : reset.rects;
+          }
+          ({
+            x,
+            y
+          } = computeCoordsFromPlacement(rects, statefulPlacement, rtl));
+        }
+        i = -1;
+      }
+    }
+    return {
+      x,
+      y,
+      placement: statefulPlacement,
+      strategy,
+      middlewareData
+    };
+  };
+  var flip = function(options) {
+    if (options === void 0) {
+      options = {};
+    }
+    return {
+      name: "flip",
+      options,
+      async fn(state) {
+        var _middlewareData$arrow, _middlewareData$flip;
+        const {
+          placement,
+          middlewareData,
+          rects,
+          initialPlacement,
+          platform: platform2,
+          elements
+        } = state;
+        const {
+          mainAxis: checkMainAxis = true,
+          crossAxis: checkCrossAxis = true,
+          fallbackPlacements: specifiedFallbackPlacements,
+          fallbackStrategy = "bestFit",
+          fallbackAxisSideDirection = "none",
+          flipAlignment = true,
+          ...detectOverflowOptions
+        } = evaluate(options, state);
+        if ((_middlewareData$arrow = middlewareData.arrow) != null && _middlewareData$arrow.alignmentOffset) {
+          return {};
+        }
+        const side = getSide(placement);
+        const initialSideAxis = getSideAxis(initialPlacement);
+        const isBasePlacement = getSide(initialPlacement) === initialPlacement;
+        const rtl = await (platform2.isRTL == null ? void 0 : platform2.isRTL(elements.floating));
+        const fallbackPlacements = specifiedFallbackPlacements || (isBasePlacement || !flipAlignment ? [getOppositePlacement(initialPlacement)] : getExpandedPlacements(initialPlacement));
+        const hasFallbackAxisSideDirection = fallbackAxisSideDirection !== "none";
+        if (!specifiedFallbackPlacements && hasFallbackAxisSideDirection) {
+          fallbackPlacements.push(...getOppositeAxisPlacements(initialPlacement, flipAlignment, fallbackAxisSideDirection, rtl));
+        }
+        const placements2 = [initialPlacement, ...fallbackPlacements];
+        const overflow = await platform2.detectOverflow(state, detectOverflowOptions);
+        const overflows = [];
+        let overflowsData = ((_middlewareData$flip = middlewareData.flip) == null ? void 0 : _middlewareData$flip.overflows) || [];
+        if (checkMainAxis) {
+          overflows.push(overflow[side]);
+        }
+        if (checkCrossAxis) {
+          const sides2 = getAlignmentSides(placement, rects, rtl);
+          overflows.push(overflow[sides2[0]], overflow[sides2[1]]);
+        }
+        overflowsData = [...overflowsData, {
+          placement,
+          overflows
+        }];
+        if (!overflows.every((side2) => side2 <= 0)) {
+          var _middlewareData$flip2, _overflowsData$filter;
+          const nextIndex = (((_middlewareData$flip2 = middlewareData.flip) == null ? void 0 : _middlewareData$flip2.index) || 0) + 1;
+          const nextPlacement = placements2[nextIndex];
+          if (nextPlacement) {
+            const ignoreCrossAxisOverflow = checkCrossAxis === "alignment" ? initialSideAxis !== getSideAxis(nextPlacement) : false;
+            if (!ignoreCrossAxisOverflow || // We leave the current main axis only if every placement on that axis
+            // overflows the main axis.
+            overflowsData.every((d) => getSideAxis(d.placement) === initialSideAxis ? d.overflows[0] > 0 : true)) {
+              return {
+                data: {
+                  index: nextIndex,
+                  overflows: overflowsData
+                },
+                reset: {
+                  placement: nextPlacement
+                }
+              };
+            }
+          }
+          let resetPlacement = (_overflowsData$filter = overflowsData.filter((d) => d.overflows[0] <= 0).sort((a, b) => a.overflows[1] - b.overflows[1])[0]) == null ? void 0 : _overflowsData$filter.placement;
+          if (!resetPlacement) {
+            switch (fallbackStrategy) {
+              case "bestFit": {
+                var _overflowsData$filter2;
+                const placement2 = (_overflowsData$filter2 = overflowsData.filter((d) => {
+                  if (hasFallbackAxisSideDirection) {
+                    const currentSideAxis = getSideAxis(d.placement);
+                    return currentSideAxis === initialSideAxis || // Create a bias to the `y` side axis due to horizontal
+                    // reading directions favoring greater width.
+                    currentSideAxis === "y";
+                  }
+                  return true;
+                }).map((d) => [d.placement, d.overflows.filter((overflow2) => overflow2 > 0).reduce((acc, overflow2) => acc + overflow2, 0)]).sort((a, b) => a[1] - b[1])[0]) == null ? void 0 : _overflowsData$filter2[0];
+                if (placement2) {
+                  resetPlacement = placement2;
+                }
+                break;
+              }
+              case "initialPlacement":
+                resetPlacement = initialPlacement;
+                break;
+            }
+          }
+          if (placement !== resetPlacement) {
+            return {
+              reset: {
+                placement: resetPlacement
+              }
+            };
+          }
+        }
+        return {};
+      }
+    };
+  };
+  var originSides = /* @__PURE__ */ new Set(["left", "top"]);
+  async function convertValueToCoords(state, options) {
+    const {
+      placement,
+      platform: platform2,
+      elements
+    } = state;
+    const rtl = await (platform2.isRTL == null ? void 0 : platform2.isRTL(elements.floating));
+    const side = getSide(placement);
+    const alignment = getAlignment(placement);
+    const isVertical = getSideAxis(placement) === "y";
+    const mainAxisMulti = originSides.has(side) ? -1 : 1;
+    const crossAxisMulti = rtl && isVertical ? -1 : 1;
+    const rawValue = evaluate(options, state);
+    let {
+      mainAxis,
+      crossAxis,
+      alignmentAxis
+    } = typeof rawValue === "number" ? {
+      mainAxis: rawValue,
+      crossAxis: 0,
+      alignmentAxis: null
+    } : {
+      mainAxis: rawValue.mainAxis || 0,
+      crossAxis: rawValue.crossAxis || 0,
+      alignmentAxis: rawValue.alignmentAxis
+    };
+    if (alignment && typeof alignmentAxis === "number") {
+      crossAxis = alignment === "end" ? alignmentAxis * -1 : alignmentAxis;
+    }
+    return isVertical ? {
+      x: crossAxis * crossAxisMulti,
+      y: mainAxis * mainAxisMulti
+    } : {
+      x: mainAxis * mainAxisMulti,
+      y: crossAxis * crossAxisMulti
+    };
+  }
+  var offset = function(options) {
+    if (options === void 0) {
+      options = 0;
+    }
+    return {
+      name: "offset",
+      options,
+      async fn(state) {
+        var _middlewareData$offse, _middlewareData$arrow;
+        const {
+          x,
+          y,
+          placement,
+          middlewareData
+        } = state;
+        const diffCoords = await convertValueToCoords(state, options);
+        if (placement === ((_middlewareData$offse = middlewareData.offset) == null ? void 0 : _middlewareData$offse.placement) && (_middlewareData$arrow = middlewareData.arrow) != null && _middlewareData$arrow.alignmentOffset) {
+          return {};
+        }
+        return {
+          x: x + diffCoords.x,
+          y: y + diffCoords.y,
+          data: {
+            ...diffCoords,
+            placement
+          }
+        };
+      }
+    };
+  };
+  var shift = function(options) {
+    if (options === void 0) {
+      options = {};
+    }
+    return {
+      name: "shift",
+      options,
+      async fn(state) {
+        const {
+          x,
+          y,
+          placement,
+          platform: platform2
+        } = state;
+        const {
+          mainAxis: checkMainAxis = true,
+          crossAxis: checkCrossAxis = false,
+          limiter = {
+            fn: (_ref) => {
+              let {
+                x: x2,
+                y: y2
+              } = _ref;
+              return {
+                x: x2,
+                y: y2
+              };
+            }
+          },
+          ...detectOverflowOptions
+        } = evaluate(options, state);
+        const coords = {
+          x,
+          y
+        };
+        const overflow = await platform2.detectOverflow(state, detectOverflowOptions);
+        const crossAxis = getSideAxis(placement);
+        const mainAxis = getOppositeAxis(crossAxis);
+        let mainAxisCoord = coords[mainAxis];
+        let crossAxisCoord = coords[crossAxis];
+        const clampCoord = (axis, coord) => clamp(coord + overflow[axis === "y" ? "top" : "left"], coord, coord - overflow[axis === "y" ? "bottom" : "right"]);
+        if (checkMainAxis) {
+          mainAxisCoord = clampCoord(mainAxis, mainAxisCoord);
+        }
+        if (checkCrossAxis) {
+          crossAxisCoord = clampCoord(crossAxis, crossAxisCoord);
+        }
+        const limitedCoords = limiter.fn({
+          ...state,
+          [mainAxis]: mainAxisCoord,
+          [crossAxis]: crossAxisCoord
+        });
+        return {
+          ...limitedCoords,
+          data: {
+            x: limitedCoords.x - x,
+            y: limitedCoords.y - y,
+            enabled: {
+              [mainAxis]: checkMainAxis,
+              [crossAxis]: checkCrossAxis
+            }
+          }
+        };
+      }
+    };
+  };
+
+  // node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs
+  function hasWindow() {
+    return typeof window !== "undefined";
+  }
+  function getNodeName(node) {
+    if (isNode(node)) {
+      return (node.nodeName || "").toLowerCase();
+    }
+    return "#document";
+  }
+  function getWindow(node) {
+    var _node$ownerDocument;
+    return (node == null || (_node$ownerDocument = node.ownerDocument) == null ? void 0 : _node$ownerDocument.defaultView) || window;
+  }
+  function getDocumentElement(node) {
+    var _ref;
+    return (_ref = (isNode(node) ? node.ownerDocument : node.document) || window.document) == null ? void 0 : _ref.documentElement;
+  }
+  function isNode(value) {
+    if (!hasWindow()) {
+      return false;
+    }
+    return value instanceof Node || value instanceof getWindow(value).Node;
+  }
+  function isElement(value) {
+    if (!hasWindow()) {
+      return false;
+    }
+    return value instanceof Element || value instanceof getWindow(value).Element;
+  }
+  function isHTMLElement(value) {
+    if (!hasWindow()) {
+      return false;
+    }
+    return value instanceof HTMLElement || value instanceof getWindow(value).HTMLElement;
+  }
+  function isShadowRoot(value) {
+    if (!hasWindow() || typeof ShadowRoot === "undefined") {
+      return false;
+    }
+    return value instanceof ShadowRoot || value instanceof getWindow(value).ShadowRoot;
+  }
+  function isOverflowElement(element) {
+    const {
+      overflow,
+      overflowX,
+      overflowY,
+      display
+    } = getComputedStyle2(element);
+    return /auto|scroll|overlay|hidden|clip/.test(overflow + overflowY + overflowX) && display !== "inline" && display !== "contents";
+  }
+  function isTableElement(element) {
+    return /^(table|td|th)$/.test(getNodeName(element));
+  }
+  function isTopLayer(element) {
+    try {
+      if (element.matches(":popover-open")) {
+        return true;
+      }
+    } catch (_e) {
+    }
+    try {
+      return element.matches(":modal");
+    } catch (_e) {
+      return false;
+    }
+  }
+  var willChangeRe = /transform|translate|scale|rotate|perspective|filter/;
+  var containRe = /paint|layout|strict|content/;
+  var isNotNone = (value) => !!value && value !== "none";
+  var isWebKitValue;
+  function isContainingBlock(elementOrCss) {
+    const css2 = isElement(elementOrCss) ? getComputedStyle2(elementOrCss) : elementOrCss;
+    return isNotNone(css2.transform) || isNotNone(css2.translate) || isNotNone(css2.scale) || isNotNone(css2.rotate) || isNotNone(css2.perspective) || !isWebKit() && (isNotNone(css2.backdropFilter) || isNotNone(css2.filter)) || willChangeRe.test(css2.willChange || "") || containRe.test(css2.contain || "");
+  }
+  function getContainingBlock(element) {
+    let currentNode = getParentNode(element);
+    while (isHTMLElement(currentNode) && !isLastTraversableNode(currentNode)) {
+      if (isContainingBlock(currentNode)) {
+        return currentNode;
+      } else if (isTopLayer(currentNode)) {
+        return null;
+      }
+      currentNode = getParentNode(currentNode);
+    }
+    return null;
+  }
+  function isWebKit() {
+    if (isWebKitValue == null) {
+      isWebKitValue = typeof CSS !== "undefined" && CSS.supports && CSS.supports("-webkit-backdrop-filter", "none");
+    }
+    return isWebKitValue;
+  }
+  function isLastTraversableNode(node) {
+    return /^(html|body|#document)$/.test(getNodeName(node));
+  }
+  function getComputedStyle2(element) {
+    return getWindow(element).getComputedStyle(element);
+  }
+  function getNodeScroll(element) {
+    if (isElement(element)) {
+      return {
+        scrollLeft: element.scrollLeft,
+        scrollTop: element.scrollTop
+      };
+    }
+    return {
+      scrollLeft: element.scrollX,
+      scrollTop: element.scrollY
+    };
+  }
+  function getParentNode(node) {
+    if (getNodeName(node) === "html") {
+      return node;
+    }
+    const result = (
+      // Step into the shadow DOM of the parent of a slotted node.
+      node.assignedSlot || // DOM Element detected.
+      node.parentNode || // ShadowRoot detected.
+      isShadowRoot(node) && node.host || // Fallback.
+      getDocumentElement(node)
+    );
+    return isShadowRoot(result) ? result.host : result;
+  }
+  function getNearestOverflowAncestor(node) {
+    const parentNode = getParentNode(node);
+    if (isLastTraversableNode(parentNode)) {
+      return (node.ownerDocument || node).body;
+    }
+    if (isHTMLElement(parentNode) && isOverflowElement(parentNode)) {
+      return parentNode;
+    }
+    return getNearestOverflowAncestor(parentNode);
+  }
+  function getOverflowAncestors(node, list, traverseIframes) {
+    var _node$ownerDocument2;
+    if (list === void 0) {
+      list = [];
+    }
+    if (traverseIframes === void 0) {
+      traverseIframes = true;
+    }
+    const scrollableAncestor = getNearestOverflowAncestor(node);
+    const isBody = scrollableAncestor === ((_node$ownerDocument2 = node.ownerDocument) == null ? void 0 : _node$ownerDocument2.body);
+    const win = getWindow(scrollableAncestor);
+    if (isBody) {
+      const frameElement = getFrameElement(win);
+      return list.concat(win, win.visualViewport || [], isOverflowElement(scrollableAncestor) ? scrollableAncestor : [], frameElement && traverseIframes ? getOverflowAncestors(frameElement) : []);
+    } else {
+      return list.concat(scrollableAncestor, getOverflowAncestors(scrollableAncestor, [], traverseIframes));
+    }
+  }
+  function getFrameElement(win) {
+    return win.parent && Object.getPrototypeOf(win.parent) ? win.frameElement : null;
+  }
+
+  // node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs
+  function getCssDimensions(element) {
+    const css2 = getComputedStyle2(element);
+    let width = parseFloat(css2.width) || 0;
+    let height = parseFloat(css2.height) || 0;
+    const hasOffset = isHTMLElement(element);
+    const offsetWidth = hasOffset ? element.offsetWidth : width;
+    const offsetHeight = hasOffset ? element.offsetHeight : height;
+    const shouldFallback = round(width) !== offsetWidth || round(height) !== offsetHeight;
+    if (shouldFallback) {
+      width = offsetWidth;
+      height = offsetHeight;
+    }
+    return {
+      width,
+      height,
+      $: shouldFallback
+    };
+  }
+  function unwrapElement(element) {
+    return !isElement(element) ? element.contextElement : element;
+  }
+  function getScale(element) {
+    const domElement = unwrapElement(element);
+    if (!isHTMLElement(domElement)) {
+      return createCoords(1);
+    }
+    const rect = domElement.getBoundingClientRect();
+    const {
+      width,
+      height,
+      $
+    } = getCssDimensions(domElement);
+    let x = ($ ? round(rect.width) : rect.width) / width;
+    let y = ($ ? round(rect.height) : rect.height) / height;
+    if (!x || !Number.isFinite(x)) {
+      x = 1;
+    }
+    if (!y || !Number.isFinite(y)) {
+      y = 1;
+    }
+    return {
+      x,
+      y
+    };
+  }
+  var noOffsets = /* @__PURE__ */ createCoords(0);
+  function getVisualOffsets(element) {
+    const win = getWindow(element);
+    if (!isWebKit() || !win.visualViewport) {
+      return noOffsets;
+    }
+    return {
+      x: win.visualViewport.offsetLeft,
+      y: win.visualViewport.offsetTop
+    };
+  }
+  function shouldAddVisualOffsets(element, isFixed, floatingOffsetParent) {
+    if (isFixed === void 0) {
+      isFixed = false;
+    }
+    return !!floatingOffsetParent && isFixed && floatingOffsetParent === getWindow(element);
+  }
+  function getBoundingClientRect(element, includeScale, isFixedStrategy, offsetParent) {
+    if (includeScale === void 0) {
+      includeScale = false;
+    }
+    if (isFixedStrategy === void 0) {
+      isFixedStrategy = false;
+    }
+    const clientRect = element.getBoundingClientRect();
+    const domElement = unwrapElement(element);
+    let scale = createCoords(1);
+    if (includeScale) {
+      if (offsetParent) {
+        if (isElement(offsetParent)) {
+          scale = getScale(offsetParent);
+        }
+      } else {
+        scale = getScale(element);
+      }
+    }
+    const visualOffsets = shouldAddVisualOffsets(domElement, isFixedStrategy, offsetParent) ? getVisualOffsets(domElement) : createCoords(0);
+    let x = (clientRect.left + visualOffsets.x) / scale.x;
+    let y = (clientRect.top + visualOffsets.y) / scale.y;
+    let width = clientRect.width / scale.x;
+    let height = clientRect.height / scale.y;
+    if (domElement && offsetParent) {
+      const win = getWindow(domElement);
+      const offsetWin = isElement(offsetParent) ? getWindow(offsetParent) : offsetParent;
+      let currentWin = win;
+      let currentIFrame = getFrameElement(currentWin);
+      while (currentIFrame && offsetWin !== currentWin) {
+        const iframeScale = getScale(currentIFrame);
+        const iframeRect = currentIFrame.getBoundingClientRect();
+        const css2 = getComputedStyle2(currentIFrame);
+        const left = iframeRect.left + (currentIFrame.clientLeft + parseFloat(css2.paddingLeft)) * iframeScale.x;
+        const top = iframeRect.top + (currentIFrame.clientTop + parseFloat(css2.paddingTop)) * iframeScale.y;
+        x *= iframeScale.x;
+        y *= iframeScale.y;
+        width *= iframeScale.x;
+        height *= iframeScale.y;
+        x += left;
+        y += top;
+        currentWin = getWindow(currentIFrame);
+        currentIFrame = getFrameElement(currentWin);
+      }
+    }
+    return rectToClientRect({
+      width,
+      height,
+      x,
+      y
+    });
+  }
+  function getWindowScrollBarX(element, rect) {
+    const leftScroll = getNodeScroll(element).scrollLeft;
+    if (!rect) {
+      return getBoundingClientRect(getDocumentElement(element)).left + leftScroll;
+    }
+    return rect.left + leftScroll;
+  }
+  function getHTMLOffset(documentElement, scroll) {
+    const htmlRect = documentElement.getBoundingClientRect();
+    const x = htmlRect.left + scroll.scrollLeft - getWindowScrollBarX(documentElement, htmlRect);
+    const y = htmlRect.top + scroll.scrollTop;
+    return {
+      x,
+      y
+    };
+  }
+  function convertOffsetParentRelativeRectToViewportRelativeRect(_ref) {
+    let {
+      elements,
+      rect,
+      offsetParent,
+      strategy
+    } = _ref;
+    const isFixed = strategy === "fixed";
+    const documentElement = getDocumentElement(offsetParent);
+    const topLayer = elements ? isTopLayer(elements.floating) : false;
+    if (offsetParent === documentElement || topLayer && isFixed) {
+      return rect;
+    }
+    let scroll = {
+      scrollLeft: 0,
+      scrollTop: 0
+    };
+    let scale = createCoords(1);
+    const offsets = createCoords(0);
+    const isOffsetParentAnElement = isHTMLElement(offsetParent);
+    if (isOffsetParentAnElement || !isFixed) {
+      if (getNodeName(offsetParent) !== "body" || isOverflowElement(documentElement)) {
+        scroll = getNodeScroll(offsetParent);
+      }
+      if (isOffsetParentAnElement) {
+        const offsetRect = getBoundingClientRect(offsetParent);
+        scale = getScale(offsetParent);
+        offsets.x = offsetRect.x + offsetParent.clientLeft;
+        offsets.y = offsetRect.y + offsetParent.clientTop;
+      }
+    }
+    const htmlOffset = documentElement && !isOffsetParentAnElement && !isFixed ? getHTMLOffset(documentElement, scroll) : createCoords(0);
+    return {
+      width: rect.width * scale.x,
+      height: rect.height * scale.y,
+      x: rect.x * scale.x - scroll.scrollLeft * scale.x + offsets.x + htmlOffset.x,
+      y: rect.y * scale.y - scroll.scrollTop * scale.y + offsets.y + htmlOffset.y
+    };
+  }
+  function getClientRects(element) {
+    return element.getClientRects ? Array.from(element.getClientRects()) : [];
+  }
+  function getDocumentRect(html) {
+    const scroll = getNodeScroll(html);
+    const body = html.ownerDocument.body;
+    const width = max(html.scrollWidth, html.clientWidth, body.scrollWidth, body.clientWidth);
+    const height = max(html.scrollHeight, html.clientHeight, body.scrollHeight, body.clientHeight);
+    let x = -scroll.scrollLeft + getWindowScrollBarX(html);
+    const y = -scroll.scrollTop;
+    if (getComputedStyle2(body).direction === "rtl") {
+      x += max(html.clientWidth, body.clientWidth) - width;
+    }
+    return {
+      width,
+      height,
+      x,
+      y
+    };
+  }
+  var SCROLLBAR_MAX = 25;
+  function getViewportRect(element, strategy, rootBoundary) {
+    if (rootBoundary === void 0) {
+      rootBoundary = "viewport";
+    }
+    const isLayoutViewport = rootBoundary === "layoutViewport";
+    const win = getWindow(element);
+    const html = getDocumentElement(element);
+    const visualViewport = win.visualViewport;
+    let width = html.clientWidth;
+    let height = html.clientHeight;
+    let x = 0;
+    let y = 0;
+    if (visualViewport) {
+      const layoutRelativeClientCoords = !isWebKit() || strategy === "fixed";
+      if (isLayoutViewport) {
+        if (!layoutRelativeClientCoords) {
+          x = -visualViewport.offsetLeft;
+          y = -visualViewport.offsetTop;
+        }
+      } else {
+        width = visualViewport.width;
+        height = visualViewport.height;
+        if (layoutRelativeClientCoords) {
+          x = visualViewport.offsetLeft;
+          y = visualViewport.offsetTop;
+        }
+      }
+    }
+    const windowScrollbarX = getWindowScrollBarX(html);
+    if (windowScrollbarX <= 0) {
+      const doc = html.ownerDocument;
+      const body = doc.body;
+      const bodyStyles = getComputedStyle(body);
+      const bodyMarginInline = doc.compatMode === "CSS1Compat" ? parseFloat(bodyStyles.marginLeft) + parseFloat(bodyStyles.marginRight) || 0 : 0;
+      const reservedWidth = Math.abs(html.clientWidth - body.clientWidth - bodyMarginInline);
+      const gutter = getComputedStyle(html).scrollbarGutter === "stable both-edges" ? reservedWidth / 2 : reservedWidth;
+      if (gutter <= SCROLLBAR_MAX) {
+        width -= gutter;
+      }
+    }
+    return {
+      width,
+      height,
+      x,
+      y
+    };
+  }
+  function getInnerBoundingClientRect(element, strategy) {
+    const clientRect = getBoundingClientRect(element, true, strategy === "fixed");
+    const top = clientRect.top + element.clientTop;
+    const left = clientRect.left + element.clientLeft;
+    const scale = getScale(element);
+    const width = element.clientWidth * scale.x;
+    const height = element.clientHeight * scale.y;
+    const x = left * scale.x;
+    const y = top * scale.y;
+    return {
+      width,
+      height,
+      x,
+      y
+    };
+  }
+  function getClientRectFromClippingAncestor(element, clippingAncestor, strategy) {
+    let rect;
+    if (clippingAncestor === "viewport" || clippingAncestor === "layoutViewport") {
+      rect = getViewportRect(element, strategy, clippingAncestor);
+    } else if (clippingAncestor === "document") {
+      rect = getDocumentRect(getDocumentElement(element));
+    } else if (isElement(clippingAncestor)) {
+      rect = getInnerBoundingClientRect(clippingAncestor, strategy);
+    } else {
+      const visualOffsets = getVisualOffsets(element);
+      rect = {
+        x: clippingAncestor.x - visualOffsets.x,
+        y: clippingAncestor.y - visualOffsets.y,
+        width: clippingAncestor.width,
+        height: clippingAncestor.height
+      };
+    }
+    return rectToClientRect(rect);
+  }
+  function getClippingElementAncestors(element, cache) {
+    const cachedResult = cache.get(element);
+    if (cachedResult) {
+      return cachedResult;
+    }
+    let result = getOverflowAncestors(element, [], false).filter((el) => isElement(el) && getNodeName(el) !== "body");
+    let lastKeptComputedStyle = null;
+    const elementIsFixed = getComputedStyle2(element).position === "fixed";
+    let currentNode = elementIsFixed ? getParentNode(element) : element;
+    while (isElement(currentNode) && !isLastTraversableNode(currentNode)) {
+      const computedStyle = getComputedStyle2(currentNode);
+      const currentNodeIsContaining = isContainingBlock(currentNode);
+      const lastPosition = lastKeptComputedStyle ? lastKeptComputedStyle.position : elementIsFixed ? "fixed" : "";
+      const shouldDropCurrentNode = !currentNodeIsContaining && (lastPosition === "fixed" || lastPosition === "absolute" && computedStyle.position === "static");
+      if (shouldDropCurrentNode) {
+        result = result.filter((ancestor) => ancestor !== currentNode);
+      } else {
+        lastKeptComputedStyle = computedStyle;
+      }
+      currentNode = getParentNode(currentNode);
+    }
+    cache.set(element, result);
+    return result;
+  }
+  function getClippingRect(_ref) {
+    let {
+      element,
+      boundary,
+      rootBoundary,
+      strategy
+    } = _ref;
+    const elementClippingAncestors = boundary === "clippingAncestors" ? isTopLayer(element) ? [] : getClippingElementAncestors(element, this._c) : [].concat(boundary);
+    const clippingAncestors = [...elementClippingAncestors, rootBoundary];
+    const firstRect = getClientRectFromClippingAncestor(element, clippingAncestors[0], strategy);
+    let top = firstRect.top;
+    let right = firstRect.right;
+    let bottom = firstRect.bottom;
+    let left = firstRect.left;
+    for (let i = 1; i < clippingAncestors.length; i++) {
+      const rect = getClientRectFromClippingAncestor(element, clippingAncestors[i], strategy);
+      top = max(rect.top, top);
+      right = min(rect.right, right);
+      bottom = min(rect.bottom, bottom);
+      left = max(rect.left, left);
+    }
+    return {
+      width: right - left,
+      height: bottom - top,
+      x: left,
+      y: top
+    };
+  }
+  function getDimensions(element) {
+    const {
+      width,
+      height
+    } = getCssDimensions(element);
+    return {
+      width,
+      height
+    };
+  }
+  function getRectRelativeToOffsetParent(element, offsetParent, strategy) {
+    const isOffsetParentAnElement = isHTMLElement(offsetParent);
+    const documentElement = getDocumentElement(offsetParent);
+    const isFixed = strategy === "fixed";
+    const rect = getBoundingClientRect(element, true, isFixed, offsetParent);
+    let scroll = {
+      scrollLeft: 0,
+      scrollTop: 0
+    };
+    const offsets = createCoords(0);
+    if (isOffsetParentAnElement || !isFixed) {
+      if (getNodeName(offsetParent) !== "body" || isOverflowElement(documentElement)) {
+        scroll = getNodeScroll(offsetParent);
+      }
+      if (isOffsetParentAnElement) {
+        const offsetRect = getBoundingClientRect(offsetParent, true, isFixed, offsetParent);
+        offsets.x = offsetRect.x + offsetParent.clientLeft;
+        offsets.y = offsetRect.y + offsetParent.clientTop;
+      }
+    }
+    if (!isOffsetParentAnElement && documentElement) {
+      offsets.x = getWindowScrollBarX(documentElement);
+    }
+    const htmlOffset = documentElement && !isOffsetParentAnElement && !isFixed ? getHTMLOffset(documentElement, scroll) : createCoords(0);
+    const x = rect.left + scroll.scrollLeft - offsets.x - htmlOffset.x;
+    const y = rect.top + scroll.scrollTop - offsets.y - htmlOffset.y;
+    return {
+      x,
+      y,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+  function isStaticPositioned(element) {
+    return getComputedStyle2(element).position === "static";
+  }
+  function getTrueOffsetParent(element, polyfill) {
+    if (!isHTMLElement(element) || getComputedStyle2(element).position === "fixed") {
+      return null;
+    }
+    if (polyfill) {
+      return polyfill(element);
+    }
+    let rawOffsetParent = element.offsetParent;
+    if (getDocumentElement(element) === rawOffsetParent) {
+      rawOffsetParent = rawOffsetParent.ownerDocument.body;
+    }
+    return rawOffsetParent;
+  }
+  function getOffsetParent(element, polyfill) {
+    const win = getWindow(element);
+    if (isTopLayer(element)) {
+      return win;
+    }
+    if (!isHTMLElement(element)) {
+      let svgOffsetParent = getParentNode(element);
+      while (svgOffsetParent && !isLastTraversableNode(svgOffsetParent)) {
+        if (isElement(svgOffsetParent) && !isStaticPositioned(svgOffsetParent)) {
+          return svgOffsetParent;
+        }
+        svgOffsetParent = getParentNode(svgOffsetParent);
+      }
+      return win;
+    }
+    let offsetParent = getTrueOffsetParent(element, polyfill);
+    while (offsetParent && isTableElement(offsetParent) && isStaticPositioned(offsetParent)) {
+      offsetParent = getTrueOffsetParent(offsetParent, polyfill);
+    }
+    if (offsetParent && isLastTraversableNode(offsetParent) && isStaticPositioned(offsetParent) && !isContainingBlock(offsetParent)) {
+      return win;
+    }
+    return offsetParent || getContainingBlock(element) || win;
+  }
+  var getElementRects = async function(data) {
+    const getOffsetParentFn = this.getOffsetParent || getOffsetParent;
+    const getDimensionsFn = this.getDimensions;
+    const floatingDimensions = await getDimensionsFn(data.floating);
+    return {
+      reference: getRectRelativeToOffsetParent(data.reference, await getOffsetParentFn(data.floating), data.strategy),
+      floating: {
+        x: 0,
+        y: 0,
+        width: floatingDimensions.width,
+        height: floatingDimensions.height
+      }
+    };
+  };
+  function isRTL(element) {
+    return getComputedStyle2(element).direction === "rtl";
+  }
+  var platform = {
+    convertOffsetParentRelativeRectToViewportRelativeRect,
+    getDocumentElement,
+    getClippingRect,
+    getOffsetParent,
+    getElementRects,
+    getClientRects,
+    getDimensions,
+    getScale,
+    isElement,
+    isRTL
+  };
+  function rectsAreEqual(a, b) {
+    return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+  }
+  function observeMove(element, onMove, ancestorResize) {
+    let io = null;
+    let timeoutId;
+    const root = getDocumentElement(element);
+    function cleanup() {
+      var _io;
+      clearTimeout(timeoutId);
+      (_io = io) == null || _io.disconnect();
+      io = null;
+    }
+    function refresh(skip, threshold) {
+      if (skip === void 0) {
+        skip = false;
+      }
+      if (threshold === void 0) {
+        threshold = 1;
+      }
+      cleanup();
+      const elementRectForRootMargin = element.getBoundingClientRect();
+      const {
+        left,
+        top,
+        width,
+        height
+      } = elementRectForRootMargin;
+      if (!skip) {
+        onMove();
+      }
+      if (!width || !height) {
+        return;
+      }
+      const insetTop = floor(top);
+      const insetRight = floor(root.clientWidth - (left + width));
+      const insetBottom = floor(root.clientHeight - (top + height));
+      const insetLeft = floor(left);
+      const rootMargin = -insetTop + "px " + -insetRight + "px " + -insetBottom + "px " + -insetLeft + "px";
+      const options = {
+        rootMargin,
+        threshold: max(0, min(1, threshold)) || 1
+      };
+      let isFirstUpdate = true;
+      function handleObserve(entries) {
+        const ratio = entries[0].intersectionRatio;
+        if (!rectsAreEqual(elementRectForRootMargin, element.getBoundingClientRect())) {
+          return refresh();
+        }
+        if (ratio !== threshold) {
+          if (!isFirstUpdate) {
+            return refresh();
+          }
+          if (!ratio) {
+            timeoutId = setTimeout(() => {
+              refresh(false, 1e-7);
+            }, 1e3);
+          } else {
+            refresh(false, ratio);
+          }
+        }
+        isFirstUpdate = false;
+      }
+      try {
+        io = new IntersectionObserver(handleObserve, {
+          ...options,
+          // Handle <iframe>s
+          root: root.ownerDocument
+        });
+      } catch (_e) {
+        io = new IntersectionObserver(handleObserve, options);
+      }
+      io.observe(element);
+    }
+    const win = getWindow(element);
+    const handleResize = () => refresh(ancestorResize);
+    win.addEventListener("resize", handleResize);
+    refresh(true);
+    return () => {
+      win.removeEventListener("resize", handleResize);
+      cleanup();
+    };
+  }
+  function autoUpdate(reference, floating, update, options) {
+    if (options === void 0) {
+      options = {};
+    }
+    const {
+      ancestorScroll = true,
+      ancestorResize = true,
+      elementResize = typeof ResizeObserver === "function",
+      layoutShift = typeof IntersectionObserver === "function",
+      animationFrame = false
+    } = options;
+    const referenceEl = unwrapElement(reference);
+    const ancestors = ancestorScroll || ancestorResize ? [...referenceEl ? getOverflowAncestors(referenceEl) : [], ...floating ? getOverflowAncestors(floating) : []] : [];
+    ancestors.forEach((ancestor) => {
+      ancestorScroll && ancestor.addEventListener("scroll", update);
+      ancestorResize && ancestor.addEventListener("resize", update);
+    });
+    const cleanupIo = referenceEl && layoutShift ? observeMove(referenceEl, update, ancestorResize) : null;
+    let reobserveFrame = -1;
+    let resizeObserver = null;
+    if (elementResize) {
+      resizeObserver = new ResizeObserver((_ref) => {
+        let [firstEntry] = _ref;
+        if (firstEntry && firstEntry.target === referenceEl && resizeObserver && floating) {
+          resizeObserver.unobserve(floating);
+          cancelAnimationFrame(reobserveFrame);
+          reobserveFrame = requestAnimationFrame(() => {
+            var _resizeObserver;
+            (_resizeObserver = resizeObserver) == null || _resizeObserver.observe(floating);
+          });
+        }
+        update();
+      });
+      if (referenceEl && !animationFrame) {
+        resizeObserver.observe(referenceEl);
+      }
+      if (floating) {
+        resizeObserver.observe(floating);
+      }
+    }
+    let frameId;
+    let prevRefRect = animationFrame ? getBoundingClientRect(reference) : null;
+    if (animationFrame) {
+      frameLoop();
+    }
+    function frameLoop() {
+      const nextRefRect = getBoundingClientRect(reference);
+      if (prevRefRect && !rectsAreEqual(prevRefRect, nextRefRect)) {
+        update();
+      }
+      prevRefRect = nextRefRect;
+      frameId = requestAnimationFrame(frameLoop);
+    }
+    update();
+    return () => {
+      var _resizeObserver2;
+      ancestors.forEach((ancestor) => {
+        ancestorScroll && ancestor.removeEventListener("scroll", update);
+        ancestorResize && ancestor.removeEventListener("resize", update);
+      });
+      cleanupIo == null || cleanupIo();
+      (_resizeObserver2 = resizeObserver) == null || _resizeObserver2.disconnect();
+      resizeObserver = null;
+      if (animationFrame) {
+        cancelAnimationFrame(frameId);
+      }
+    };
+  }
+  var offset2 = offset;
+  var shift2 = shift;
+  var flip2 = flip;
+  var computePosition2 = (reference, floating, options) => {
+    const cache = /* @__PURE__ */ new Map();
+    const mergedOptions = options != null ? options : {};
+    const platformWithCache = {
+      ...platform,
+      ...mergedOptions.platform,
+      _c: cache
+    };
+    return computePosition(reference, floating, {
+      ...mergedOptions,
+      platform: platformWithCache
+    });
+  };
 
   // node_modules/sortablejs/modular/sortable.esm.js
   function ownKeys(object, enumerableOnly) {
@@ -5668,11 +7320,11 @@ ${timestamp ? `${timestamp}
     if (limit <= 0) return 0;
     return Math.max(0, Math.min(1, remaining / limit));
   }
-  function ringGeometry(size) {
-    const padding = Math.max(1, size * 0.045);
-    const outerWidth = Math.max(1.5, size * 0.11);
-    const gap = Math.max(0.75, size * 0.045);
-    const cx = size / 2;
+  function ringGeometry(size2) {
+    const padding = Math.max(1, size2 * 0.045);
+    const outerWidth = Math.max(1.5, size2 * 0.11);
+    const gap = Math.max(0.75, size2 * 0.045);
+    const cx = size2 / 2;
     const outerRadius = cx - padding - outerWidth / 2;
     const middleWidth = outerWidth * 0.92;
     const innerWidth2 = outerWidth * 0.84;
@@ -5684,28 +7336,28 @@ ${timestamp ? `${timestamp}
       { radius: innerRadius, width: innerWidth2 }
     ];
   }
-  function drawQuotaRings(ctx, size, rings, palette = DARK_ICON_PALETTE) {
-    ctx.clearRect(0, 0, size, size);
-    const cx = size / 2;
-    const cy = size / 2;
-    const geometry = ringGeometry(size);
+  function drawQuotaRings(ctx, size2, rings, palette = DARK_ICON_PALETTE) {
+    ctx.clearRect(0, 0, size2, size2);
+    const cx = size2 / 2;
+    const cy = size2 / 2;
+    const geometry = ringGeometry(size2);
     const values = [rings.outer, rings.middle, rings.inner];
     const colors = [COLORS.outer, COLORS.middle, COLORS.inner];
     geometry.forEach((ring, index2) => {
       drawTrack(ctx, cx, cy, ring.radius, ring.width, palette.track);
       drawArc(ctx, cx, cy, ring.radius, ring.width, colors[index2], values[index2]);
     });
-    if (size >= 32 && rings.center) {
+    if (size2 >= 32 && rings.center) {
       ctx.fillStyle = palette.center;
       const symbolic = rings.center === "…" || rings.center === "—" || rings.center === "!";
-      ctx.font = `600 ${Math.round(size * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
+      ctx.font = `600 ${Math.round(size2 * (symbolic ? 0.42 : 0.34))}px system-ui, sans-serif`;
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.fillText(rings.center, cx, cy + size * 0.02);
+      ctx.fillText(rings.center, cx, cy + size2 * 0.02);
     }
   }
   function paintQuotaCanvas(canvas, rings, palette = DARK_ICON_PALETTE) {
-    const size = canvas.width || 32;
+    const size2 = canvas.width || 32;
     let ctx = null;
     try {
       ctx = canvas.getContext("2d");
@@ -5713,7 +7365,7 @@ ${timestamp ? `${timestamp}
       return;
     }
     if (!ctx) return;
-    drawQuotaRings(ctx, size, rings, palette);
+    drawQuotaRings(ctx, size2, rings, palette);
   }
   function drawTrack(ctx, cx, cy, radius, width, color) {
     ctx.beginPath();
@@ -6024,14 +7676,14 @@ ${timestamp ? `${timestamp}
   }
   function placeTooltip(tooltip, cellRect) {
     const gutter = 8;
-    const offset = 6;
+    const offset3 = 6;
     const tooltipRect = tooltip.getBoundingClientRect();
     const maximumLeft = Math.max(gutter, window.innerWidth - gutter - tooltipRect.width);
-    const left = clamp(cellRect.left + (cellRect.width - tooltipRect.width) / 2, gutter, maximumLeft);
-    const above = cellRect.top - tooltipRect.height - offset;
-    const below = cellRect.bottom + offset;
+    const left = clamp2(cellRect.left + (cellRect.width - tooltipRect.width) / 2, gutter, maximumLeft);
+    const above = cellRect.top - tooltipRect.height - offset3;
+    const below = cellRect.bottom + offset3;
     const maximumTop = Math.max(gutter, window.innerHeight - gutter - tooltipRect.height);
-    const top = clamp(above >= gutter ? above : below, gutter, maximumTop);
+    const top = clamp2(above >= gutter ? above : below, gutter, maximumTop);
     tooltip.style.left = `${left}px`;
     tooltip.style.top = `${top}px`;
   }
@@ -6044,7 +7696,7 @@ ${timestamp ? `${timestamp}
   function pad2(value) {
     return String(value).padStart(2, "0");
   }
-  function clamp(value, minimum, maximum) {
+  function clamp2(value, minimum, maximum) {
     return Math.min(Math.max(value, minimum), maximum);
   }
 
@@ -6647,7 +8299,7 @@ ${timestamp ? `${timestamp}
       if (!this.popover) return;
       const buttonRect = this.button.getBoundingClientRect();
       const width = Math.min(POPOVER_WIDTH, Math.max(0, window.innerWidth - VIEWPORT_GUTTER * 2));
-      const left = clamp2(
+      const left = clamp3(
         buttonRect.right - width,
         VIEWPORT_GUTTER,
         Math.max(VIEWPORT_GUTTER, window.innerWidth - VIEWPORT_GUTTER - width)
@@ -6664,7 +8316,7 @@ ${timestamp ? `${timestamp}
       this.popover.style.top = `${top}px`;
     }
   };
-  function clamp2(value, minimum, maximum) {
+  function clamp3(value, minimum, maximum) {
     return Math.min(Math.max(value, minimum), maximum);
   }
   function note(text, kind) {
@@ -6688,6 +8340,52 @@ ${timestamp ? `${timestamp}
     return svg2;
   }
 
+  // src/ui/toolbarPlacement.ts
+  var TOOLBAR_GAP_PX = 8;
+  var TOOLBAR_VIEWPORT_PADDING_PX = 8;
+  function rectanglesOverlap(left, right) {
+    return left.left < right.right && left.right > right.left && left.top < right.bottom && left.bottom > right.top;
+  }
+  function boxFromRect(rect) {
+    return {
+      left: rect.left,
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      width: rect.width,
+      height: rect.height
+    };
+  }
+  function boxAt(x, y, width, height) {
+    return { left: x, top: y, right: x + width, bottom: y + height, width, height };
+  }
+  function placementAllowed(toolbar, obstacles, viewport) {
+    if (toolbar.width <= 0 || toolbar.height <= 0) return false;
+    if (toolbar.left < -0.5 || toolbar.top < -0.5) return false;
+    if (toolbar.right > viewport.width + 0.5 || toolbar.bottom > viewport.height + 0.5) return false;
+    return !obstacles.some((item) => rectanglesOverlap(toolbar, item.rect));
+  }
+  async function computeToolbarPosition(reference, floating) {
+    const first = await computePosition2(reference, floating, {
+      placement: "left",
+      strategy: "fixed",
+      middleware: [
+        offset2(TOOLBAR_GAP_PX),
+        flip2({ fallbackPlacements: ["bottom-end"] }),
+        shift2({ padding: TOOLBAR_VIEWPORT_PADDING_PX })
+      ]
+    });
+    return { x: first.x, y: first.y, placement: first.placement };
+  }
+  async function computeFallbackToolbarPosition(reference, floating) {
+    const next = await computePosition2(reference, floating, {
+      placement: "bottom-end",
+      strategy: "fixed",
+      middleware: [offset2(TOOLBAR_GAP_PX), shift2({ padding: TOOLBAR_VIEWPORT_PADDING_PX })]
+    });
+    return { x: next.x, y: next.y, placement: next.placement };
+  }
+
   // src/ui/toolbar.ts
   var YadaToolbar = class {
     constructor(sync = null) {
@@ -6700,6 +8398,12 @@ ${timestamp ? `${timestamp}
     copyBusy = false;
     placementObserver = null;
     placementTimer = 0;
+    stopAutoUpdate = null;
+    anchorSizeObserver = null;
+    layoutToken = 0;
+    lastLeft = null;
+    lastTop = null;
+    visibilityListening = false;
     prompts = null;
     quota = null;
     observedTarget = null;
@@ -6726,7 +8430,7 @@ ${timestamp ? `${timestamp}
       this.host = document.createElement("div");
       this.host.id = YADA_TOOLBAR_HOST_ID;
       this.host.dataset.yadaRoot = "true";
-      this.host.dataset.placement = "fixed";
+      this.host.dataset.layout = "pending";
       this.host.dataset.visible = "false";
       this.host.setAttribute("data-yada-theme", detectYadaTheme());
       this.shadow = this.host.attachShadow({ mode: "open" });
@@ -6739,7 +8443,10 @@ ${timestamp ? `${timestamp}
       this.disposeTheme = observeYadaTheme((theme) => {
         this.host?.setAttribute("data-yada-theme", theme);
       });
-      window.addEventListener("resize", this.handleViewportChange, { passive: true });
+      if (!this.visibilityListening) {
+        document.addEventListener("visibilitychange", this.onVisibility);
+        this.visibilityListening = true;
+      }
       this.ensurePlacement();
     }
     attachQuotaIndicator(options = {}) {
@@ -6769,23 +8476,30 @@ ${timestamp ? `${timestamp}
     }
     setVisible(visible) {
       this.host?.setAttribute("data-visible", visible ? "true" : "false");
+      if (visible) this.ensurePlacement();
+      else {
+        this.stopPositioning();
+        this.host?.setAttribute("data-layout", "pending");
+      }
     }
     ensurePlacement() {
       if (!this.host) return;
-      const target = findHeaderActions();
-      if (target) {
-        if (this.host.parentElement !== target) {
-          target.insertBefore(this.host, target.firstElementChild);
-        }
-        this.host.dataset.placement = "inline";
-        this.observeHeader(target);
-        return;
-      }
       if (this.host.parentElement !== document.documentElement) {
         document.documentElement.append(this.host);
       }
-      this.host.dataset.placement = "fixed";
-      this.observeHeader(null);
+      if (this.host.getAttribute("data-visible") === "false" || document.visibilityState !== "visible") {
+        this.stopPositioning();
+        return;
+      }
+      const group = findNativeActionGroup();
+      if (!group) {
+        this.host.dataset.layout = "pending";
+        this.stopPositioning();
+        this.observeLayout(null);
+        return;
+      }
+      this.observeLayout(group.container);
+      this.startPositioning(group.container);
     }
     dispose() {
       this.quota?.dispose();
@@ -6793,12 +8507,16 @@ ${timestamp ? `${timestamp}
       this.prompts?.dispose();
       window.clearTimeout(this.copyResetTimer);
       window.clearTimeout(this.placementTimer);
+      this.stopPositioning();
       this.placementObserver?.disconnect();
       this.placementObserver = null;
       this.observedTarget = null;
       this.observedParent = null;
       this.disposeTheme?.();
-      window.removeEventListener("resize", this.handleViewportChange);
+      if (this.visibilityListening) {
+        document.removeEventListener("visibilitychange", this.onVisibility);
+        this.visibilityListening = false;
+      }
       this.host?.remove();
       this.host = null;
       this.shadow = null;
@@ -6817,7 +8535,10 @@ ${timestamp ? `${timestamp}
           display: inline-flex;
           align-items: center;
           gap: 5px;
-          position: relative;
+          position: fixed;
+          left: 0;
+          top: 0;
+          width: max-content;
           z-index: 2147483500;
           color-scheme: light;
           font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -6828,14 +8549,9 @@ ${timestamp ? `${timestamp}
           display: none;
         }
 
-        :host([data-placement="fixed"]) {
-          position: fixed;
-          top: 16px;
-          right: 88px;
-        }
-
-        :host([data-placement="inline"]) {
-          margin-right: 2px;
+        :host([data-layout="pending"]) {
+          visibility: hidden;
+          pointer-events: none;
         }
 
         :host([data-yada-theme="dark"]) {
@@ -6969,51 +8685,118 @@ ${timestamp ? `${timestamp}
         void this.prompts.toggle();
       }
     };
-    observeHeader(target) {
-      const parent = target?.parentElement ?? null;
+    observeLayout(target) {
+      const parent = target?.parentElement ?? document.body;
       if (target === this.observedTarget && parent === this.observedParent) return;
       this.placementObserver?.disconnect();
       this.placementObserver = null;
       this.observedTarget = target;
       this.observedParent = parent;
-      if (!target) return;
       this.placementObserver = new MutationObserver(() => this.schedulePlacement());
-      this.placementObserver.observe(target, { childList: true });
-      if (parent) this.placementObserver.observe(parent, { childList: true });
+      if (target) {
+        this.placementObserver.observe(target, { childList: true, subtree: true });
+        this.placementObserver.observe(parent, { childList: true });
+        return;
+      }
+      this.placementObserver.observe(document.body, { childList: true });
+    }
+    startPositioning(reference) {
+      if (!this.host) return;
+      this.stopPositioning();
+      const token = ++this.layoutToken;
+      const host = this.host;
+      const update = () => {
+        void this.applyPosition(token, reference, host);
+      };
+      const attachAutoUpdate = () => {
+        if (this.layoutToken !== token || this.host !== host) return;
+        this.stopAutoUpdate?.();
+        this.stopAutoUpdate = autoUpdate(reference, host, update, { animationFrame: false, layoutShift: false });
+      };
+      const rect = reference.getBoundingClientRect();
+      if (rect.width > 0 && rect.height > 0) {
+        attachAutoUpdate();
+        return;
+      }
+      update();
+      if (typeof ResizeObserver === "undefined") return;
+      this.anchorSizeObserver = new ResizeObserver(() => {
+        const next = reference.getBoundingClientRect();
+        if (next.width <= 0 || next.height <= 0) return;
+        this.anchorSizeObserver?.disconnect();
+        this.anchorSizeObserver = null;
+        attachAutoUpdate();
+      });
+      this.anchorSizeObserver.observe(reference);
+    }
+    stopPositioning() {
+      this.layoutToken += 1;
+      this.stopAutoUpdate?.();
+      this.stopAutoUpdate = null;
+      this.anchorSizeObserver?.disconnect();
+      this.anchorSizeObserver = null;
+      this.lastLeft = null;
+      this.lastTop = null;
+    }
+    async applyPosition(token, reference, host) {
+      if (token !== this.layoutToken || !reference.isConnected || host !== this.host) return;
+      const group = findNativeActionGroup();
+      if (!group || group.container !== reference) {
+        this.schedulePlacement();
+        return;
+      }
+      const candidates = [
+        await computeToolbarPosition(reference, host),
+        await computeFallbackToolbarPosition(reference, host)
+      ];
+      if (token !== this.layoutToken) return;
+      const width = host.offsetWidth;
+      const height = host.offsetHeight;
+      const obstacles = [
+        ...nativeActionObstacles(group).map((element) => ({ rect: boxFromRect(element.getBoundingClientRect()), kind: "native-action" })),
+        ...contentObstacles()
+      ];
+      const viewport = { width: innerWidth, height: innerHeight };
+      const chosen = candidates.find((candidate) => {
+        if (!candidate || !Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) return false;
+        return placementAllowed(boxAt(candidate.x, candidate.y, width, height), obstacles, viewport);
+      });
+      if (!chosen) {
+        host.dataset.layout = "pending";
+        return;
+      }
+      if (this.lastLeft === chosen.x && this.lastTop === chosen.y) {
+        host.dataset.layout = "ready";
+        return;
+      }
+      this.lastLeft = chosen.x;
+      this.lastTop = chosen.y;
+      host.style.left = `${chosen.x}px`;
+      host.style.top = `${chosen.y}px`;
+      host.dataset.layout = "ready";
     }
     schedulePlacement() {
       window.clearTimeout(this.placementTimer);
       this.placementTimer = window.setTimeout(() => this.ensurePlacement(), 180);
     }
-    handleViewportChange = () => {
+    onVisibility = () => {
+      if (document.visibilityState !== "visible") {
+        this.stopPositioning();
+        return;
+      }
       this.ensurePlacement();
     };
     query(selector) {
       return this.shadow?.querySelector(selector) ?? null;
     }
   };
-  function findHeaderActions() {
-    const direct = document.querySelector("#page-header #conversation-header-actions");
-    if (direct) return direct;
-    const candidates = [
-      "#conversation-header-actions",
-      '[data-testid="conversation-header-actions"]',
-      'header [aria-label*="Share" i]',
-      'header [data-testid*="share" i]',
-      "main ~ div header button"
-    ];
-    for (const selector of candidates) {
-      const element = document.querySelector(selector);
-      const parent = element?.parentElement;
-      if (parent && isUsableHeaderTarget(parent)) return parent;
-    }
-    const header = document.querySelector("header");
-    const button = header?.querySelector('button, [role="button"]');
-    return button?.parentElement && isUsableHeaderTarget(button.parentElement) ? button.parentElement : null;
-  }
-  function isUsableHeaderTarget(element) {
-    const rect = element.getBoundingClientRect();
-    return rect.width > 0 && rect.height > 0 && rect.top < 120 && rect.right > window.innerWidth * 0.45;
+  function contentObstacles() {
+    const surface = conversationSurface();
+    const first = surface?.querySelector("article, [data-message-id], [data-turn]");
+    if (!first) return [];
+    const rect = first.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return [];
+    return [{ rect: boxFromRect(rect), kind: "content" }];
   }
 
   // src/content.ts
@@ -7083,6 +8866,11 @@ ${timestamp ? `${timestamp}
     }
     ensureToolbar() {
       if (this.toolbar?.isMounted()) return;
+      if (this.toolbar) {
+        this.toolbar.setConversationSync(this.sync);
+        this.toolbar.mountShell();
+        return;
+      }
       const started = startIsolated(() => {
         const toolbar = new YadaToolbar();
         toolbar.setConversationSync(this.sync);
@@ -7218,7 +9006,7 @@ ${timestamp ? `${timestamp}
     }
     maintenanceBlocked() {
       if (Date.now() - this.lastUserInput < USER_IDLE_MS) return true;
-      if (document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')) return true;
+      if (isGenerating()) return true;
       if (this.boot?.isPending() || this.boot?.isActive()) return true;
       if (this.sync?.isReading()) return true;
       return this.hydrator?.isMaintenanceBlocked() === true;

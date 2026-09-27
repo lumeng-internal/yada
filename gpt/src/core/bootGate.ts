@@ -5,6 +5,7 @@ import {
   record,
   type NativeTransportState
 } from "../nativeNavigator/protocol";
+import { isGenerating } from "../platform/pageFacts";
 
 export const BOOT_FALLBACK_MS = 15_000;
 const IDLE_TIMEOUT_MS = 2_000;
@@ -165,7 +166,7 @@ export class ConversationBootGate {
 
   private canStart(): boolean {
     if (!this.conversationId || this.sync.getActiveConversationId() !== this.conversationId) return false;
-    if (document.visibilityState === "hidden" || isAssistantStreaming()) return false;
+    if (document.visibilityState === "hidden" || isGenerating()) return false;
     if (this.sync.hasUsableFullSnapshot(this.conversationId)) return false;
     return true;
   }
@@ -198,8 +199,4 @@ function historyTransferDone(entry: PerformanceEntry, conversationId: string): b
   } catch {
     return false;
   }
-}
-
-function isAssistantStreaming(): boolean {
-  return Boolean(document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming'));
 }

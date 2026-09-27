@@ -1,25 +1,41 @@
+import {
+  conversationIdFromUrl as conversationIdFromLocation,
+  isChatGptConversationUrl,
+  isChatGptPageUrl
+} from "./conversationUrl";
+import { conversationDomId } from "./pageFacts";
+
+export {
+  conversationIdFromUrl as conversationIdFromLocation,
+  isChatGptConversationUrl,
+  isChatGptPageUrl
+} from "./conversationUrl";
+export {
+  collectCompletedAssistantIds,
+  collectPageMessages,
+  conversationScroller,
+  conversationSurface,
+  exposePaginationSentinel,
+  findNativeActionGroup,
+  isGenerating,
+  readGenerationState,
+  readOfficialNavigator,
+  readingPositionDrift,
+  safeDesktopLayout,
+  saveReadingPosition,
+  stableLayoutAvailable,
+  type NativePromptState,
+  type ReadingPosition
+} from "./pageFacts";
+
 export function isChatGptPage(url = window.location.href): boolean {
-  try {
-    return new URL(url).hostname === "chatgpt.com";
-  } catch {
-    return false;
-  }
+  return isChatGptPageUrl(url);
 }
 
 export function getConversationIdFromUrl(url = window.location.href): string | null {
-  try {
-    const parsed = new URL(url);
-    return parsed.pathname.match(/^\/c\/([a-z0-9-]+)/i)?.[1]
-      ?? parsed.pathname.match(/^\/g\/[a-z0-9-]+\/c\/([a-z0-9-]+)/i)?.[1]
-      ?? document.querySelector<HTMLElement>("[data-conversation-id]")?.dataset.conversationId
-      ?? null;
-  } catch {
-    return url.match(/\/c\/([a-z0-9-]+)/i)?.[1]
-      ?? document.querySelector<HTMLElement>("[data-conversation-id]")?.dataset.conversationId
-      ?? null;
-  }
+  return conversationIdFromLocation(url) ?? conversationDomId();
 }
 
 export function isChatGptConversationPage(url = window.location.href): boolean {
-  return isChatGptPage(url) && getConversationIdFromUrl(url) !== null;
+  return isChatGptConversationUrl(url) || (isChatGptPage(url) && getConversationIdFromUrl(url) !== null);
 }

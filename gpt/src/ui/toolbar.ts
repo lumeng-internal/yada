@@ -1,12 +1,21 @@
+import { autoUpdate } from "@floating-ui/dom";
 import type { ConversationSync } from "../core/conversationSync";
 import { PromptPanel } from "../prompts/panel";
 import { writeTextToClipboard } from "../export/clipboard";
 import { formatTurnsAsMarkdown } from "../export/markdownFormatter";
 import { getConversationIdFromUrl } from "../platform/chatgptAdapter";
+import { conversationSurface, findNativeActionGroup, nativeActionObstacles } from "../platform/pageFacts";
 import { YADA_ACCENT, YADA_ACCENT_SOFT, YADA_TOOLBAR_HOST_ID } from "../styles";
 import { paintQuotaCanvas } from "../quota/iconRenderer";
 import { QuotaIndicator, type QuotaRefreshHandler, type QuotaStateSender } from "./quotaIndicator";
 import { detectYadaTheme, observeYadaTheme } from "./theme";
+import {
+  boxAt,
+  boxFromRect,
+  computeFallbackToolbarPosition,
+  computeToolbarPosition,
+  placementAllowed
+} from "./toolbarPlacement";
 
 type CopyState = "idle" | "pending" | "success" | "error" | "empty";
 
@@ -18,6 +27,12 @@ export class YadaToolbar {
   private copyBusy = false;
   private placementObserver: MutationObserver | null = null;
   private placementTimer = 0;
+  private stopAutoUpdate: (() => void) | null = null;
+  private anchorSizeObserver: ResizeObserver | null = null;
+  private layoutToken = 0;
+  private lastLeft: number | null = null;
+  private lastTop: number | null = null;
+  private visibilityListening = false;
 
   private prompts: PromptPanel | null = null;
   private quota: QuotaIndicator | null = null;
@@ -51,7 +66,7 @@ export class YadaToolbar {
     this.host = document.createElement("div");
     this.host.id = YADA_TOOLBAR_HOST_ID;
     this.host.dataset.yadaRoot = "true";
-    this.host.dataset.placement = "fixed";
+    this.host.dataset.layout = "pending";
     this.host.dataset.visible = "false";
     this.host.setAttribute("data-yada-theme", detectYadaTheme());
     this.shadow = this.host.attachShadow({ mode: "open" });
@@ -67,8 +82,10 @@ export class YadaToolbar {
     this.disposeTheme = observeYadaTheme((theme) => {
       this.host?.setAttribute("data-yada-theme", theme);
     });
-
-    window.addEventListener("resize", this.handleViewportChange, { passive: true });
+    if (!this.visibilityListening) {
+      document.addEventListener("visibilitychange", this.onVisibility);
+      this.visibilityListening = true;
+    }
     this.ensurePlacement();
   }
 
@@ -103,25 +120,31 @@ export class YadaToolbar {
 
   setVisible(visible: boolean): void {
     this.host?.setAttribute("data-visible", visible ? "true" : "false");
+    if (visible) this.ensurePlacement();
+    else {
+      this.stopPositioning();
+      this.host?.setAttribute("data-layout", "pending");
+    }
   }
 
   ensurePlacement(): void {
     if (!this.host) return;
-    const target = findHeaderActions();
-    if (target) {
-      if (this.host.parentElement !== target) {
-        target.insertBefore(this.host, target.firstElementChild);
-      }
-      this.host.dataset.placement = "inline";
-      this.observeHeader(target);
-      return;
-    }
-
     if (this.host.parentElement !== document.documentElement) {
       document.documentElement.append(this.host);
     }
-    this.host.dataset.placement = "fixed";
-    this.observeHeader(null);
+    if (this.host.getAttribute("data-visible") === "false" || document.visibilityState !== "visible") {
+      this.stopPositioning();
+      return;
+    }
+    const group = findNativeActionGroup();
+    if (!group) {
+      this.host.dataset.layout = "pending";
+      this.stopPositioning();
+      this.observeLayout(null);
+      return;
+    }
+    this.observeLayout(group.container);
+    this.startPositioning(group.container);
   }
 
   dispose(): void {
@@ -130,12 +153,16 @@ export class YadaToolbar {
     this.prompts?.dispose();
     window.clearTimeout(this.copyResetTimer);
     window.clearTimeout(this.placementTimer);
+    this.stopPositioning();
     this.placementObserver?.disconnect();
     this.placementObserver = null;
     this.observedTarget = null;
     this.observedParent = null;
     this.disposeTheme?.();
-    window.removeEventListener("resize", this.handleViewportChange);
+    if (this.visibilityListening) {
+      document.removeEventListener("visibilitychange", this.onVisibility);
+      this.visibilityListening = false;
+    }
     this.host?.remove();
     this.host = null;
     this.shadow = null;
@@ -155,7 +182,10 @@ export class YadaToolbar {
           display: inline-flex;
           align-items: center;
           gap: 5px;
-          position: relative;
+          position: fixed;
+          left: 0;
+          top: 0;
+          width: max-content;
           z-index: 2147483500;
           color-scheme: light;
           font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -166,14 +196,9 @@ export class YadaToolbar {
           display: none;
         }
 
-        :host([data-placement="fixed"]) {
-          position: fixed;
-          top: 16px;
-          right: 88px;
-        }
-
-        :host([data-placement="inline"]) {
-          margin-right: 2px;
+        :host([data-layout="pending"]) {
+          visibility: hidden;
+          pointer-events: none;
         }
 
         :host([data-yada-theme="dark"]) {
@@ -315,17 +340,98 @@ export class YadaToolbar {
     }
   };
 
-  private observeHeader(target: HTMLElement | null): void {
-    const parent = target?.parentElement ?? null;
+  private observeLayout(target: HTMLElement | null): void {
+    const parent = target?.parentElement ?? document.body;
     if (target === this.observedTarget && parent === this.observedParent) return;
     this.placementObserver?.disconnect();
     this.placementObserver = null;
     this.observedTarget = target;
     this.observedParent = parent;
-    if (!target) return;
     this.placementObserver = new MutationObserver(() => this.schedulePlacement());
-    this.placementObserver.observe(target, { childList: true });
-    if (parent) this.placementObserver.observe(parent, { childList: true });
+    if (target) {
+      this.placementObserver.observe(target, { childList: true, subtree: true });
+      this.placementObserver.observe(parent, { childList: true });
+      return;
+    }
+    this.placementObserver.observe(document.body, { childList: true });
+  }
+
+  private startPositioning(reference: HTMLElement): void {
+    if (!this.host) return;
+    this.stopPositioning();
+    const token = ++this.layoutToken;
+    const host = this.host;
+    const update = (): void => {
+      void this.applyPosition(token, reference, host);
+    };
+    const attachAutoUpdate = (): void => {
+      if (this.layoutToken !== token || this.host !== host) return;
+      this.stopAutoUpdate?.();
+      this.stopAutoUpdate = autoUpdate(reference, host, update, { animationFrame: false, layoutShift: false });
+    };
+    const rect = reference.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) {
+      attachAutoUpdate();
+      return;
+    }
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    this.anchorSizeObserver = new ResizeObserver(() => {
+      const next = reference.getBoundingClientRect();
+      if (next.width <= 0 || next.height <= 0) return;
+      this.anchorSizeObserver?.disconnect();
+      this.anchorSizeObserver = null;
+      attachAutoUpdate();
+    });
+    this.anchorSizeObserver.observe(reference);
+  }
+
+  private stopPositioning(): void {
+    this.layoutToken += 1;
+    this.stopAutoUpdate?.();
+    this.stopAutoUpdate = null;
+    this.anchorSizeObserver?.disconnect();
+    this.anchorSizeObserver = null;
+    this.lastLeft = null;
+    this.lastTop = null;
+  }
+
+  private async applyPosition(token: number, reference: HTMLElement, host: HTMLDivElement): Promise<void> {
+    if (token !== this.layoutToken || !reference.isConnected || host !== this.host) return;
+    const group = findNativeActionGroup();
+    if (!group || group.container !== reference) {
+      this.schedulePlacement();
+      return;
+    }
+    const candidates = [
+      await computeToolbarPosition(reference, host),
+      await computeFallbackToolbarPosition(reference, host)
+    ];
+    if (token !== this.layoutToken) return;
+    const width = host.offsetWidth;
+    const height = host.offsetHeight;
+    const obstacles = [
+      ...nativeActionObstacles(group).map((element) => ({ rect: boxFromRect(element.getBoundingClientRect()), kind: "native-action" as const })),
+      ...contentObstacles()
+    ];
+    const viewport = { width: innerWidth, height: innerHeight };
+    const chosen = candidates.find((candidate) => {
+      if (!candidate || !Number.isFinite(candidate.x) || !Number.isFinite(candidate.y)) return false;
+      return placementAllowed(boxAt(candidate.x, candidate.y, width, height), obstacles, viewport);
+    });
+    if (!chosen) {
+      host.dataset.layout = "pending";
+      return;
+    }
+    if (this.lastLeft === chosen.x && this.lastTop === chosen.y) {
+      host.dataset.layout = "ready";
+      return;
+    }
+    this.lastLeft = chosen.x;
+    this.lastTop = chosen.y;
+    host.style.left = `${chosen.x}px`;
+    host.style.top = `${chosen.y}px`;
+    host.dataset.layout = "ready";
   }
 
   private schedulePlacement(): void {
@@ -333,7 +439,11 @@ export class YadaToolbar {
     this.placementTimer = window.setTimeout(() => this.ensurePlacement(), 180);
   }
 
-  private readonly handleViewportChange = (): void => {
+  private readonly onVisibility = (): void => {
+    if (document.visibilityState !== "visible") {
+      this.stopPositioning();
+      return;
+    }
     this.ensurePlacement();
   };
 
@@ -342,30 +452,11 @@ export class YadaToolbar {
   }
 }
 
-function findHeaderActions(): HTMLElement | null {
-  const direct = document.querySelector<HTMLElement>("#page-header #conversation-header-actions");
-  if (direct) return direct;
-
-  const candidates = [
-    "#conversation-header-actions",
-    '[data-testid="conversation-header-actions"]',
-    'header [aria-label*="Share" i]',
-    'header [data-testid*="share" i]',
-    'main ~ div header button'
-  ];
-
-  for (const selector of candidates) {
-    const element = document.querySelector<HTMLElement>(selector);
-    const parent = element?.parentElement;
-    if (parent && isUsableHeaderTarget(parent)) return parent;
-  }
-
-  const header = document.querySelector<HTMLElement>("header");
-  const button = header?.querySelector<HTMLElement>('button, [role="button"]');
-  return button?.parentElement && isUsableHeaderTarget(button.parentElement) ? button.parentElement : null;
-}
-
-function isUsableHeaderTarget(element: HTMLElement): boolean {
-  const rect = element.getBoundingClientRect();
-  return rect.width > 0 && rect.height > 0 && rect.top < 120 && rect.right > window.innerWidth * 0.45;
+function contentObstacles(): Array<{ rect: ReturnType<typeof boxFromRect>; kind: "content" }> {
+  const surface = conversationSurface();
+  const first = surface?.querySelector<HTMLElement>("article, [data-message-id], [data-turn]");
+  if (!first) return [];
+  const rect = first.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return [];
+  return [{ rect: boxFromRect(rect), kind: "content" }];
 }

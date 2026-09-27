@@ -1,6 +1,6 @@
 {
   "name": "chatgpt-yada",
-  "version": "4.1.4",
+  "version": "4.1.5",
   "private": true,
   "license": "AGPL-3.0-only",
   "description": "Restores ChatGPT's native long-conversation navigator, with copy-all, prompts, and local Pro quota estimates.",
@@ -23,6 +23,7 @@
     "vitest": "^3.2.4"
   },
   "dependencies": {
+    "@floating-ui/dom": "1.8.0",
     "sortablejs": "1.15.6"
   }
 }

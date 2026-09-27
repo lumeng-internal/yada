@@ -1,5 +1,16 @@
 "use strict";
 (() => {
+  // src/platform/conversationUrl.ts
+  function conversationIdFromUrl(input) {
+    try {
+      const parts = new URL(input).pathname.split("/").filter(Boolean);
+      const marker = parts.findIndex((part) => part.toLowerCase() === "c");
+      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
+    } catch {
+      return null;
+    }
+  }
+
   // src/nativeNavigator/protocol.ts
   var NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
   var MIN_HISTORY_TURNS = 100;
@@ -29,14 +40,8 @@
   function identifier(value) {
     return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : null;
   }
-  function conversationIdFromUrl(input) {
-    try {
-      const parts = new URL(input).pathname.split("/").filter(Boolean);
-      const marker = parts.indexOf("c");
-      return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]) ? parts[marker + 1] : null;
-    } catch {
-      return null;
-    }
+  function conversationIdFromUrl2(input) {
+    return conversationIdFromUrl(input);
   }
   function isMessageDeepLink(input = location.href) {
     try {
@@ -49,7 +54,7 @@
   function historyRequest(input, init, pageUrl) {
     try {
       const page = new URL(pageUrl);
-      const current = conversationIdFromUrl(page.href);
+      const current = conversationIdFromUrl2(page.href);
       if (page.origin !== "https://chatgpt.com" || !current) return null;
       const request = typeof Request !== "undefined" && input instanceof Request ? input : null;
       if ((init?.method ?? request?.method ?? "GET").toUpperCase() !== "GET") return null;
@@ -152,7 +157,7 @@
   if (!runningVitest) installNativeHistoryHook(window);
   function install(target) {
     const nativeFetch = target.fetch;
-    let transport = emptyTransportState(conversationIdFromUrl(target.location.href));
+    let transport = emptyTransportState(conversationIdFromUrl2(target.location.href));
     let lease = emptyPrepareLease();
     let pendingRequests = 0;
     const broadcast = () => {
@@ -178,7 +183,7 @@
       if (closePrepare()) broadcast();
     };
     const synchronizeRoute = () => {
-      const current = conversationIdFromUrl(target.location.href);
+      const current = conversationIdFromUrl2(target.location.href);
       if (current === transport.conversationId) return;
       closePrepare();
       pendingRequests = 0;

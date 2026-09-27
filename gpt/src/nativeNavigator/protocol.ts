@@ -1,3 +1,5 @@
+import { conversationIdFromUrl as conversationIdFromLocation } from "../platform/conversationUrl";
+
 export const NATIVE_NAV_CHANNEL = "chatgpt-yada:native-nav:v1";
 export const MIN_HISTORY_TURNS = 100;
 export const PREPARE_LEASE_MS = 10_000;
@@ -77,15 +79,7 @@ export function identifier(value: unknown): string | null {
 }
 
 export function conversationIdFromUrl(input: string): string | null {
-  try {
-    const parts = new URL(input).pathname.split("/").filter(Boolean);
-    const marker = parts.indexOf("c");
-    return marker >= 0 && marker + 1 < parts.length && /^[A-Za-z0-9_-]{1,128}$/.test(parts[marker + 1]!)
-      ? parts[marker + 1]!
-      : null;
-  } catch {
-    return null;
-  }
+  return conversationIdFromLocation(input);
 }
 
 export function isMessageDeepLink(input = location.href): boolean {

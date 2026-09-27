@@ -168,6 +168,60 @@ describe("recent and full conversation demand", () => {
     sync.dispose();
   });
 
+  it("does not reread when a new-structure assistant remounts the same container id", async () => {
+    vi.useFakeTimers();
+    let reads = 0;
+    const sync = new ConversationSync({
+      async readConversation(id) {
+        reads += 1;
+        return snapshotFor(1, id);
+      },
+      readRecentConversation: null
+    });
+    const main = document.createElement("main");
+    const article = document.createElement("article");
+    article.dataset.turnId = "known-turn";
+    article.innerHTML = "<h4>ChatGPT</h4>";
+    main.append(article);
+    document.body.append(main);
+    sync.mountPageObserver(document.body);
+    sync.setActiveConversation("conversation-1");
+    article.remove();
+    main.append(article);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(reads).toBe(0);
+    sync.dispose();
+  });
+
+  it("requests a recent read when stop-button generation ends", async () => {
+    vi.useFakeTimers();
+    const full = await snapshotFor(2);
+    const recent = await snapshotFor(3);
+    recent.coverage = "recent";
+    let recentReads = 0;
+    const sync = new ConversationSync({
+      async readConversation() { return full; },
+      async readRecentConversation() { recentReads += 1; return recent; }
+    });
+    const main = document.createElement("main");
+    const article = document.createElement("article");
+    article.dataset.turnId = "turn-a";
+    article.innerHTML = "<h4>ChatGPT</h4>";
+    const stop = document.createElement("button");
+    stop.dataset.testid = "stop-button";
+    main.append(article, stop);
+    document.body.append(main);
+    sync.mountPageObserver(document.body);
+    sync.setActiveConversation("conversation-1");
+    await sync.requestFull("boot");
+    const merged = waitForTurnCount(sync, 3);
+    stop.remove();
+    await vi.advanceTimersByTimeAsync(300);
+    await merged;
+    expect(recentReads).toBe(1);
+    sync.dispose();
+  });
+
   it("shares one in-flight recent read and trails at most one full", async () => {
     const gate = deferred<void>();
     let recentReads = 0;

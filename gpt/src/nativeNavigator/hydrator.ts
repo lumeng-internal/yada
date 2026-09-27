@@ -1,4 +1,5 @@
 import type { ConversationSync } from "../core/conversationSync";
+import { conversationSurface, isGenerating } from "../platform/pageFacts";
 import {
   exposePaginationSentinel,
   readNativePrompts,
@@ -43,6 +44,8 @@ export type NativeNavigatorDiagnostics = {
   expectedPrompts: number;
   nativeFound: number;
   nativeVisible: number;
+  nativeAvailable: boolean;
+  completeness: ReturnType<typeof officialNavigatorStatus>["completeness"];
   historyRequests: number;
   olderRequests: number;
   requestInFlight: boolean;
@@ -60,14 +63,39 @@ export type NativeNavigatorDiagnostics = {
   readyStableChecks: number;
 };
 
+export function officialNavigatorStatus(
+  native: Pick<NativePromptState, "found" | "visible">,
+  expectedPrompts: number,
+  stableChecks: number
+): {
+  available: boolean;
+  completeness: "unknown" | "matching" | "mismatch";
+  readiness: "waiting" | "incomplete" | "stabilizing" | "ready";
+} {
+  const available = native.found > 0 && native.visible > 0;
+  if (expectedPrompts <= 0) {
+    return { available, completeness: "unknown", readiness: "waiting" };
+  }
+  if (!available || native.found !== expectedPrompts) {
+    return {
+      available,
+      completeness: available ? "mismatch" : "unknown",
+      readiness: "incomplete"
+    };
+  }
+  return {
+    available,
+    completeness: "matching",
+    readiness: stableChecks >= 2 ? "ready" : "stabilizing"
+  };
+}
+
 export function officialNavigatorReadiness(
   native: Pick<NativePromptState, "found" | "visible">,
   expectedPrompts: number,
   stableChecks: number
 ): "waiting" | "incomplete" | "stabilizing" | "ready" {
-  if (expectedPrompts <= 0) return "waiting";
-  if (native.found !== expectedPrompts || native.visible <= 0) return "incomplete";
-  return stableChecks >= 2 ? "ready" : "stabilizing";
+  return officialNavigatorStatus(native, expectedPrompts, stableChecks).readiness;
 }
 
 declare global {
@@ -95,7 +123,8 @@ export class OfficialNavigatorHydrator {
   private heartbeat = 0;
   private operation: AbortController | null = null;
   private timer = 0;
-  private mutations: MutationObserver | null = null;
+  private lightWatch: MutationObserver | null = null;
+  private lightRoot: ParentNode | null = null;
   private unsubscribe: (() => void) | null = null;
   private disposed = false;
   private heavyArmed = false;
@@ -115,9 +144,8 @@ export class OfficialNavigatorHydrator {
         return;
       }
       if (snapshot) this.awaitingSnapshot = false;
-      if (this.phase === "sleeping" || (this.phase === "ready" && changed)) this.wake("snapshot");
-      else if (this.phase !== "ready") this.maybeArmHeavyWork();
-      if (this.heavyArmed && this.phase !== "ready") this.schedule();
+      if ((this.phase === "sleeping" || this.phase === "ready") && changed) this.wake("snapshot");
+      else if (this.phase === "waiting") this.schedule();
       this.publishDiagnostics();
     });
     addEventListener("message", this.onMessage);
@@ -126,7 +154,7 @@ export class OfficialNavigatorHydrator {
   }
 
   resetRoute(): void {
-    this.cancel("route");
+    this.releaseTask("route");
     const current = conversationIdFromUrl(location.href);
     this.state = emptyTransportState(current, this.state.generation);
     this.connected = false;
@@ -135,17 +163,16 @@ export class OfficialNavigatorHydrator {
       : 0;
     this.resetContext("");
     this.awaitingSnapshot = true;
-    this.parkHeavyWork();
     this.setPhase("waiting");
     this.requestState();
   }
 
   isMaintenanceBlocked(): boolean {
-    return this.phase === "preparing" || this.heavyArmed;
+    return this.phase === "preparing" && this.operation != null;
   }
 
   isHeavyWorkArmed(): boolean {
-    return this.heavyArmed && this.mutations != null;
+    return this.heavyArmed;
   }
 
   isParked(): boolean {
@@ -155,10 +182,7 @@ export class OfficialNavigatorHydrator {
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    this.cancel("dispose");
-    clearTimeout(this.timer);
-    this.timer = 0;
-    this.parkHeavyWork();
+    this.releaseTask("dispose");
     this.unsubscribe?.();
     this.unsubscribe = null;
     removeEventListener("message", this.onMessage);
@@ -177,15 +201,14 @@ export class OfficialNavigatorHydrator {
 
     const incomingContext = `${incoming.conversationId ?? ""}:${incoming.generation}`;
     if (incomingContext !== this.context) {
-      this.cancel("context");
+      this.releaseTask("context");
       this.resetContext(incomingContext, incoming.olderRequests);
     }
     const hasNewEvidence = incoming.revision > this.state.revision;
     this.state = incoming;
     this.connected = true;
-    this.maybeArmHeavyWork();
     if (this.phase === "sleeping" && hasNewEvidence) this.wake("transport");
-    else if (this.heavyArmed && this.phase !== "ready" && this.phase !== "stopped") this.schedule();
+    else if (this.phase === "waiting") this.schedule();
     this.publishDiagnostics();
   };
 
@@ -203,6 +226,7 @@ export class OfficialNavigatorHydrator {
   private readonly onVisibility = (): void => {
     if (document.visibilityState === "visible") {
       if (this.phase === "sleeping") this.wake("visible");
+      else if (this.phase === "waiting") this.schedule();
       return;
     }
     if (this.phase === "ready" || this.phase === "stopped") return;
@@ -222,12 +246,18 @@ export class OfficialNavigatorHydrator {
   private async evaluate(): Promise<void> {
     if (this.disposed || this.operation || this.phase === "sleeping" || this.phase === "ready" || this.phase === "stopped") return;
     const native = readNativePrompts();
-    if (this.awaitingSnapshot || !this.connected || !this.state.conversationId || this.expectedPrompts <= 0) {
+    if (this.awaitingSnapshot || !this.connected || !this.state.conversationId) {
       this.resetReadyStability();
+      this.releaseIdle("waiting-context");
       this.setPhase("waiting");
       return;
     }
-    this.maybeArmHeavyWork();
+    if (this.expectedPrompts <= 0) {
+      this.resetReadyStability();
+      this.releaseIdle("waiting-expected");
+      this.setPhase("waiting");
+      return;
+    }
     if (isMessageDeepLink()) {
       this.stop("deep-link");
       return;
@@ -242,11 +272,13 @@ export class OfficialNavigatorHydrator {
       return;
     }
     if (!safeDesktopLayout()) {
+      this.armLightWatch();
       this.setPhase("waiting");
       return;
     }
     const idleFor = performance.now() - this.lastUserInput;
     if (idleFor < RECOVERY_IDLE_MS) {
+      this.armLightWatch();
       this.setPhase("waiting");
       this.schedule(RECOVERY_IDLE_MS - idleFor);
       return;
@@ -255,8 +287,8 @@ export class OfficialNavigatorHydrator {
   }
 
   private checkReady(native: NativePromptState): boolean {
-    const readiness = officialNavigatorReadiness(native, this.expectedPrompts, this.readyStableChecks);
-    if (readiness === "waiting" || readiness === "incomplete") {
+    const status = officialNavigatorStatus(native, this.expectedPrompts, this.readyStableChecks);
+    if (status.readiness === "waiting" || status.readiness === "incomplete") {
       this.resetReadyStability();
       return false;
     }
@@ -273,6 +305,7 @@ export class OfficialNavigatorHydrator {
       this.stableFound = native.found;
       this.readyStableChecks = 1;
       this.stableCheckedAt = now;
+      this.releaseIdle("stabilizing");
       this.setPhase("waiting");
       this.schedule(READY_STABILITY_MS);
       return true;
@@ -280,13 +313,14 @@ export class OfficialNavigatorHydrator {
     if (this.readyStableChecks < 2) {
       const remaining = READY_STABILITY_MS - (now - this.stableCheckedAt);
       if (remaining > 0) {
+        this.releaseIdle("stabilizing");
         this.setPhase("waiting");
         this.schedule(remaining);
         return true;
       }
       this.readyStableChecks = 2;
     }
-    this.parkHeavyWork();
+    this.releaseTask("ready");
     this.setPhase("ready");
     return true;
   }
@@ -296,6 +330,7 @@ export class OfficialNavigatorHydrator {
     const attemptContext = this.context;
     const started = performance.now();
     this.operation = controller;
+    this.armHeavyWork();
     this.setPhase("preparing");
     let outcome: AttemptOutcome;
     try {
@@ -309,6 +344,7 @@ export class OfficialNavigatorHydrator {
         : { kind: "changed" };
     } finally {
       this.stopPrepare();
+      this.parkHeavyWork();
       this.activeMs += Math.max(0, performance.now() - started);
       if (this.operation === controller) this.operation = null;
     }
@@ -331,6 +367,7 @@ export class OfficialNavigatorHydrator {
       }
       this.recoveries += 1;
       this.setPhase("waiting");
+      this.armLightWatch();
       this.schedule(RECOVERY_IDLE_MS);
       return;
     }
@@ -470,7 +507,7 @@ export class OfficialNavigatorHydrator {
   private sleep(reason: string): void {
     if (this.phase === "ready" || this.phase === "stopped") return;
     this.sleepReason = reason;
-    this.parkHeavyWork();
+    this.releaseTask("sleep");
     this.setPhase("sleeping");
   }
 
@@ -479,45 +516,70 @@ export class OfficialNavigatorHydrator {
     this.sleepReason = null;
     this.resetReadyStability();
     this.setPhase("waiting");
-    this.maybeArmHeavyWork();
-    if (this.heavyArmed) this.schedule(0);
+    this.armLightWatch();
+    this.schedule(0);
   }
 
   private stop(reason: string): void {
     this.sleepReason = reason;
-    this.parkHeavyWork();
+    this.releaseTask("stop");
     this.setPhase("stopped");
   }
 
-  private maybeArmHeavyWork(): void {
-    if (this.disposed || this.awaitingSnapshot) return;
+  private releaseIdle(_reason: string): void {
+    this.cancel("release");
+    this.parkHeavyWork();
+    if (this.expectedPrompts > 0 && this.connected && this.phase !== "ready" && this.phase !== "stopped") {
+      this.armLightWatch();
+    } else {
+      this.parkLightWatch();
+    }
+  }
+
+  private releaseTask(_reason: string): void {
+    this.cancel("release");
+    clearTimeout(this.timer);
+    this.timer = 0;
+    this.parkHeavyWork();
+    this.parkLightWatch();
+  }
+
+  private armLightWatch(): void {
+    if (this.disposed || this.awaitingSnapshot || this.expectedPrompts <= 0 || !this.connected) return;
     if (this.phase === "ready" || this.phase === "sleeping" || this.phase === "stopped") return;
-    if (this.expectedPrompts <= 0 || !this.connected) return;
-    this.armHeavyWork();
+    const surface = conversationSurface();
+    const root = surface ?? document.body;
+    if (this.lightWatch && this.lightRoot === root && (!(root instanceof Element) || root.isConnected)) return;
+    this.parkLightWatch();
+    this.lightRoot = root;
+    this.lightWatch = new MutationObserver(() => {
+      if (!surface && conversationSurface()) {
+        this.parkLightWatch();
+        this.armLightWatch();
+      }
+      this.schedule();
+    });
+    this.lightWatch.observe(root, { subtree: Boolean(surface), childList: true });
+  }
+
+  private parkLightWatch(): void {
+    this.lightWatch?.disconnect();
+    this.lightWatch = null;
+    this.lightRoot = null;
   }
 
   private armHeavyWork(): void {
-    if (this.disposed) return;
-    if (!this.heavyArmed) {
-      addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
-      addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
-      addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
-      addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
-      addEventListener("resize", this.onEnvironment, { passive: true });
-      this.heavyArmed = true;
-    }
-    if (!this.mutations) {
-      this.mutations = new MutationObserver(() => this.schedule());
-      this.mutations.observe(document.documentElement, { subtree: true, childList: true });
-    }
+    if (this.disposed || this.heavyArmed) return;
+    addEventListener("wheel", this.onUserInput, { capture: true, passive: true });
+    addEventListener("touchstart", this.onUserInput, { capture: true, passive: true });
+    addEventListener("pointerdown", this.onUserInput, { capture: true, passive: true });
+    addEventListener("keydown", this.onUserInput, { capture: true, passive: true });
+    addEventListener("resize", this.onEnvironment, { passive: true });
+    this.heavyArmed = true;
   }
 
   private parkHeavyWork(): void {
-    clearTimeout(this.timer);
-    this.timer = 0;
     this.stopPrepare();
-    this.mutations?.disconnect();
-    this.mutations = null;
     if (!this.heavyArmed) return;
     removeEventListener("wheel", this.onUserInput, true);
     removeEventListener("touchstart", this.onUserInput, true);
@@ -556,12 +618,15 @@ export class OfficialNavigatorHydrator {
       return;
     }
     const native = readNativePrompts();
+    const status = officialNavigatorStatus(native, this.expectedPrompts, this.readyStableChecks);
     globalThis.__YADA_NATIVE_NAV_DIAGNOSTICS__ = {
       phase: this.phase,
       conversationId: this.state.conversationId,
       expectedPrompts: this.expectedPrompts,
       nativeFound: native.found,
       nativeVisible: native.visible,
+      nativeAvailable: status.available,
+      completeness: status.completeness,
       historyRequests: this.state.historyRequests,
       olderRequests: this.state.olderRequests,
       requestInFlight: this.state.requestInFlight,
@@ -603,7 +668,7 @@ function watchReadingPosition(
       missingFrames = 0;
       onDrift(drift);
     }
-    if ((drift !== null && Math.abs(drift) > 8) || missingFrames > 3 || !stableLayoutAvailable()) {
+    if ((drift !== null && Math.abs(drift) > 8) || missingFrames > 3 || !stableLayoutAvailable() || isGenerating()) {
       issue = "layout-changed";
       onUnsafe();
       return;

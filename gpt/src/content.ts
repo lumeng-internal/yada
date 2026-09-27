@@ -3,6 +3,7 @@ import { ConversationSync } from "./core/conversationSync";
 import { OfficialNavigatorHydrator } from "./nativeNavigator/hydrator";
 import { NATIVE_NAV_CHANNEL, record } from "./nativeNavigator/protocol";
 import { isChatGptConversationPage, isChatGptPage, getConversationIdFromUrl } from "./platform/chatgptAdapter";
+import { isGenerating } from "./platform/pageFacts";
 import { QuotaTracker } from "./quota/tracker";
 import type { QuotaSnapshot } from "./quota/types";
 import { YadaToolbar } from "./ui/toolbar";
@@ -80,6 +81,11 @@ export class ChatGptYadaApp {
 
   private ensureToolbar(): void {
     if (this.toolbar?.isMounted()) return;
+    if (this.toolbar) {
+      this.toolbar.setConversationSync(this.sync);
+      this.toolbar.mountShell();
+      return;
+    }
     const started = startIsolated(() => {
       const toolbar = new YadaToolbar();
       toolbar.setConversationSync(this.sync);
@@ -234,7 +240,7 @@ export class ChatGptYadaApp {
 
   private maintenanceBlocked(): boolean {
     if (Date.now() - this.lastUserInput < USER_IDLE_MS) return true;
-    if (document.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')) return true;
+    if (isGenerating()) return true;
     if (this.boot?.isPending() || this.boot?.isActive()) return true;
     if (this.sync?.isReading()) return true;
     return this.hydrator?.isMaintenanceBlocked() === true;

@@ -1,4 +1,4 @@
-# Third-party notices — ChatGPT Yada 4.1.4
+# Third-party notices — ChatGPT Yada 4.1.5
 
 ## Vibe Bar
 
@@ -35,10 +35,10 @@ Not bundled: Cal-Heatmap npm runtime, D3, Popper, dayjs, Observable Plot, naviga
 ## AI-MarkDone
 
 - Repository: https://github.com/zhaoliangbin42/AI-MarkDone
-- Commit: `d6cc562931607f378c48023420f814de1f7c9d60`
+- Commit used this round: `8269364d7162712d1eb45a27937e00116f8e1ca7`
 - License: MIT
 
-Minimal ChatGPT official Navigator selectors/structure and stable message identity selection are adapted in `src/nativeNavigator/dom.ts`. Reader, bookmarks, annotations, export, Drive, cloud features, other platforms, a custom rail, and private virtualizer logic are not copied.
+Minimal ChatGPT message-identity, generation-evidence, and official Navigator structure clues are adapted in `src/platform/pageFacts.ts`. Reader, bookmarks, annotations, export, Drive, cloud features, other platforms, a custom rail, private virtualizer logic, and the user-initiated empty `?message=` refresh are not copied.
 
 ## GPT Conversation Toolkit
 
@@ -105,6 +105,15 @@ Copyright (c) 2019 All contributors to Sortable
 
 Official default ESM entry (`modular/sortable.esm.js`) supplies handle-only prompt reordering and AutoScroll. No framework wrapper, MultiDrag or Swap is bundled. Type declarations: `@types/sortablejs@1.15.8`, development only.
 
+## Floating UI
+
+- Repository: https://github.com/floating-ui/floating-ui
+- Fixed npm package: `@floating-ui/dom@1.8.0` (package-lock.json records `@floating-ui/core@1.8.0` and `@floating-ui/utils@0.2.12`)
+- License: MIT
+- Copyright (c) 2021-present Floating UI contributors
+
+Used by `src/ui/toolbar.ts` and `src/ui/toolbarPlacement.ts` for `computePosition` and `autoUpdate` only. React/Vue bindings and WXT are not introduced.
+
 ## MIT license text
 
 Copyright (c) 2019 All contributors to Sortable
@@ -115,6 +124,7 @@ Copyright (c) JonasDoesThings
 Copyright (c) cupcakedev
 Copyright (c) 2021 uiw
 Copyright (c) 2012 Tyler Kellen, contributors
+Copyright (c) 2021-present Floating UI contributors
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
 

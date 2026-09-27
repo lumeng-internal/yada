@@ -208,17 +208,18 @@ describe("toolbar and lazy panels", () => {
     toolbar = new YadaToolbar();
     toolbar.mount();
     const host = document.getElementById("chatgpt-yada-toolbar-host")!;
-    expect(host.parentElement).toBe(actions);
+    expect(host.parentElement).toBe(document.documentElement);
     const replacement = document.createElement("div");
     replacement.id = "conversation-header-actions";
     header.replaceChild(replacement, actions);
     await vi.advanceTimersByTimeAsync(200);
-    expect(host.parentElement).toBe(replacement);
+    expect(document.getElementById("chatgpt-yada-toolbar-host")).toBe(host);
+    expect(host.parentElement).toBe(document.documentElement);
     const article = document.createElement("article");
     article.textContent = "stream";
     document.body.append(article);
     await vi.advanceTimersByTimeAsync(200);
-    expect(host.parentElement).toBe(replacement);
+    expect(document.querySelectorAll("#chatgpt-yada-toolbar-host")).toHaveLength(1);
   });
 
   it("creates PromptPanel on first click and detaches document listeners on close", async () => {

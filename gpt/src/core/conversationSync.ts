@@ -1,5 +1,12 @@
 import { abortError, isAbortError, readConversation as readConversationFromApi, readRecentConversation as readRecentFromApi } from "../conversation/readConversation";
 import { mergeRecentSnapshot } from "../conversation/mergeRecent";
+import {
+  collectCompletedAssistantIds,
+  conversationSurface,
+  GENERATION_STOP_SELECTOR,
+  isGenerating,
+  PAGE_IDENTITY_ATTRIBUTES
+} from "../platform/pageFacts";
 import type { ConversationListener, ConversationSnapshot, ReadConversation } from "./types";
 
 export const SIGNAL_INSPECTION_DEBOUNCE_MS = 250;
@@ -31,6 +38,7 @@ export class ConversationSync {
   private fallbackIdle = 0;
   private lastStreamingState = false;
   private readonly seenAssistantMessageIds = new Set<string>();
+  private observerRootHint: ParentNode | null = null;
   private disposed = false;
   private published = 0;
   private readonly readFull: ReadConversation;
@@ -76,7 +84,7 @@ export class ConversationSync {
     this.abortController = null;
     this.activeConversationId = conversationId;
     this.seenAssistantMessageIds.clear();
-    this.lastStreamingState = false;
+    this.lastStreamingState = isGenerating();
     this.fullStale = false;
     this.latestSnapshot = null;
     this.lastError = null;
@@ -115,23 +123,9 @@ export class ConversationSync {
       document.addEventListener("visibilitychange", this.onVisibility);
       this.visibilityListening = true;
     }
-    if (this.observer || typeof MutationObserver === "undefined") return;
-    this.observer = new MutationObserver((records) => {
-      for (const record of records) {
-        if (record.attributeName === "data-is-streaming"
-          && record.target instanceof Element
-          && record.target.getAttribute("data-is-streaming") === "true") {
-          this.lastStreamingState = true;
-        }
-      }
-      this.scheduleSignalInspection();
-    });
-    this.observer.observe(root, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ["data-is-streaming", "data-message-id", "data-message-author-role"]
-    });
+    this.observerRootHint = root;
+    if (typeof MutationObserver === "undefined") return;
+    this.bindObserver();
   }
 
   dispose(): void {
@@ -144,6 +138,7 @@ export class ConversationSync {
     this.desired = null;
     this.observer?.disconnect();
     this.observer = null;
+    this.observerRootHint = null;
     if (this.visibilityListening) {
       document.removeEventListener("visibilitychange", this.onVisibility);
       this.visibilityListening = false;
@@ -241,7 +236,7 @@ export class ConversationSync {
   private publish(snapshot: ConversationSnapshot | null): void {
     this.latestSnapshot = snapshot;
     if (snapshot) {
-      for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+      for (const id of collectCompletedAssistantIds()) this.seenAssistantMessageIds.add(id);
       for (const turn of snapshot.activeTurns) {
         if (turn.assistantMessageId) this.seenAssistantMessageIds.add(turn.assistantMessageId);
       }
@@ -289,25 +284,64 @@ export class ConversationSync {
     this.signalTimer = 0;
   }
 
+  private bindObserver(): void {
+    this.observer?.disconnect();
+    const hinted = this.observerRootHint;
+    const hintConnected = !(hinted instanceof Element) || hinted.isConnected;
+    const surface = conversationSurface(hintConnected && hinted ? hinted : document);
+    const target = (hintConnected ? hinted : null) ?? surface ?? document.documentElement;
+    this.observer = new MutationObserver((records) => {
+      if (target instanceof Element && !target.isConnected) {
+        this.bindObserver();
+        return;
+      }
+      for (const record of records) {
+        if (record.attributeName === "data-is-streaming"
+          && record.target instanceof Element
+          && record.target.getAttribute("data-is-streaming") === "true") {
+          this.lastStreamingState = true;
+        }
+        if (record.attributeName === "data-testid"
+          && record.target instanceof Element
+          && record.target.getAttribute("data-testid") === "stop-button") {
+          this.lastStreamingState = true;
+        }
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.matches(GENERATION_STOP_SELECTOR) || node.querySelector(GENERATION_STOP_SELECTOR)) {
+            this.lastStreamingState = true;
+          }
+        }
+      }
+      this.scheduleSignalInspection();
+    });
+    this.observer.observe(target, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: [...PAGE_IDENTITY_ATTRIBUTES]
+    });
+  }
+
   private seedRenderedAssistants(): void {
-    for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+    for (const id of collectCompletedAssistantIds()) this.seenAssistantMessageIds.add(id);
   }
 
   private inspectPageSignals(): void {
     if (this.disposed || !this.activeConversationId) return;
-    const streaming = isAssistantStreaming();
+    const streaming = isGenerating();
     const wasStreaming = this.lastStreamingState;
     this.lastStreamingState = streaming;
     if (streaming) return;
 
     if (wasStreaming) {
-      for (const id of collectStableAssistantMessageIds()) this.seenAssistantMessageIds.add(id);
+      for (const id of collectCompletedAssistantIds()) this.seenAssistantMessageIds.add(id);
       void this.request(this.liveMode());
       return;
     }
 
     let unseen = false;
-    for (const id of collectStableAssistantMessageIds()) {
+    for (const id of collectCompletedAssistantIds()) {
       if (this.seenAssistantMessageIds.has(id)) continue;
       this.seenAssistantMessageIds.add(id);
       unseen = true;
@@ -322,7 +356,7 @@ export class ConversationSync {
       this.fallbackTimer = 0;
       this.fallbackIdle = 0;
       if (this.disposed || this.generation !== generation || !this.fullStale) return;
-      if (document.visibilityState === "hidden" || isAssistantStreaming()) {
+      if (document.visibilityState === "hidden" || isGenerating()) {
         this.scheduleIdleFull();
         return;
       }
@@ -349,19 +383,3 @@ export class ConversationSync {
 }
 
 export { ConversationSync as ConversationRepository };
-
-function isAssistantStreaming(root: ParentNode = document): boolean {
-  return Boolean(
-    root.querySelector('[data-is-streaming="true"], [data-message-author-role="assistant"].result-streaming')
-  );
-}
-
-function collectStableAssistantMessageIds(root: ParentNode = document): string[] {
-  const ids: string[] = [];
-  for (const node of root.querySelectorAll<HTMLElement>('[data-message-author-role="assistant"][data-message-id]')) {
-    if (node.getAttribute("data-is-streaming") === "true" || node.classList.contains("result-streaming")) continue;
-    const id = node.dataset.messageId;
-    if (id) ids.push(id);
-  }
-  return ids;
-}

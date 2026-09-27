@@ -248,7 +248,8 @@ describe("navigator heavy work waits for prompts", () => {
       quotaOrigin: "chat",
       quotaTemporary: false
     } as ConversationSnapshot);
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
     hydrator.dispose();
   });
 });

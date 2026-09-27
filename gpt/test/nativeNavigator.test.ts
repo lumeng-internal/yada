@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationSync } from "../src/core/conversationSync";
 import type { ConversationSnapshot } from "../src/core/types";
 import { exposePaginationSentinel, readNativePrompts } from "../src/nativeNavigator/dom";
-import { OfficialNavigatorHydrator, officialNavigatorReadiness } from "../src/nativeNavigator/hydrator";
+import { OfficialNavigatorHydrator, officialNavigatorReadiness, officialNavigatorStatus } from "../src/nativeNavigator/hydrator";
 import {
   NATIVE_NAV_CHANNEL,
   PREPARE_HEARTBEAT_MS,
@@ -204,7 +204,8 @@ describe("official Navigator contract", () => {
     await internals.evaluate();
     expect(internals.readyStableChecks).toBe(1);
     expect(internals.phase).not.toBe("ready");
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
     internals.stableCheckedAt -= 301;
     await internals.evaluate();
     expect(internals.readyStableChecks).toBe(2);
@@ -232,6 +233,49 @@ describe("official Navigator contract", () => {
     hydrator.dispose();
   });
 
+  it("does not occupy heavy work or block maintenance while waiting for layout", async () => {
+    vi.useFakeTimers();
+    const hydrator = new OfficialNavigatorHydrator(mockSync(10));
+    hydrator.mount();
+    const internals = hydrator as unknown as {
+      state: ReturnType<typeof emptyTransportState>;
+      connected: boolean;
+      awaitingSnapshot: boolean;
+      evaluate(): Promise<void>;
+      phase: string;
+    };
+    internals.state = emptyTransportState("current", 1);
+    internals.connected = true;
+    internals.awaitingSnapshot = false;
+    await internals.evaluate();
+    expect(internals.phase).toBe("waiting");
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
+    await vi.advanceTimersByTimeAsync(61_000);
+    expect(internals.phase).toBe("waiting");
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
+    hydrator.dispose();
+    expect((hydrator as unknown as { lightWatch: MutationObserver | null }).lightWatch).toBeNull();
+    expect((hydrator as unknown as { heartbeat: number }).heartbeat).toBe(0);
+    expect((hydrator as unknown as { timer: number }).timer).toBe(0);
+  });
+
+  it("does not report complete for 89 expected vs 88 official buttons", () => {
+    expect(officialNavigatorStatus({ found: 88, visible: 88 }, 89, 2)).toEqual({
+      available: true,
+      completeness: "mismatch",
+      readiness: "incomplete"
+    });
+    expect(officialNavigatorReadiness({ found: 88, visible: 88 }, 89, 2)).toBe("incomplete");
+  });
+
+  it("keeps official navigation available when the API count is missing", () => {
+    officialNavigator(8);
+    expect(readNativePrompts()).toMatchObject({ found: 8, available: true });
+    expect(officialNavigatorReadiness({ found: 8, visible: 8 }, 0, 2)).toBe("waiting");
+  });
+
   it("wakes sleeping work on a later same-conversation transport event", () => {
     const hydrator = new OfficialNavigatorHydrator(mockSync(2));
     hydrator.mount();
@@ -252,7 +296,8 @@ describe("official Navigator contract", () => {
       source: window
     }));
     expect(internals.phase).toBe("waiting");
-    expect(hydrator.isHeavyWorkArmed()).toBe(true);
+    expect(hydrator.isHeavyWorkArmed()).toBe(false);
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
     hydrator.dispose();
   });
 
@@ -268,6 +313,7 @@ describe("official Navigator contract", () => {
     visibleBox(scroller, 0);
     const message = document.createElement("div");
     message.dataset.messageAuthorRole = "user";
+    message.dataset.messageId = "u0";
     visibleBox(message, 100);
     const sentinel = document.createElement("div");
     sentinel.dataset.testid = "conversation-pagination-sentinel";
@@ -290,10 +336,13 @@ describe("official Navigator contract", () => {
     internals.connected = true;
     internals.context = "current:1";
     const attempt = internals.launchAttempt();
+    expect(hydrator.isMaintenanceBlocked()).toBe(true);
+    expect(hydrator.isHeavyWorkArmed()).toBe(true);
     await vi.advanceTimersByTimeAsync(12_100);
     await attempt;
     expect(internals.phase).toBe("sleeping");
     expect(internals.sleepReason).toBe("no-host-request");
+    expect(hydrator.isMaintenanceBlocked()).toBe(false);
     expect(hydrator.isHeavyWorkArmed()).toBe(false);
     hydrator.dispose();
   });
@@ -382,6 +431,7 @@ describe("prepare session interruption", () => {
     internals.prepareEnabled = true;
     const controller = new AbortController();
     internals.operation = controller;
+    (hydrator as unknown as { armHeavyWork(): void }).armHeavyWork();
     window.dispatchEvent(new Event("wheel"));
     expect(controller.signal.aborted).toBe(true);
     expect(posted.map((item) => record(item)).some((item) => item?.kind === "prepare" && item.enabled === false)).toBe(true);

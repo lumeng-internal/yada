@@ -40,6 +40,28 @@ describe("toolbar isolation", () => {
     globalThis.OffscreenCanvas = Original;
   });
 
+  it("does not create a second host on remount and stays out of the header", () => {
+    const header = document.createElement("header");
+    header.id = "page-header";
+    const actions = document.createElement("div");
+    actions.id = "conversation-header-actions";
+    header.append(actions);
+    document.body.append(header);
+    const first = new YadaToolbar();
+    first.mountShell();
+    first.setVisible(true);
+    first.dispose();
+    const second = new YadaToolbar();
+    second.mountShell();
+    second.setVisible(true);
+    expect(document.querySelectorAll("#chatgpt-yada-toolbar-host")).toHaveLength(1);
+    const host = document.getElementById("chatgpt-yada-toolbar-host")!;
+    expect(host.parentElement).toBe(document.documentElement);
+    expect(actions.contains(host)).toBe(false);
+    expect(host.shadowRoot?.innerHTML ?? "").not.toMatch(/right:\s*88px/);
+    second.dispose();
+  });
+
   it("mounts the toolbar shell before navigator or quota", () => {
     const order: string[] = [];
     const app = new ChatGptYadaApp();
@@ -54,6 +76,9 @@ describe("toolbar isolation", () => {
     expect(order.indexOf("toolbar")).toBeLessThan(order.indexOf("navigator"));
     expect(order.indexOf("toolbar")).toBeLessThan(order.indexOf("quota"));
     expect(document.getElementById("chatgpt-yada-toolbar-host")).toBeTruthy();
+    app.mount(true);
+    app.recover();
+    expect(document.querySelectorAll("#chatgpt-yada-toolbar-host")).toHaveLength(1);
     app.dispose();
   });
 });
