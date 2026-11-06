@@ -1,5 +1,9 @@
 # Changelog
 
+## v4.1.7 - 2026-11-06
+
+- Anchor the toolbar to the current app-shell trailing native action group; exclude the clickable conversation title and hidden duplicate controls so it cannot pull the toolbar into the sidebar.
+
 ## v4.1.6 - 2026-09-27
 
 - MacBook 原位更新；清理全部带 Yada 所有权标记的旧 Host，保持独立 documentElement Host。

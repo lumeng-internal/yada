@@ -198,6 +198,42 @@ describe("unified page facts", () => {
     document.body.append(header);
     expect(findNativeActionGroup()).toEqual({ container: row, buttons: [more] });
   });
+
+  it("anchors to trailing shell actions instead of the clickable conversation title", () => {
+    document.body.innerHTML = `<main><header>
+      <div data-app-shell-main-titlebar="true" data-testid="app-shell-header-context-menu-surface">
+        <div data-app-shell-titlebar-content="true"><button id="title">Conversation</button></div>
+        <div data-app-shell-header-obstacle="true" id="actions">
+          <div><button id="more"></button></div><div><button id="share">Share</button></div>
+          <div aria-hidden="true"><button id="hidden-action">Hidden duplicate</button></div>
+        </div>
+      </div>
+    </header></main>`;
+    const shell = document.querySelector<HTMLElement>('[data-app-shell-main-titlebar]')!;
+    const title = document.getElementById("title")!;
+    const actions = document.getElementById("actions")!;
+    const more = document.getElementById("more")!;
+    const share = document.getElementById("share")!;
+    box(shell, { top: 0, left: 290, width: 622, height: 52 });
+    box(title, { top: 8, left: 306, width: 256, height: 36 });
+    box(actions, { top: 8, left: 738, width: 166, height: 36 });
+    box(more, { top: 8, left: 738, width: 36, height: 36 });
+    box(share, { top: 8, left: 782, width: 78, height: 36 });
+    box(document.getElementById("hidden-action")!, { top: 8, left: 700, width: 36, height: 36 });
+    expect(findNativeActionGroup()).toEqual({ container: actions, buttons: [more, share] });
+  });
+
+  it("waits for shell actions instead of falling back to a title-only header", () => {
+    document.body.innerHTML = `<main><header>
+      <div data-app-shell-main-titlebar="true" data-testid="app-shell-header-context-menu-surface">
+        <div data-app-shell-titlebar-content="true"><button id="title">Conversation</button></div>
+        <div data-app-shell-header-obstacle="true"><button id="pending"></button></div>
+      </div>
+    </header></main>`;
+    box(document.getElementById("title")!, { top: 8, left: 306, width: 256, height: 36 });
+    box(document.querySelector<HTMLElement>('[data-app-shell-main-titlebar]')!, { top: 0, left: 290, width: 700, height: 52 });
+    expect(findNativeActionGroup()).toBeNull();
+  });
 });
 
 function viSpyComputed(element: HTMLElement, style: CSSStyleDeclaration): void {

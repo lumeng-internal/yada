@@ -1,12 +1,18 @@
 # ChatGPT Yada
 
-ChatGPT Yada **4.1.6** 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
+ChatGPT Yada **4.1.7** 是一个轻量 Chrome MV3 扩展。它通过补齐 ChatGPT 自己的历史加载，恢复并保留官方长对话 Prompt Navigator，同时不移动读者的当前位置。
 
-当前正在使用的候选不是 `main`。本轮候选分支是 `work/gpt-yada-native-compat`，版本 **4.1.6**。`main` 仍可能停在更旧的提交；MacBook 不要“拉最新 main”来安装这一包。
+当前正在使用的候选不是 `main`。本轮候选分支是 `work/gpt-yada-native-compat`，版本 **4.1.7**。`main` 仍可能停在更旧的提交；MacBook 不要“拉最新 main”来安装这一包。
 
 4.1.5 在 4.1.4 之上做兼容修复：统一 ChatGPT 页面识别；导航“正在等待”不再挡住额度历史维护；工具栏改为页面级独立宿主，用 Floating UI 跟随原生操作区。官方导航的自动恢复路径仍是现有 MAIN `num_turns` 提升 + 分页 sentinel；**真实 Edge 上“ChatGPT 自己加载历史 → 官方导航出现”尚未复验**。
 
 Yada 不再绘制右侧导航条，也没有导航预览、绿色模式点或代理跳转。页面工具栏只有：`Pro 额度三环 | 复制全部 | 提示词`。
+
+## 当前版本
+
+4.1.7 修复新版 ChatGPT 页头使工具栏落入左侧栏的问题：仅锚定右侧原生操作区，排除聊天标题按钮和隐藏副本。真实 Edge 已验证工具栏与原生操作区间隔 8px，更多、分享和摘要面板按钮无遮挡。当前状态与下一步见 [PROJECT_STATE.md](PROJECT_STATE.md)，工程及真机证据见 [QA.md](QA.md)。官方长对话导航自动恢复的历史阻塞仍未解除。
+
+MacBook 原安装路径 `/Users/harsonru/Documents/ChatGPT-Yada-v2.1.0` 现为实体目录，保留原扩展身份；目录名不代表运行版本。更新不要改换加载路径或通过符号链接重新注册扩展。
 
 ## 功能
 
@@ -29,7 +35,7 @@ message / messageId 深链保持原样，Yada 不介入 hydration。普通网络
 **不要从 `main` 安装本轮候选。** 使用：
 
 1. 分支 `work/gpt-yada-native-compat` 上的 `gpt/dist_chrome`，或
-2. 解压 `gpt/ChatGPT-Yada-v4.1.6-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
+2. 解压 `gpt/ChatGPT-Yada-v4.1.7-official-only-UNVERIFIED.zip` 后加载其中的 `dist_chrome`。
 
 保持现有扩展身份和加载目录，不要卸载换目录，也不要清空提示词和额度数据。
 
@@ -51,7 +57,7 @@ git diff --check
 npm run package
 ```
 
-旧测试包保留，新的 4.1.5 包不覆盖 4.1.4 及更早版本。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
+旧测试包保留，新版本包不覆盖已有版本。打包会检查 package、lockfile、两份 manifest 与 ZIP 版本一致。
 
 不运行 GitHub Actions、PR 或 Release。不把 Mac mini 的会议浏览器或模拟页面当成 Harson 的真实 Edge。
 

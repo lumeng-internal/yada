@@ -75,6 +75,7 @@ const LEGACY_OFFICIAL_ROOT_SELECTOR = [
 const LEGACY_OFFICIAL_CONTAINER_TOKENS = ["fixed", "inset-e-4", "top-1/2", "z-20", "-translate-y-1/2"];
 const SENTINEL_SELECTOR = '[data-testid="conversation-pagination-sentinel"]';
 const HEADER_SEARCH_SELECTORS = [
+  '[data-app-shell-main-titlebar="true"] > [data-app-shell-header-obstacle="true"]',
   '[data-testid="app-shell-header-context-menu-surface"]',
   "#page-header",
   "#conversation-header-actions",
@@ -502,13 +503,17 @@ function asKnownActionContainer(region: HTMLElement): NativeActionGroup | null {
 function visibleHeaderButtons(region: HTMLElement): HTMLElement[] {
   return [...region.querySelectorAll<HTMLElement>("button, [role='button']")].filter((element) => {
     if (element.closest(YADA_ROOT_SELECTOR) || element.closest(COMPOSER_SELECTOR)) return false;
+    // The shell title is also a button. Only its trailing obstacle owns actions;
+    // including the title makes their common ancestor the entire titlebar.
+    const titlebar = element.closest('[data-app-shell-main-titlebar="true"], [data-testid="app-shell-header-context-menu-surface"]');
+    if (titlebar && !element.closest('[data-app-shell-header-obstacle="true"]')) return false;
     const rectangle = element.getBoundingClientRect();
     if (rectangle.width === 0 && rectangle.height === 0) {
       return region.id === "conversation-header-actions"
         || region.getAttribute("data-testid") === "conversation-header-actions"
         || region.id === "page-header";
     }
-    return rectangle.width >= 8 && rectangle.height >= 8 && rectangle.top < 160;
+    return rectangle.width >= 8 && rectangle.height >= 8 && rectangle.top < 160 && layoutVisible(element, true);
   });
 }
 

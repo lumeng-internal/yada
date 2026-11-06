@@ -1,4 +1,19 @@
-# ChatGPT Yada 4.1.6 MacBook closeout
+# ChatGPT Yada MacBook verification
+
+## 4.1.7 toolbar fix — 2026-11-06
+
+- Candidate branch: `work/gpt-yada-native-compat`; base commit `094abe4`. Implemented on the candidate branch; main was not changed.
+- Updated `pageFacts.ts` to prefer the app-shell main titlebar's trailing action obstacle, exclude its clickable title from action discovery, and reject hidden duplicate buttons.
+- Gates passed: 23 test files / 226 tests, `verify:copy`, build, `verify:gate`, `git diff --check`, package. Two regression tests cover the clickable title and waiting for unmounted actions.
+- Package: `ChatGPT-Yada-v4.1.7-official-only-UNVERIFIED.zip`; SHA-256 `61598944c101d7b6bbf86b1279dcf8a7f0897a722368f2d9cb34abb2055ddf65`. The existing package suffix still reflects the independent official-navigation limitation below; the toolbar itself was verified live.
+- Original installed ID `abdfkmhjbchcmblijimlonobmklkpkjg` is enabled at `/Users/harsonru/Documents/ChatGPT-Yada-v2.1.0`, manifest 4.1.7. Its files match the built dist; content SHA-256 `50b82833c09de4b350863e0d7096100d5bef5ffe42e544ba21534cc8b2e22fa4`.
+- Edge's Reload resolved the old symlink into the deployment directory and temporarily generated a second ID, `mompcddmjbmceiaabmnefjnpjgkdlaoa`. That new copy was disabled and removed. The original Documents path is now a real directory so updates retain the original ID; its previous symlink and 4.1.6 files are backed up under `/Users/harsonru/.codex/tmp/yada-toolbar-20261106-4.1.6-backup/`. No original extension storage was removed or reset.
+- One existing, empty-draft, non-streaming conversation was refreshed. At 1912px viewport width, one toolbar Host is positioned at (1572, 11.5), width 158px, 8px left of the actual right-side actions at x=1738. More, Share and summary-toggle center hit tests all reach their native buttons.
+- Sidebar collapse retained right-side placement. Sidebar was restored to its original pinned-open state; prompt library opened and closed with existing entries present. Navigation briefly visited Home to access the sidebar pin and returned to the original conversation. No message was sent and no conversation created.
+- Screenshot: `/Users/harsonru/Code/Sandbox-lab/yada-toolbar-20261106/fixed-4.1.7.jpg`.
+- Raw CDP was used during diagnosis. After refresh, the browser bridge reported a paused-document-response restriction for raw CDP; final geometry and hit tests used its read-only DOM inspection API. No claim is made about live window resize, zoom, or official-navigator restoration in this fix.
+
+## Historical 4.1.6 closeout
 
 BRANCH = work/gpt-yada-native-compat
 BASE_COMMIT = 4ca5e7a0c559aff53d430fc9f4e9e6d34a092c4e

@@ -4,7 +4,7 @@ Read this file before every work session in `gpt/`.
 
 ## Product contract
 
-Current version is **4.1.6**. Candidate work lives on `work/gpt-yada-native-compat`, not `main`. `main` is not the in-use candidate.
+Current version is **4.1.7**. Candidate work lives on `work/gpt-yada-native-compat`, not `main`. `main` is not the in-use candidate.
 
 Yada is a single ChatGPT plugin. The right side uses only ChatGPT's official Prompt Navigator. Long conversations should cause that official navigator to appear and cover the history that should be shown; clicks keep official behavior. Do not restore a Yada rail, green mode dots, hover previews, proxy clicks, or a custom scroll engine.
 

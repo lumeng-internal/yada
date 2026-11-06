@@ -4,9 +4,11 @@
 
 | 项目 | 版本 | 开发目录 | 浏览器加载目录 | 许可证 |
 | --- | --- | --- | --- | --- |
-| ChatGPT Yada | 4.1.5 | `gpt/` | `gpt/dist_chrome/` | AGPL-3.0（见 `gpt/LICENSE`、`gpt/NOTICE.md`） |
+| ChatGPT Yada | 4.1.7 | `gpt/` | `gpt/dist_chrome/` | AGPL-3.0（见 `gpt/LICENSE`、`gpt/NOTICE.md`） |
 | Gemini Yada | 1.6.0 | `gemini/` | `gemini/` | 独立程序，保留原有许可证；不与 `gpt/` 构建或链接 |
 | Claude Yada | 1.1.1 | `claude/` | `claude/dist_chrome/` | 独立程序，保留原有许可证；不与 `gpt/` 构建或链接 |
+
+ChatGPT Yada 当前候选使用 `work/gpt-yada-native-compat`，不要从旧 `main` 覆盖现役安装。版本状态和下一步见 [`gpt/PROJECT_STATE.md`](gpt/PROJECT_STATE.md)。
 
 ## 安装
 
